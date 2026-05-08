@@ -53,4 +53,17 @@ describe("fuseRRF", () => {
 		const fused = fuseRRF(sem, [], { limit: 10 });
 		expect(fused.map((f) => f.logical_path)).toEqual(["first", "second", "third"]);
 	});
+
+	test("normalizes score to [0,1]: top-1 on both lists ≈ 1.0", () => {
+		const sem = [semHit("a.md", 0, 0.9)];
+		const kw = [kwHit("a.md", 0, 12)];
+		const fused = fuseRRF(sem, kw, { limit: 10 });
+		expect(fused[0]?.score).toBeCloseTo(1, 3);
+	});
+
+	test("normalizes score to [0,1]: top-1 on one list ≈ 0.5", () => {
+		const sem = [semHit("a.md", 0, 0.9)];
+		const fused = fuseRRF(sem, [], { limit: 10 });
+		expect(fused[0]?.score).toBeCloseTo(0.5, 3);
+	});
 });

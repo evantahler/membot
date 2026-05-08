@@ -27,9 +27,19 @@ export const searchOperation = defineOperation({
 				version_id: z.string(),
 				chunk_index: z.number(),
 				snippet: z.string(),
-				score: z.number(),
-				semantic_score: z.number().nullable(),
-				keyword_score: z.number().nullable(),
+				score: z
+					.number()
+					.describe(
+						"Normalized fusion score in [0,1]; 1.0 = chunk was top-1 on both semantic and keyword lists, ~0.5 = top-1 on one",
+					),
+				semantic_score: z
+					.number()
+					.nullable()
+					.describe("Cosine similarity from the semantic side (0-1), or null if not matched"),
+				keyword_score: z
+					.number()
+					.nullable()
+					.describe("Raw BM25 score from the keyword side (unbounded), or null if not matched"),
 			}),
 		),
 		mode: z.string(),
@@ -40,7 +50,10 @@ export const searchOperation = defineOperation({
 			return colors.dim(`(no hits in ${result.mode} mode)`);
 		}
 		const blocks = result.hits.map((h) => {
-			const head = `${colors.cyan(h.logical_path)} ${colors.dim(`v=${h.version_id}`)} ${colors.green(`score=${h.score.toFixed(3)}`)}`;
+			const parts = [`score=${h.score.toFixed(3)}`];
+			if (h.semantic_score !== null) parts.push(`sem=${h.semantic_score.toFixed(3)}`);
+			if (h.keyword_score !== null) parts.push(`bm25=${h.keyword_score.toFixed(2)}`);
+			const head = `${colors.cyan(h.logical_path)} ${colors.dim(`v=${h.version_id}`)} ${colors.green(parts.join(" "))}`;
 			const snippet = h.snippet
 				.split("\n")
 				.map((l) => `  ${l}`)

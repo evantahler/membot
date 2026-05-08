@@ -17,6 +17,11 @@ const SNIPPET_MAX = 300;
  * Reciprocal-rank fusion of semantic and keyword hit lists. Each result is
  * keyed by `(logical_path, version_id, chunk_index)` so the same chunk
  * appearing in both lists gets one fused score = sum of its RRF scores.
+ *
+ * The returned `score` is normalized to [0,1] by dividing by the theoretical
+ * max RRF (`2/(k+1)`, achieved when a chunk is rank-0 on both lists). This
+ * preserves ordering — division is monotonic — but makes the displayed value
+ * interpretable: 1.0 = top-1 on both signals, ~0.5 = top-1 on one.
  */
 export function fuseRRF(
 	semantic: SemanticHit[],
@@ -24,6 +29,7 @@ export function fuseRRF(
 	options: { k?: number; limit: number },
 ): FusedHit[] {
 	const k = options.k ?? 60;
+	const maxRrf = 2 / (k + 1);
 	const merged = new Map<
 		string,
 		{
@@ -89,7 +95,7 @@ export function fuseRRF(
 		version_id: h.version_id,
 		chunk_index: h.chunk_index,
 		snippet: h.snippet,
-		score: round(h.rrf),
+		score: round(h.rrf / maxRrf),
 		semantic_score: h.semantic_score,
 		keyword_score: h.keyword_score,
 	}));

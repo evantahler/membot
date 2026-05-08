@@ -101,11 +101,14 @@ describe("hybrid search e2e — real embeddings, real DB", () => {
 		expect(hits[0]?.logical_path).toBe("recipes/pasta.md");
 	});
 
-	test("keyword: 'EXPLAIN' surfaces the DB tuning doc when FTS is available", async () => {
+	test("keyword: 'EXPLAIN' surfaces the DB tuning doc", async () => {
+		// We assert hits non-empty here — a previous silent skip ("if (hits.length === 0) return")
+		// hid a real bug where the FTS materialization was missing chunk_content. If FTS
+		// genuinely cannot load on a platform, that's a build/CI problem we want to see.
 		const hits = await searchKeyword(db, "EXPLAIN");
-		// FTS may not load on all platforms; if so, hits will be empty and we skip.
-		if (hits.length === 0) return;
+		expect(hits.length).toBeGreaterThan(0);
 		expect(hits[0]?.logical_path).toBe("code/db-tuning.md");
+		expect(hits[0]?.chunk_content).toContain("EXPLAIN");
 	});
 
 	test("hybrid: filename / description prefix lifts recall on a pure-description query", async () => {

@@ -89,4 +89,57 @@ describe("chunks CRUD", () => {
 		expect(result.kind).toBe("rebuilt");
 		if (result.kind === "rebuilt") expect(result.chunk_count).toBe(1);
 	});
+
+	test("rebuildFts materializes _current_chunks_fts with chunk_content column", async () => {
+		// Regression: the materialized table previously omitted chunk_content,
+		// which made every keyword search throw + the empty catch silently
+		// returned zero hits. Locking the schema down here.
+		const v = millisIso(1_700_000_000_000);
+		await insertVersion(db, { logical_path: "p.md", version_id: v, source_type: "local", content: "x" });
+		await insertChunksForVersion(db, "p.md", v, [
+			{
+				chunk_index: 0,
+				chunk_content: "the quick brown fox jumps",
+				search_text: "p.md\n\nfox notes\n\nthe quick brown fox jumps",
+				embedding: fakeEmbedding(1),
+			},
+		]);
+		await rebuildFts(db);
+
+		const cols = await db.queryAll<{ column_name: string }>(
+			`SELECT column_name FROM information_schema.columns WHERE table_name = '_current_chunks_fts'`,
+		);
+		const names = cols.map((c) => c.column_name).sort();
+		expect(names).toEqual(["chunk_content", "chunk_index", "logical_path", "row_key", "search_text", "version_id"]);
+
+		const row = await db.queryGet<{ chunk_content: string }>(`SELECT chunk_content FROM _current_chunks_fts LIMIT 1`);
+		expect(row?.chunk_content).toBe("the quick brown fox jumps");
+	});
+
+	test("rebuildFts produces a working BM25 index for known tokens", async () => {
+		// Direct regression for the bug class: if FTS reports 'rebuilt' but the
+		// BM25 query returns zero hits on a token that's indisputably present,
+		// something is broken in the materialization or PRAGMA call.
+		const v = millisIso(1_700_000_000_000);
+		await insertVersion(db, { logical_path: "p.md", version_id: v, source_type: "local", content: "x" });
+		await insertChunksForVersion(db, "p.md", v, [
+			{
+				chunk_index: 0,
+				chunk_content: "carbonara recipe with guanciale and pecorino",
+				search_text: "p.md\n\nrecipe\n\ncarbonara recipe with guanciale and pecorino",
+				embedding: fakeEmbedding(1),
+			},
+		]);
+		const result = await rebuildFts(db);
+		expect(result.kind).toBe("rebuilt");
+
+		const hits = await db.queryAll<{ row_key: string; bm25: number }>(
+			`SELECT row_key, fts_main__current_chunks_fts.match_bm25(row_key, ?1) AS bm25
+			   FROM _current_chunks_fts
+			  WHERE fts_main__current_chunks_fts.match_bm25(row_key, ?1) IS NOT NULL`,
+			"carbonara",
+		);
+		expect(hits.length).toBe(1);
+		expect(Number(hits[0]?.bm25)).toBeGreaterThan(0);
+	});
 });
