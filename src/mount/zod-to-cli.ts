@@ -22,11 +22,22 @@ export function applySchemaToCommand<S extends z.ZodObject>(
 	const shape = schema.shape;
 	const positionalOrder = options.positional ?? [];
 
-	for (const fieldName of positionalOrder) {
+	for (let i = 0; i < positionalOrder.length; i++) {
+		const fieldName = positionalOrder[i];
+		if (fieldName === undefined) continue;
 		const fieldSchema = shape[fieldName];
 		if (!fieldSchema) continue;
 		const required = !isOptional(fieldSchema);
-		const label = required ? `<${fieldName}>` : `[${fieldName}]`;
+		const variadic = unwrap(fieldSchema) instanceof z.ZodArray;
+		if (variadic && i !== positionalOrder.length - 1) {
+			throw new HelpfulError({
+				kind: "internal_error",
+				message: `variadic positional \`${fieldName}\` must be the last positional argument`,
+				hint: "Reorder the operation's `cli.positional` so the array-typed field comes last.",
+			});
+		}
+		const inner = variadic ? `${fieldName}...` : fieldName;
+		const label = required ? `<${inner}>` : `[${inner}]`;
 		cmd.argument(label, describeOf(fieldSchema));
 	}
 

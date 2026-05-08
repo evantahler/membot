@@ -50,12 +50,12 @@ describe("add idempotency", () => {
 	});
 
 	test("re-adding unchanged content reports unchanged and reuses version_id", async () => {
-		const first = await addOperation.handler({ source: docsDir, follow_symlinks: true, force: false }, ctx);
+		const first = await addOperation.handler({ sources: [docsDir], follow_symlinks: true, force: false }, ctx);
 		expect(first.ok).toBe(2);
 		expect(first.unchanged).toBe(0);
 		const firstVersionsByPath = new Map(first.ingested.map((e) => [e.logical_path, e.version_id]));
 
-		const second = await addOperation.handler({ source: docsDir, follow_symlinks: true, force: false }, ctx);
+		const second = await addOperation.handler({ sources: [docsDir], follow_symlinks: true, force: false }, ctx);
 		expect(second.ok).toBe(0);
 		expect(second.unchanged).toBe(2);
 		expect(second.failed).toBe(0);
@@ -69,7 +69,7 @@ describe("add idempotency", () => {
 	}, 180_000);
 
 	test("force=true re-ingests even when source bytes are unchanged", async () => {
-		const result = await addOperation.handler({ source: docsDir, follow_symlinks: true, force: true }, ctx);
+		const result = await addOperation.handler({ sources: [docsDir], follow_symlinks: true, force: true }, ctx);
 		expect(result.ok).toBe(2);
 		expect(result.unchanged).toBe(0);
 		const a = await versionsOperation.handler({ logical_path: aPath }, ctx);
@@ -78,7 +78,7 @@ describe("add idempotency", () => {
 
 	test("changing the source bytes creates a new version on next add", async () => {
 		writeFileSync(join(docsDir, "a.md"), "# A\n\nfirst doc — revised.");
-		const result = await addOperation.handler({ source: docsDir, follow_symlinks: true, force: false }, ctx);
+		const result = await addOperation.handler({ sources: [docsDir], follow_symlinks: true, force: false }, ctx);
 		const aEntry = result.ingested.find((e) => e.logical_path === aPath);
 		const bEntry = result.ingested.find((e) => e.logical_path === bPath);
 		expect(aEntry?.status).toBe("ok");

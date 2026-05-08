@@ -45,7 +45,7 @@ describe("docs pipeline e2e (real docs/plan.md)", () => {
 	test("add → search → write new version → versions lists v1+v2", async () => {
 		const planPath = resolve(import.meta.dir, "../../docs/plan.md");
 
-		const added = await addOperation.handler({ source: planPath, follow_symlinks: true }, ctx);
+		const added = await addOperation.handler({ sources: [planPath], follow_symlinks: true }, ctx);
 		expect(added.ok).toBe(1);
 		expect(added.failed).toBe(0);
 		const v1 = added.ingested[0]?.version_id;

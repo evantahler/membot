@@ -511,10 +511,18 @@ describe("write/move/remove .console_formatter", () => {
 	});
 
 	test("remove confirms tombstone with version id", () => {
-		const out = removeOperation.console_formatter?.({ logical_path: "a", tombstone_version_id: "v9" }) ?? "";
+		const out =
+			removeOperation.console_formatter?.({
+				removed: [{ logical_path: "a", version_id: "v9", status: "ok" }],
+				total: 1,
+				ok: 1,
+				failed: 0,
+			}) ?? "";
 		const visible = STRIP(out);
-		expect(visible).toContain("tombstoned a");
+		expect(visible).toContain("tombstoned");
+		expect(visible).toContain("a");
 		expect(visible).toContain("@ v9");
+		expect(visible).toContain("removed 1");
 	});
 
 	test("all three are clean text under NO_COLOR", () => {
@@ -526,7 +534,13 @@ describe("write/move/remove .console_formatter", () => {
 				to_logical_path: "b",
 				new_version_id: "v",
 			}) ?? "";
-		const r = removeOperation.console_formatter?.({ logical_path: "a", tombstone_version_id: "v" }) ?? "";
+		const r =
+			removeOperation.console_formatter?.({
+				removed: [{ logical_path: "a", version_id: "v", status: "ok" }],
+				total: 1,
+				ok: 1,
+				failed: 0,
+			}) ?? "";
 		for (const out of [w, m, r]) expect(out).not.toContain("\x1b[");
 	});
 });

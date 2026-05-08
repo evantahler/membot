@@ -9,7 +9,7 @@ Goals (from user):
 - Files are **stored only in the database** — not on disk as a tree of `.md` files. Logical paths are virtual.
 - Hybrid search (vector + BM25) over chunked content.
 - Tree exploration synthesised from logical paths.
-- `membot add <source>` works for local paths AND remote URLs, with **mcpx-driven mini-agents** fetching remote content (Firecrawl, Google Docs, GitHub, raw HTTP). The exact mcpx invocation (server + tool + args) is stored on the row so refresh can re-invoke it directly — no agent/routing re-run.
+- `membot add <sources...>` accepts any number of args; each is independently resolved as a local path, directory, glob, URL, or `inline:<text>`. Works for local paths AND remote URLs, with **mcpx-driven mini-agents** fetching remote content (Firecrawl, Google Docs, GitHub, raw HTTP). The exact mcpx invocation (server + tool + args) is stored on the row so refresh can re-invoke it directly — no agent/routing re-run.
 - Everything is converted to **markdown**: PDF, DOCX, HTML, plain-text, etc. **Native libs first, LLM fallback** for messy/scanned content.
 - Each row tracks `source_path`, `source_sha256`, `refreshed_at`, `refresh_frequency_sec`. `membot refresh <path>` re-reads the original source, re-hashes, and re-converts/re-embeds only if the SHA changed. Local files compared by content hash; remote URLs re-fetched via the same fetcher.
 - Both **on-demand** (`membot refresh`) and **daemon** (`membot serve --watch`) refresh modes.
@@ -479,7 +479,7 @@ New code:
 ## Data Flow — Ingest
 
 ```
-membot add <source> [--path <logical>] [--refresh 24h] [--include <glob>] [--exclude <glob>]
+membot add <sources...> [--path <logical>] [--refresh 24h] [--include <glob>] [--exclude <glob>]
   ↓
 expand-source:                                          (only for local sources)
     file        → [file]
@@ -537,7 +537,7 @@ Daemon (`membot serve --watch`): `setInterval(tick_interval_sec)` runs the no-ar
 ## CLI Surface
 
 ```
-membot add <source> [--path <logical>] [--include <glob>] [--exclude <glob>] [--no-follow-symlinks] [--refresh <dur>] [--fetcher <name>]
+membot add <sources...> [--path <logical>] [--include <glob>] [--exclude <glob>] [--no-follow-symlinks] [--refresh <dur>] [--fetcher <name>]
 membot ls [<prefix>] [--json]
 membot tree [<prefix>] [--depth <n>]
 membot read <path> [--version <ts>] [--meta]
@@ -545,7 +545,7 @@ membot write <path> [--refresh <dur>] [--note <msg>] < stdin
 membot search <query> [--limit 10] [--mode hybrid|semantic|keyword]
 membot info <path> [--version <ts>]
 membot mv <old> <new>
-membot rm <path>                                # tombstone (history kept)
+membot rm <paths...>                            # tombstone one or more paths/globs (history kept)
 membot refresh [<path>] [--force]
 membot versions <path>                          # list every version_id with change_note
 membot diff <path> <a-version> [<b-version>]    # markdown diff between two versions (defaults b=current)
@@ -584,8 +584,8 @@ native libs first, LLM fallback for messy/scanned input. Setting
 refresh_frequency enables automatic refresh from the daemon. Always creates
 a NEW version; existing versions stay queryable via membot_versions.`,
   inputSchema: z.object({
-    source:            z.string().describe('Local path, URL, or `inline:<text>` literal'),
-    logical_path:      z.string().optional().describe('Logical path under the store (defaults derived from source)'),
+    sources:           z.array(z.string()).min(1).describe('One or more sources. Each arg is a local path, directory, glob, URL, or `inline:<text>` literal.'),
+    logical_path:      z.string().optional().describe('Logical path (single source) or prefix (multi-arg / directory / glob)'),
     refresh_frequency: z.string().optional().describe('Refresh cadence: 5m | 1h | 24h | 7d. Omit for no auto-refresh.'),
     fetcher_hint:      z.enum(['firecrawl','github','gdocs','http']).optional().describe('Force a specific mcpx fetcher'),
     change_note:       z.string().optional().describe('Free-text note attached to the new version'),
@@ -599,7 +599,7 @@ a NEW version; existing versions stay queryable via membot_versions.`,
     source_sha256: z.string(),
   }),
   cli: {
-    positional: ['source'],
+    positional: ['sources'],
     aliases: { logical_path: '-p', refresh_frequency: '-r', change_note: '-m' },
   },
   handler: async (input, ctx) => ingest(input, ctx),
@@ -609,7 +609,7 @@ a NEW version; existing versions stay queryable via membot_versions.`,
 This single definition produces:
 
 - **MCP tool** `membot_add` with the description above, JSON-Schema input derived from zod, and validated output.
-- **CLI command** `membot add <source> [-p <path>] [-r <dur>] [--fetcher-hint <name>] [-m <note>]` whose `--help` text is byte-identical to the description above.
+- **CLI command** `membot add <sources...> [-p <path>] [-r <dur>] [--fetcher-hint <name>] [-m <note>]` whose `--help` text is byte-identical to the description above.
 
 ### Server-level instructions
 
@@ -792,13 +792,18 @@ Inputs: `from_logical_path`, `to_logical_path`.
 #### `membot_delete`
 
 ```
-[[ bash equivalent: rm ]] Tombstone a logical_path so it no longer appears
-in membot_list / membot_tree / membot_search. Old versions remain queryable via
-membot_versions and membot_read with an explicit version. Use membot_prune to
-permanently drop history.
+[[ bash equivalent: rm ]] Tombstone one or more logical_paths so they no
+longer appear in membot_list / membot_tree / membot_search. Each `paths`
+arg is independently treated as either a literal logical_path or a glob
+(e.g. "docs/**/*.md"); globs are matched against current logical_paths in
+the DB, not the filesystem. The union of matches is deduplicated, then
+tombstoned one at a time — partial failures are reported per-entry without
+aborting the rest. An input arg matching zero current files is an error.
+Old versions remain queryable via membot_versions and membot_read with an
+explicit version. Use membot_prune to permanently drop history.
 ```
 
-Inputs: `logical_path`.
+Inputs: `paths` (array of strings: literal logical_paths or glob patterns).
 
 #### `membot_refresh`
 
@@ -895,7 +900,7 @@ End-to-end smoke (run after implementation):
 8. `./dist/membot refresh docs/readme.md` again (no edit) → `last_refresh_status='unchanged'`, no new version row created.
 8a. `./dist/membot versions docs/readme.md` → both versions listed, newest first; `--version <old-ts>` on `membot read` returns the prior content; default `membot read` returns latest.
 8b. `./dist/membot diff docs/readme.md <old-ts>` → unified diff between old and current version.
-8c. `./dist/membot rm docs/readme.md` → tombstone created; `membot ls` and `membot search` no longer surface it; `membot versions` still lists history.
+8c. `./dist/membot rm docs/readme.md` → tombstone created; `membot ls` and `membot search` no longer surface it; `membot versions` still lists history. `./dist/membot rm "docs/**/*.md"` removes every current file under the prefix in one batch with per-entry status output.
 8d. `./dist/membot prune --before 0s --dry-run=false` → non-current versions dropped; current version + tombstone remain.
 9. `./dist/membot serve` → connect with `mcpx exec` (or any MCP client) and call `membot_search` over stdio.
 10. `./dist/membot serve --watch --tick 5` → modify a tracked local file; within ~5s the daemon refreshes it.

@@ -8,23 +8,33 @@ const FetcherKindEnum = z.enum(["http", "mcpx", "local", "inline"]);
 export const addOperation = defineOperation({
 	name: "membot_add",
 	cliName: "add",
-	description: `Ingest one or many sources into the store. \`source\` accepts:
+	description: `Ingest one or many sources into the store. Each \`sources\` arg accepts:
   - a local file path
   - a local directory (recursive walk, symlinks followed)
   - a glob pattern (e.g. "docs/**/*.md")
   - a URL (fetched via mcpx if configured, otherwise plain HTTP)
   - "inline:<text>" literal
-PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, vision/OCR for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. By default, re-ingesting an unchanged source (same source_sha256 as the current version) is a no-op and reports \`status: "unchanged"\`; pass \`force=true\` to always create a new version. Each newly-ingested file becomes a new version under its own logical_path; existing versions stay queryable via membot_versions. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status.
+Pass any number of args; each is resolved independently and the matched entries are concatenated into one response. PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, vision/OCR for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. By default, re-ingesting an unchanged source (same source_sha256 as the current version) is a no-op and reports \`status: "unchanged"\`; pass \`force=true\` to always create a new version. Each newly-ingested file becomes a new version under its own logical_path; existing versions stay queryable via membot_versions. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status.
 
 When \`logical_path\` is omitted, it is derived from the source so files with the same basename in different projects do not collide:
   - Local sources use the entry's absolute filesystem path with the leading "/" stripped (e.g. "/Users/me/projA/README.md" → "Users/me/projA/README.md").
   - URLs use "remotes/{host}/{path}" with slashes preserved (e.g. "https://github.com/u/p/blob/main/README.md" → "remotes/github.com/u/p/blob/main/README.md"). Query strings and fragments are dropped from the logical_path; the full URL is still stored on the row for refresh.
   - "inline:<text>" defaults to "inline/{timestamp}.md".
 
-Pass \`logical_path\` to override. For a directory or glob walk it is treated as a PREFIX — each entry is placed at "{prefix}/{path-relative-to-walk-base}". Re-running \`membot_add\` on the same source resolves to the same logical_path; if bytes are unchanged the call is a no-op (status \`unchanged\`), otherwise a new version is created.`,
+Pass \`logical_path\` to override. For a multi-source / directory / glob walk it is treated as a PREFIX — each entry is placed at "{prefix}/{path-relative-to-walk-base}". Re-running \`membot_add\` on the same source resolves to the same logical_path; if bytes are unchanged the call is a no-op (status \`unchanged\`), otherwise a new version is created.`,
 	inputSchema: z.object({
-		source: z.string().describe("Local path, directory, glob, URL, or `inline:<text>` literal"),
-		logical_path: z.string().optional().describe("Destination logical_path (single source) or prefix (directory/glob)"),
+		sources: z
+			.array(z.string())
+			.min(1)
+			.describe(
+				"One or more sources. Each arg is independently resolved as a local path, directory, glob, URL, or `inline:<text>` literal.",
+			),
+		logical_path: z
+			.string()
+			.optional()
+			.describe(
+				"Destination logical_path (single source resolving to a single entry) or prefix (multi-arg / directory / glob)",
+			),
 		include: z
 			.string()
 			.optional()
@@ -67,7 +77,7 @@ Pass \`logical_path\` to override. For a directory or glob walk it is treated as
 		failed: z.number(),
 	}),
 	cli: {
-		positional: ["source"],
+		positional: ["sources"],
 		aliases: { logical_path: "-p", refresh_frequency: "-r", change_note: "-m", force: "-f" },
 	},
 	console_formatter: (result) => {
@@ -85,5 +95,23 @@ Pass \`logical_path\` to override. For a directory or glob walk it is treated as
 		if (result.failed > 0) parts.push(colors.red(`failed ${result.failed}`));
 		return `${lines.join("\n")}\n${parts.join(", ")}`;
 	},
-	handler: async (input, ctx) => ingest(input, ctx),
+	handler: async (input, ctx) => {
+		const { sources, ...rest } = input;
+		const aggregated = {
+			ingested: [] as Awaited<ReturnType<typeof ingest>>["ingested"],
+			total: 0,
+			ok: 0,
+			unchanged: 0,
+			failed: 0,
+		};
+		for (const source of sources) {
+			const r = await ingest({ ...rest, source }, ctx);
+			aggregated.ingested.push(...r.ingested);
+			aggregated.total += r.total;
+			aggregated.ok += r.ok;
+			aggregated.unchanged += r.unchanged;
+			aggregated.failed += r.failed;
+		}
+		return aggregated;
+	},
 });

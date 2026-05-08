@@ -25,12 +25,13 @@ This pulls in DuckDB's per-platform native bindings alongside membot. The build 
 ## Quick start
 
 ```bash
-membot add ./docs                        # ingest a directory recursively
-membot add https://example.com/spec.pdf  # ingest a URL (auto-converted to markdown)
-membot ls                                # list current files
-membot search "how does refresh work?"   # hybrid search
-membot read docs/refresh.md              # read the markdown surrogate
-membot serve                             # expose the same operations as MCP tools (stdio)
+membot add ./docs                                # ingest a directory recursively
+membot add https://example.com/spec.pdf          # ingest a URL (auto-converted to markdown)
+membot add a.md b.md "docs/**/*.md"              # any number of files / globs in one call
+membot ls                                        # list current files
+membot search "how does refresh work?"           # hybrid search
+membot read docs/refresh.md                      # read the markdown surrogate
+membot serve                                     # expose the same operations as MCP tools (stdio)
 ```
 
 ## Use with Claude Code or Cursor
@@ -50,7 +51,7 @@ The skill files describe the discover → ingest → search → read → write w
 
 | Command                         | Description                                                                       |
 | ------------------------------- | --------------------------------------------------------------------------------- |
-| `membot add <source>`           | Ingest a file, directory, glob, URL, or `inline:<text>`. Default `logical_path` mirrors the source (absolute path for local files, `remotes/{host}/{path}` for URLs) so files with the same basename in different projects don't collide. Pass `-p <path>` to override or, on a directory walk, to set a prefix. Skips on unchanged source bytes; pass `--force` to re-ingest. |
+| `membot add <sources...>`       | Ingest one or more files, directories, globs, URLs, or `inline:<text>`. Default `logical_path` mirrors the source (absolute path for local files, `remotes/{host}/{path}` for URLs) so files with the same basename in different projects don't collide. Pass `-p <path>` to override or set a prefix. Skips unchanged source bytes; pass `--force` to re-ingest. |
 | `membot ls [prefix]`            | List current files (size, mime, refresh status)                                   |
 | `membot tree [prefix]`          | Render the synthesised logical-path tree (`--max-depth`, `--max-items` cap output) |
 | `membot read <path>`            | Read the markdown surrogate (or `--bytes` for original bytes, base64)             |
@@ -60,7 +61,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot diff <path> <a> [b]`    | Unified diff between two versions                                                 |
 | `membot write <path>`           | Write inline agent-authored markdown as a new version                             |
 | `membot mv <from> <to>`         | Rename a logical_path (history preserved under both)                              |
-| `membot rm <path>`              | Tombstone a logical_path (history still queryable)                                |
+| `membot rm <paths...>`          | Tombstone one or more logical_paths or globs (e.g. `"docs/**/*.md"`); history kept |
 | `membot refresh [path]`         | Re-read source; new version only if bytes changed                                 |
 | `membot prune --before <ts>`    | Permanently drop non-current versions older than cutoff (irreversible)            |
 | `membot serve`                  | Run the MCP server (stdio default; `--http <port>` for HTTP)                      |
