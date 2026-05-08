@@ -7,6 +7,7 @@ import { embed } from "../ingest/embedder.ts";
 import { parseDuration } from "../ingest/ingest.ts";
 import { sha256Hex } from "../ingest/local-reader.ts";
 import { buildSearchText } from "../ingest/search-text.ts";
+import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
 export const writeOperation = defineOperation({
@@ -26,6 +27,8 @@ export const writeOperation = defineOperation({
 		size_bytes: z.number(),
 	}),
 	cli: { positional: ["logical_path"], stdinField: "content" },
+	console_formatter: (result) =>
+		`${colors.green("✓")} ${colors.cyan(result.logical_path)} ${colors.dim(`@ ${result.version_id}`)} ${colors.dim(`(${result.size_bytes}B)`)}`,
 	handler: async (input, ctx) => {
 		const refreshSec = parseDuration(input.refresh_frequency);
 		const bytes = new TextEncoder().encode(input.content);

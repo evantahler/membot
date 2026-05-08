@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ingest } from "../ingest/ingest.ts";
+import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
 const FetcherKindEnum = z.enum(["http", "mcpx", "local", "inline"]);
@@ -51,6 +52,18 @@ PDF, DOCX, HTML, images, and other binaries are converted to markdown — native
 	cli: {
 		positional: ["source"],
 		aliases: { logical_path: "-p", refresh_frequency: "-r", change_note: "-m" },
+	},
+	console_formatter: (result) => {
+		const lines = result.ingested.map((e) => {
+			if (e.status === "ok") {
+				return `${colors.green("✓")} ${colors.cyan(e.logical_path)} ${colors.dim(`(${e.fetcher}, ${e.size_bytes}B)`)}`;
+			}
+			return `${colors.red("✗")} ${e.source_path} ${colors.dim(e.error ?? "")}`;
+		});
+		const summary = result.failed
+			? `${colors.green(`added ${result.ok}`)}, ${colors.red(`failed ${result.failed}`)}`
+			: colors.green(`added ${result.ok}`);
+		return `${lines.join("\n")}\n${summary}`;
 	},
 	handler: async (input, ctx) => ingest(input, ctx),
 });

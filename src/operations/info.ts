@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getCurrent, getVersion } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
+import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
 export const infoOperation = defineOperation({
@@ -35,6 +36,47 @@ export const infoOperation = defineOperation({
 		tombstone: z.boolean(),
 	}),
 	cli: { positional: ["logical_path"] },
+	console_formatter: (result) => {
+		const fmt = (k: string, v: string): string => `${colors.dim(k.padEnd(22))}${v}`;
+		const yn = (b: boolean): string => (b ? colors.green("yes") : colors.dim("no"));
+		const orDash = (s: string | null): string => s ?? colors.dim("-");
+		const lines: string[] = [];
+		const head = `${colors.cyan(result.logical_path)} ${colors.dim(`@ ${result.version_id}`)}`;
+		lines.push(result.tombstone ? `${head} ${colors.red("[tombstoned]")}` : head);
+		lines.push(fmt("current", yn(result.version_is_current)));
+		lines.push(fmt("source_type", orDash(result.source_type)));
+		lines.push(fmt("source_path", orDash(result.source_path)));
+		lines.push(fmt("mime_type", orDash(result.mime_type)));
+		lines.push(fmt("size_bytes", result.size_bytes !== null ? String(result.size_bytes) : colors.dim("-")));
+		lines.push(fmt("description", orDash(result.description)));
+		lines.push(fmt("content_sha256", orDash(result.content_sha256)));
+		lines.push(fmt("blob_sha256", orDash(result.blob_sha256)));
+		lines.push(fmt("source_sha256", orDash(result.source_sha256)));
+		if (result.fetcher) lines.push(fmt("fetcher", result.fetcher));
+		if (result.fetcher_server) lines.push(fmt("fetcher_server", result.fetcher_server));
+		if (result.fetcher_tool) lines.push(fmt("fetcher_tool", result.fetcher_tool));
+		if (result.fetcher_args) lines.push(fmt("fetcher_args", JSON.stringify(result.fetcher_args)));
+		lines.push(
+			fmt(
+				"refresh_frequency",
+				result.refresh_frequency_sec !== null ? `${result.refresh_frequency_sec}s` : colors.dim("-"),
+			),
+		);
+		lines.push(fmt("refreshed_at", orDash(result.refreshed_at)));
+		lines.push(
+			fmt(
+				"last_refresh_status",
+				result.last_refresh_status === "failed"
+					? colors.red(result.last_refresh_status)
+					: result.last_refresh_status === "ok" || result.last_refresh_status === "fresh"
+						? colors.green(result.last_refresh_status)
+						: orDash(result.last_refresh_status),
+			),
+		);
+		if (result.change_note) lines.push(fmt("change_note", result.change_note));
+		lines.push(fmt("created_at", result.created_at));
+		return lines.join("\n");
+	},
 	handler: async (input, ctx) => {
 		const cur = await getCurrent(ctx.db, input.logical_path);
 		const row = input.version ? await getVersion(ctx.db, input.logical_path, input.version) : cur;

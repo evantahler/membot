@@ -2,6 +2,7 @@ import { z } from "zod";
 import { gcOrphanBlobs } from "../db/blobs.ts";
 import { pruneOldVersions } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
+import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
 export const pruneOperation = defineOperation({
@@ -21,6 +22,15 @@ export const pruneOperation = defineOperation({
 		dry_run: z.boolean(),
 	}),
 	cli: { positional: ["before"] },
+	console_formatter: (result) => {
+		const tag = result.dry_run ? colors.yellow("[dry-run]") : colors.green("[applied]");
+		const head = `${tag} cutoff ${colors.cyan(result.cutoff)}`;
+		const versions = `${colors.yellow(`${result.removed_versions} version${result.removed_versions === 1 ? "" : "s"}`)} would be dropped`;
+		const blobs = result.dry_run
+			? colors.dim("(orphan blob count not computed in dry-run)")
+			: `${colors.yellow(`${result.removed_orphan_blobs} orphan blob${result.removed_orphan_blobs === 1 ? "" : "s"}`)} reclaimed`;
+		return `${head}\n${versions}\n${blobs}`;
+	},
 	handler: async (input, ctx) => {
 		const cutoff = resolveCutoff(input.before);
 		if (input.dry_run) {

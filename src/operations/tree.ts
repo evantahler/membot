@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { listAllCurrentPaths } from "../db/files.ts";
+import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
 interface TreeNode {
@@ -30,6 +31,13 @@ export const treeOperation = defineOperation({
 		),
 	}),
 	cli: { positional: ["prefix"] },
+	console_formatter: (result) => {
+		const lines: string[] = [colors.bold(result.root)];
+		const nodes = result.tree as TreeNode[];
+		renderNodes(nodes, "", lines);
+		if (lines.length === 1) lines.push(colors.dim("(empty)"));
+		return lines.join("\n");
+	},
 	handler: async (input, ctx) => {
 		const allPaths = await listAllCurrentPaths(ctx.db);
 		const filtered = input.prefix ? allPaths.filter((p) => p.startsWith(input.prefix!)) : allPaths;
@@ -75,4 +83,21 @@ function buildTree(paths: string[], maxDepth: number): TreeNode[] {
 		}
 	}
 	return [...root.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Walk a tree and append `├── name` / `└── name` lines with proper continuation
+ * prefixes. Directories are rendered in cyan-bold; files in plain text.
+ */
+function renderNodes(nodes: TreeNode[], prefix: string, out: string[]): void {
+	const sorted = [...nodes].sort((a, b) => a.name.localeCompare(b.name));
+	sorted.forEach((node, i) => {
+		const last = i === sorted.length - 1;
+		const branch = last ? "└── " : "├── ";
+		const label = node.is_file && !node.children?.length ? node.name : colors.cyan(colors.bold(node.name));
+		out.push(`${prefix}${branch}${label}`);
+		if (node.children?.length) {
+			renderNodes(node.children, prefix + (last ? "    " : "│   "), out);
+		}
+	});
 }

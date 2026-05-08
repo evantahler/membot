@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { listDueRefreshes } from "../db/files.ts";
+import { colors } from "../output/formatter.ts";
 import { refreshOne } from "../refresh/runner.ts";
 import { defineOperation } from "./types.ts";
 
@@ -23,6 +24,28 @@ export const refreshOperation = defineOperation({
 		count: z.number(),
 	}),
 	cli: { positional: ["logical_path"] },
+	console_formatter: (result) => {
+		if (result.processed.length === 0) return colors.dim("(nothing due to refresh)");
+		let updated = 0;
+		let unchanged = 0;
+		let failed = 0;
+		const lines = result.processed.map((p) => {
+			if (p.status === "ok") {
+				updated++;
+				const ver = p.new_version_id ? colors.dim(`→ ${p.new_version_id}`) : "";
+				return `${colors.green("✓")} ${colors.cyan(p.logical_path)} ${ver}`;
+			}
+			if (p.status === "unchanged") {
+				unchanged++;
+				return `${colors.dim("·")} ${colors.dim(p.logical_path)} ${colors.dim("(unchanged)")}`;
+			}
+			failed++;
+			return `${colors.red("✗")} ${p.logical_path} ${colors.dim(p.error ?? "")}`;
+		});
+		const parts = [colors.green(`updated ${updated}`), colors.dim(`unchanged ${unchanged}`)];
+		if (failed) parts.push(colors.red(`failed ${failed}`));
+		return `${lines.join("\n")}\n${parts.join(", ")}`;
+	},
 	handler: async (input, ctx) => {
 		const targets = input.logical_path
 			? [input.logical_path]

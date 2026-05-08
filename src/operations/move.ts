@@ -3,6 +3,7 @@ import { insertChunksForVersion, listChunksForVersion, rebuildFts } from "../db/
 import { getCurrent, insertVersion, millisIso, tombstone } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
 import { buildSearchText } from "../ingest/search-text.ts";
+import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
 export const moveOperation = defineOperation({
@@ -20,6 +21,8 @@ export const moveOperation = defineOperation({
 		new_version_id: z.string(),
 	}),
 	cli: { positional: ["from_logical_path", "to_logical_path"] },
+	console_formatter: (result) =>
+		`${colors.green("✓")} ${colors.cyan(result.from_logical_path)} → ${colors.cyan(result.to_logical_path)} ${colors.dim(`@ ${result.new_version_id}`)}`,
 	handler: async (input, ctx) => {
 		const cur = await getCurrent(ctx.db, input.from_logical_path);
 		if (!cur) {

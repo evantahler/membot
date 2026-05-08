@@ -3,9 +3,9 @@ import type { z } from "zod";
 import { type AppContext, type BuildContextOptions, buildContext, closeContext } from "../context.ts";
 import { asHelpful, HelpfulError, isHelpfulError, mapKindToExit } from "../errors.ts";
 import { composeDescription, defaultCliName, type Operation } from "../operations/types.ts";
-import { renderResult } from "../output/formatter.ts";
+import { colors, renderResult } from "../output/formatter.ts";
 import { logger } from "../output/logger.ts";
-import { isJson, useColor } from "../output/tty.ts";
+import { isJson } from "../output/tty.ts";
 import { applySchemaToCommand, toKebab } from "./zod-to-cli.ts";
 
 /**
@@ -65,7 +65,7 @@ export function mountAsCommanderCommand<I extends z.ZodObject, O extends z.ZodTy
 			ctx = await buildContext(getContextOptions());
 			const result = await op.handler(parsedInput, ctx);
 			const validated = parseOutput(op, result);
-			process.stdout.write(`${renderResult(validated)}\n`);
+			process.stdout.write(`${renderResult(validated, { console_formatter: op.console_formatter })}\n`);
 		} catch (err) {
 			renderCliError(err);
 			const exitCode = isHelpfulError(err) ? mapKindToExit(err.kind) : 1;
@@ -137,16 +137,10 @@ export function renderCliError(err: unknown): void {
 		return;
 	}
 
-	const colored = useColor();
-	const cross = colored ? "[31m✗[0m" : "✗";
-	const hintLabel = colored ? "[33mhint:[0m" : "hint:";
-	const dimOpen = colored ? "[2m" : "";
-	const dimClose = colored ? "[0m" : "";
-
-	logger.error(`${cross} ${helpful.message}`);
-	logger.writeRaw(`  ${hintLabel} ${helpful.hint}\n`);
+	logger.error(`✗ ${helpful.message}`);
+	logger.writeRaw(`  ${colors.yellow("hint:")} ${helpful.hint}\n`);
 	if (helpful.details !== undefined) {
-		logger.writeRaw(`  ${dimOpen}details: ${formatDetails(helpful.details)}${dimClose}\n`);
+		logger.writeRaw(`  ${colors.dim(`details: ${formatDetails(helpful.details)}`)}\n`);
 	}
 }
 

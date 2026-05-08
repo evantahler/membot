@@ -31,6 +31,14 @@ export interface Operation<I extends z.ZodObject = z.ZodObject, O extends z.ZodT
 	outputSchema: O;
 	/** CLI-only metadata (positional args, short flag aliases, stdin source). */
 	cli?: CliMetadata<I>;
+	/**
+	 * Optional console formatter. Called by the commander mount adapter when
+	 * stdout is a TTY (and not in `--json` mode) to render the operation's
+	 * output as colorized human text. The MCP surface ignores this — agents
+	 * always receive the structured `outputSchema` data. When unset, the CLI
+	 * falls back to pretty-printed JSON.
+	 */
+	console_formatter?: (result: z.infer<O>) => string;
 	/** The work itself. AppContext gives access to db, embedder, mcpx, logger, config. */
 	handler: (input: z.infer<I>, ctx: AppContext) => Promise<z.infer<O>>;
 }

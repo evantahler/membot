@@ -2,6 +2,7 @@ import { z } from "zod";
 import { readBlob } from "../db/blobs.ts";
 import { getCurrent, getVersion } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
+import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
 export const readOperation = defineOperation({
@@ -33,6 +34,18 @@ export const readOperation = defineOperation({
 		blob_available: z.boolean(),
 	}),
 	cli: { positional: ["logical_path"] },
+	console_formatter: (result) => {
+		const tag = result.version_is_current ? colors.green("[current]") : colors.yellow("[historical]");
+		const head = `${colors.cyan(result.logical_path)} ${colors.dim(`@ ${result.version_id}`)} ${tag}`;
+		const meta = colors.dim(
+			`mime=${result.mime_type ?? "-"} size=${result.size_bytes ?? "-"} blob=${result.blob_available ? "yes" : "no"}`,
+		);
+		if (result.bytes_base64 !== undefined) {
+			return `${head}\n${meta}\n${colors.dim(`(${result.bytes_base64.length} base64 chars; pipe with --json for the full payload)`)}`;
+		}
+		const body = result.content ?? "";
+		return `${head}\n${meta}\n\n${body}`;
+	},
 	handler: async (input, ctx) => {
 		const cur = await getCurrent(ctx.db, input.logical_path);
 		const row = input.version ? await getVersion(ctx.db, input.logical_path, input.version) : cur;

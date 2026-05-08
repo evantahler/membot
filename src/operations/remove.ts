@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getCurrent, tombstone } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
+import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
 export const removeOperation = defineOperation({
@@ -17,6 +18,8 @@ export const removeOperation = defineOperation({
 		tombstone_version_id: z.string(),
 	}),
 	cli: { positional: ["logical_path"], aliases: { change_note: "-m" } },
+	console_formatter: (result) =>
+		`${colors.green("✓")} tombstoned ${colors.cyan(result.logical_path)} ${colors.dim(`@ ${result.tombstone_version_id}`)}`,
 	handler: async (input, ctx) => {
 		const cur = await getCurrent(ctx.db, input.logical_path);
 		if (!cur) {
