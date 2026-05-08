@@ -77,7 +77,7 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 
 - Defaults always operate on the current, non-tombstoned version.
 - Pass an explicit `--version <timestamp>` (from `membot versions`) to read or diff history.
-- `membot_add`, refresh-with-changes, `write`, and `mv` each create a new version. The previous version is preserved.
+- `membot_add` (when source bytes have changed), refresh-with-changes, `write`, and `mv` each create a new version. The previous version is preserved. Re-running `membot_add` against an unchanged source is a no-op (status `unchanged`, same `version_id`); pass `force=true` to force a new version.
 - Mutating an existing version is not possible — corrections are new versions.
 
 ## When to use this skill
@@ -101,7 +101,7 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 
 | Command                               | Purpose                                                                        |
 | ------------------------------------- | ------------------------------------------------------------------------------ |
-| `membot add <sources...>`             | Ingest one or more files, directories, globs, URLs, or `inline:<text>` (one new version each) |
+| `membot add <sources...>`             | Ingest one or more files, directories, globs, URLs, or `inline:<text>`. Skips unchanged sources; pass `--force` to re-ingest |
 | `membot ls [prefix]`                  | List current files (size, mime, refresh status)                                |
 | `membot tree [prefix]`                | Render the synthesised logical-path tree                                       |
 | `membot read <path>`                  | Read current markdown surrogate (or `--bytes` for original)                    |

@@ -14,7 +14,7 @@ export const addOperation = defineOperation({
   - a glob pattern (e.g. "docs/**/*.md")
   - a URL (fetched via mcpx if configured, otherwise plain HTTP)
   - "inline:<text>" literal
-Pass any number of args; each is resolved independently and the matched entries are concatenated into one response. PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, vision/OCR for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. Each ingested file becomes a NEW version under its own logical_path; existing versions stay queryable via membot_versions. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status. When \`logical_path\` is set with multiple matched entries (multi-source, directory, or glob), it acts as a prefix and each entry gets \`<prefix>/<relpath>\`.`,
+Pass any number of args; each is resolved independently and the matched entries are concatenated into one response. PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, vision/OCR for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. By default, re-ingesting an unchanged source (same source_sha256 as the current version) is a no-op and reports \`status: "unchanged"\`; pass \`force=true\` to always create a new version. Each newly-ingested file becomes a new version under its own logical_path; existing versions stay queryable via membot_versions. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status. When \`logical_path\` is set with multiple matched entries (multi-source, directory, or glob), it acts as a prefix and each entry gets \`<prefix>/<relpath>\`.`,
 	inputSchema: z.object({
 		sources: z
 			.array(z.string())
@@ -28,7 +28,12 @@ Pass any number of args; each is resolved independently and the matched entries 
 			.describe(
 				"Destination logical_path (single source resolving to a single entry) or prefix (multi-arg / directory / glob)",
 			),
-		include: z.string().optional().describe("Glob include filter (comma-separated for multiple); default `**/*`"),
+		include: z
+			.string()
+			.optional()
+			.describe(
+				"Glob include filter (comma-separated for multiple). Defaults to `**/*` for directory sources, or the source pattern itself when source is a glob.",
+			),
 		exclude: z.string().optional().describe("Glob exclude filter (comma-separated for multiple)"),
 		follow_symlinks: z
 			.boolean()
@@ -40,6 +45,10 @@ Pass any number of args; each is resolved independently and the matched entries 
 			.optional()
 			.describe("Free-form hint passed to mcpx tool search (e.g. 'firecrawl', 'github', 'google docs', 'http')"),
 		change_note: z.string().optional().describe("Free-text note attached to the new version"),
+		force: z
+			.boolean()
+			.optional()
+			.describe("Re-ingest even when source bytes are unchanged. Default skips and reports `unchanged`."),
 	}),
 	outputSchema: z.object({
 		ingested: z.array(
@@ -47,7 +56,7 @@ Pass any number of args; each is resolved independently and the matched entries 
 				source_path: z.string(),
 				logical_path: z.string(),
 				version_id: z.string().nullable(),
-				status: z.enum(["ok", "failed"]),
+				status: z.enum(["ok", "unchanged", "failed"]),
 				error: z.string().optional(),
 				mime_type: z.string().nullable(),
 				size_bytes: z.number(),
@@ -57,32 +66,43 @@ Pass any number of args; each is resolved independently and the matched entries 
 		),
 		total: z.number(),
 		ok: z.number(),
+		unchanged: z.number(),
 		failed: z.number(),
 	}),
 	cli: {
 		positional: ["sources"],
-		aliases: { logical_path: "-p", refresh_frequency: "-r", change_note: "-m" },
+		aliases: { logical_path: "-p", refresh_frequency: "-r", change_note: "-m", force: "-f" },
 	},
 	console_formatter: (result) => {
 		const lines = result.ingested.map((e) => {
 			if (e.status === "ok") {
 				return `${colors.green("✓")} ${colors.cyan(e.logical_path)} ${colors.dim(`(${e.fetcher}, ${e.size_bytes}B)`)}`;
 			}
+			if (e.status === "unchanged") {
+				return `${colors.dim("≡")} ${colors.cyan(e.logical_path)} ${colors.dim("(unchanged)")}`;
+			}
 			return `${colors.red("✗")} ${e.source_path} ${colors.dim(e.error ?? "")}`;
 		});
-		const summary = result.failed
-			? `${colors.green(`added ${result.ok}`)}, ${colors.red(`failed ${result.failed}`)}`
-			: colors.green(`added ${result.ok}`);
-		return `${lines.join("\n")}\n${summary}`;
+		const parts: string[] = [colors.green(`added ${result.ok}`)];
+		if (result.unchanged > 0) parts.push(colors.dim(`unchanged ${result.unchanged}`));
+		if (result.failed > 0) parts.push(colors.red(`failed ${result.failed}`));
+		return `${lines.join("\n")}\n${parts.join(", ")}`;
 	},
 	handler: async (input, ctx) => {
 		const { sources, ...rest } = input;
-		const aggregated = { ingested: [] as Awaited<ReturnType<typeof ingest>>["ingested"], total: 0, ok: 0, failed: 0 };
+		const aggregated = {
+			ingested: [] as Awaited<ReturnType<typeof ingest>>["ingested"],
+			total: 0,
+			ok: 0,
+			unchanged: 0,
+			failed: 0,
+		};
 		for (const source of sources) {
 			const r = await ingest({ ...rest, source }, ctx);
 			aggregated.ingested.push(...r.ingested);
 			aggregated.total += r.total;
 			aggregated.ok += r.ok;
+			aggregated.unchanged += r.unchanged;
 			aggregated.failed += r.failed;
 		}
 		return aggregated;
