@@ -14,52 +14,34 @@
 
 ## Install
 
-The happy path is `bunx membot` — Bun fetches the npm package on demand, including DuckDB's per-platform native bindings, with no global install required:
-
 ```bash
-bunx membot add ./docs
-```
-
-For a global install:
-
-```bash
-bun add -g membot
+bun install -g membot
 # or
 npm install -g membot
 ```
 
-Pre-built single-file binaries are also published with each release. They externalize `@duckdb/*` (per-platform `.node` bindings can't be embedded by `bun build --compile`), so the binary expects `@duckdb/node-api` to be reachable at runtime — `bunx` or a global npm/bun install is simpler for most users:
-
-```bash
-# macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/evantahler/membot/main/install.sh | bash
-
-# Windows — PowerShell
-iwr -useb https://raw.githubusercontent.com/evantahler/membot/main/install.ps1 | iex
-```
+This pulls in DuckDB's per-platform native bindings alongside membot. The build externalizes `@duckdb/*` (those `.node` bindings can't be embedded by `bun build --compile`), so a global npm/bun install is the supported path.
 
 ## Quick start
 
 ```bash
-bunx membot add ./docs                        # ingest a directory recursively
-bunx membot add https://example.com/spec.pdf  # ingest a URL (auto-converted to markdown)
-bunx membot ls                                # list current files
-bunx membot search "how does refresh work?"   # hybrid search
-bunx membot read docs/refresh.md              # read the markdown surrogate
-bunx membot serve                             # expose the same operations as MCP tools (stdio)
+membot add ./docs                        # ingest a directory recursively
+membot add https://example.com/spec.pdf  # ingest a URL (auto-converted to markdown)
+membot ls                                # list current files
+membot search "how does refresh work?"   # hybrid search
+membot read docs/refresh.md              # read the markdown surrogate
+membot serve                             # expose the same operations as MCP tools (stdio)
 ```
-
-(Drop the `bunx ` prefix once you've installed globally.)
 
 ## Use with Claude Code or Cursor
 
 `membot skill install` drops the agent skill into the right place so Claude Code or Cursor know **when** to call `membot`.
 
 ```bash
-bunx membot skill install --claude              # writes ./.claude/skills/membot.md (project)
-bunx membot skill install --cursor              # writes ./.cursor/rules/membot.mdc (project)
-bunx membot skill install --claude --global     # writes ~/.claude/skills/membot.md
-bunx membot skill install --claude --cursor -f  # both, overwrite if present
+membot skill install --claude              # writes ./.claude/skills/membot.md (project)
+membot skill install --cursor              # writes ./.cursor/rules/membot.mdc (project)
+membot skill install --claude --global     # writes ~/.claude/skills/membot.md
+membot skill install --claude --cursor -f  # both, overwrite if present
 ```
 
 The skill files describe the discover → ingest → search → read → write workflow and the versioning rules. You can re-run with `--force` to refresh after upgrading membot.
@@ -98,19 +80,17 @@ Run `membot <command> --help` for full flags and arguments. Every command produc
 {
   "mcpServers": {
     "membot": {
-      "command": "bunx",
-      "args": ["membot", "serve"]
+      "command": "membot",
+      "args": ["serve"]
     }
   }
 }
 ```
 
-(If you've installed globally, replace `"command": "bunx"` with `"command": "membot"` and drop `"membot"` from `args`.)
-
 **Streamable HTTP** (any MCP client that speaks HTTP):
 
 ```bash
-bunx membot serve --http 3000
+membot serve --http 3000
 # tool endpoint: http://localhost:3000/mcp
 ```
 
