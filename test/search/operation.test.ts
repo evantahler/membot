@@ -9,6 +9,7 @@ import { closeContext } from "../../src/context.ts";
 import { _resetFtsState, insertChunksForVersion } from "../../src/db/chunks.ts";
 import { openDb } from "../../src/db/connection.ts";
 import { insertVersion, millisIso } from "../../src/db/files.ts";
+import { HelpfulError } from "../../src/errors.ts";
 import { embed, setEmbeddingCacheDir } from "../../src/ingest/embedder.ts";
 import { buildSearchText } from "../../src/ingest/search-text.ts";
 import { searchOperation } from "../../src/operations/search.ts";
@@ -207,16 +208,17 @@ describe("search Operation handler — empty-query handling", () => {
 		rmSync(tmp2, { recursive: true, force: true });
 	});
 
-	test("empty query+pattern in any mode returns []", async () => {
+	test("empty query+pattern in any mode throws HelpfulError(input_error)", async () => {
 		for (const mode of ["hybrid", "semantic", "keyword"] as const) {
-			const r = await searchOperation.handler({ query: "", pattern: "", mode, limit: 5, include_history: false }, ctx2);
-			expect(r.hits).toEqual([]);
-			expect(r.mode).toBe(mode);
+			const promise = searchOperation.handler({ query: "", pattern: "", mode, limit: 5, include_history: false }, ctx2);
+			await expect(promise).rejects.toBeInstanceOf(HelpfulError);
+			await expect(promise).rejects.toMatchObject({ kind: "input_error" });
 		}
 	});
 
-	test("whitespace-only query is treated as empty (no embedder invocation)", async () => {
-		const r = await searchOperation.handler({ query: "   ", mode: "semantic", limit: 5, include_history: false }, ctx2);
-		expect(r.hits).toEqual([]);
+	test("whitespace-only query is treated as empty and throws HelpfulError(input_error)", async () => {
+		const promise = searchOperation.handler({ query: "   ", mode: "semantic", limit: 5, include_history: false }, ctx2);
+		await expect(promise).rejects.toBeInstanceOf(HelpfulError);
+		await expect(promise).rejects.toMatchObject({ kind: "input_error" });
 	});
 });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HelpfulError } from "../errors.ts";
 import { embedSingle } from "../ingest/embedder.ts";
 import { colors } from "../output/formatter.ts";
 import { fuseRRF } from "../search/hybrid.ts";
@@ -64,6 +65,14 @@ export const searchOperation = defineOperation({
 	handler: async (input, ctx) => {
 		const query = input.query ?? input.pattern ?? "";
 		const pattern = input.pattern ?? input.query ?? "";
+
+		if (!query.trim() && !pattern.trim()) {
+			throw new HelpfulError({
+				kind: "input_error",
+				message: "search requires a query or pattern",
+				hint: 'Pass a natural-language query (e.g. `membot search "oauth flow"`) or a keyword pattern (e.g. `membot search --pattern OAuth`).',
+			});
+		}
 
 		const semanticHits =
 			input.mode === "keyword" || !query.trim()
