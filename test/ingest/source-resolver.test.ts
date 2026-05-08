@@ -68,4 +68,46 @@ describe("resolveSource", () => {
 		expect(isGlob("docs/file.md")).toBe(false);
 		expect(isGlob("**/x")).toBe(true);
 	});
+
+	test("glob source filters without ORing default include", async () => {
+		const cwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const r = await resolveSource("*.md");
+			expect(r.kind).toBe("local-files");
+			if (r.kind === "local-files") {
+				const paths = r.entries.map((e) => e.relPath).sort();
+				expect(paths).toEqual(["a.md"]);
+			}
+		} finally {
+			process.chdir(cwd);
+		}
+	});
+
+	test("glob source with multi-segment pattern matches under base", async () => {
+		const r = await resolveSource(join(tmp, "**", "*.md"));
+		expect(r.kind).toBe("local-files");
+		if (r.kind === "local-files") {
+			const paths = r.entries.map((e) => e.relPath).sort();
+			expect(paths).toEqual(["a.md", "sub/c.md"]);
+		}
+	});
+
+	test("glob source intersects with explicit --include", async () => {
+		const r = await resolveSource(join(tmp, "**", "*"), { include: "*.md" });
+		expect(r.kind).toBe("local-files");
+		if (r.kind === "local-files") {
+			const paths = r.entries.map((e) => e.relPath).sort();
+			expect(paths).toEqual(["a.md"]);
+		}
+	});
+
+	test("directory source without include defaults to all files", async () => {
+		const r = await resolveSource(tmp);
+		expect(r.kind).toBe("local-files");
+		if (r.kind === "local-files") {
+			const paths = r.entries.map((e) => e.relPath).sort();
+			expect(paths).toEqual(["a.md", "b.txt", "sub/c.md", "sub/d.json"]);
+		}
+	});
 });

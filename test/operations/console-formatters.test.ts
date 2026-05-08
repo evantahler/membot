@@ -327,6 +327,7 @@ describe("add.console_formatter", () => {
 				],
 				total: 2,
 				ok: 1,
+				unchanged: 0,
 				failed: 1,
 			}) ?? "";
 		const visible = STRIP(out);
@@ -354,11 +355,37 @@ describe("add.console_formatter", () => {
 				],
 				total: 1,
 				ok: 1,
+				unchanged: 0,
 				failed: 0,
 			}) ?? "";
 		const visible = STRIP(out);
 		expect(visible).toContain("added 1");
 		expect(visible).not.toContain("failed");
+	});
+
+	test("renders ≡ per unchanged entry and surfaces unchanged count", () => {
+		const out =
+			addOperation.console_formatter?.({
+				ingested: [
+					{
+						source_path: "/tmp/a.md",
+						logical_path: "a.md",
+						version_id: "v1",
+						status: "unchanged",
+						mime_type: "text/markdown",
+						size_bytes: 10,
+						fetcher: "local",
+						source_sha256: "abc",
+					},
+				],
+				total: 1,
+				ok: 0,
+				unchanged: 1,
+				failed: 0,
+			}) ?? "";
+		const visible = STRIP(out);
+		expect(visible).toContain("≡ a.md");
+		expect(visible).toContain("unchanged 1");
 	});
 });
 

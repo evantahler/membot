@@ -50,7 +50,7 @@ The skill files describe the discover → ingest → search → read → write w
 
 | Command                         | Description                                                                       |
 | ------------------------------- | --------------------------------------------------------------------------------- |
-| `membot add <source>`           | Ingest a file, directory, glob, URL, or `inline:<text>`. Each match → new version |
+| `membot add <source>`           | Ingest a file, directory, glob, URL, or `inline:<text>`. Skips on unchanged source bytes; pass `--force` to re-ingest |
 | `membot ls [prefix]`            | List current files (size, mime, refresh status)                                   |
 | `membot tree [prefix]`          | Render the synthesised logical-path tree                                          |
 | `membot read <path>`            | Read the markdown surrogate (or `--bytes` for original bytes, base64)             |
