@@ -436,7 +436,7 @@ membot/
       formatter.ts           # final-result rendering: aligned tables/markdown when interactive, JSON when not
     errors.ts                # HelpfulError class + asHelpful() wrapper + ErrorKind union + mapKindToExit()
   scripts/
-    apply-transformers-patch.sh   # copy verbatim from mcpx/scripts
+    apply-patches.sh              # @huggingface/transformers (verbatim from mcpx) + @evantahler/mcpx onnx-wasm-paths stub
   test/
     _preload.ts                   # transformers patch hook
     ingest/   db/   search/   refresh/   mcp/
@@ -461,7 +461,7 @@ Direct ports (light edits — drop Botholomew-specific deps, swap `projectDir/co
 | `src/search/semantic.ts`           | `botholomew/src/tools/search/semantic.ts` + `src/db/embeddings.ts`      |
 | `src/search/hybrid.ts`             | `botholomew/src/tools/search/fuse.ts`                                   |
 | `src/search/keyword.ts`            | `botholomew/src/tools/search/regexp.ts` (replace regex with FTS BM25)   |
-| `scripts/apply-transformers-patch.sh`, `patches/` | `mcpx/scripts/...`, `mcpx/patches/`                       |
+| `scripts/apply-patches.sh`, `patches/`            | `mcpx/scripts/...`, `mcpx/patches/` (+ local `@evantahler/mcpx@0.21.4` stub patch) |
 | `src/output/logger.ts`             | `mcpx/src/output/logger.ts`                                             |
 | `src/cli.ts` skeleton              | `mcpx/src/cli.ts`                                                       |
 | `install.sh`, `install.ps1`        | `mcpx/install.sh`, `mcpx/install.ps1`                                   |

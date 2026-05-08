@@ -61,7 +61,7 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
-      - run: bash scripts/apply-transformers-patch.sh
+      - run: bash scripts/apply-patches.sh
       - run: bun lint
       - run: bun test
 
@@ -109,7 +109,7 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
-      - run: bash scripts/apply-transformers-patch.sh
+      - run: bash scripts/apply-patches.sh
       - name: Build binary
         run: |
           bun build --compile --minify --sourcemap \
