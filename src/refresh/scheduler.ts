@@ -40,6 +40,14 @@ export function startDaemon(ctx: AppContext, tickSec: number): () => void {
 			await runDueRefreshes(ctx);
 		} catch (err) {
 			logger.warn(`daemon: tick failed (${err instanceof Error ? err.message : String(err)})`);
+		} finally {
+			// Drop the DuckDB lock between ticks so the CLI / MCP server can
+			// run while the daemon is idle. Next tick reopens transparently.
+			try {
+				await ctx.db.release();
+			} catch {
+				// best effort
+			}
 		}
 		if (!stopped) setTimeout(loop, intervalMs);
 	};
