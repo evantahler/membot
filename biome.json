@@ -1,0 +1,23 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.14/schema.json",
+	"files": {
+		"includes": ["**", "!!**/node_modules", "!!**/dist", "!!**/bun.lock", "!!**/.claude", "!!**/patches"]
+	},
+	"formatter": {
+		"lineWidth": 120
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"style": {
+				"noNonNullAssertion": "off"
+			},
+			"suspicious": {
+				"noTemplateCurlyInString": "off",
+				"noNonNullAssertedOptionalChain": "off",
+				"noExplicitAny": "error",
+				"noImplicitAnyLet": "error"
+			}
+		}
+	}
+}

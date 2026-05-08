@@ -1,0 +1,14 @@
+// Bun test preload. The transformers WASM patch must be applied on disk
+// before tests can import the embedder; we run the prebuild script here
+// idempotently (it's a no-op when the marker file exists) so tests don't
+// fail silently when devs forget to run `bun run prebuild`.
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+
+if (!existsSync("node_modules/@huggingface/transformers/.membot-transformers-patch-applied")) {
+	spawnSync("bash", ["scripts/apply-transformers-patch.sh"], { stdio: "inherit" });
+}
+
+process.env.NO_COLOR ??= "1";
+// Force non-interactive default in tests.
+delete process.env.FORCE_COLOR;
