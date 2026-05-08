@@ -24,6 +24,7 @@ export async function upsertBlob(db: DbConnection, blob: BlobRow): Promise<void>
 	);
 }
 
+/** Fetch a blob by sha256, or null. Used when serving `membot_read bytes=true`. */
 export async function readBlob(db: DbConnection, sha256: string): Promise<BlobRow | null> {
 	const row = await db.queryGet<{
 		sha256: string;

@@ -11,10 +11,17 @@ export interface Spinner {
 
 const NOOP_SPINNER: Spinner = { update() {}, success() {}, error() {}, stop() {} };
 
+/**
+ * Process-wide singleton that owns stderr writes. All output is spinner-aware
+ * (clears the active spinner line, writes, then re-renders) so log lines don't
+ * shred a running progress indicator. Honors JSON, verbose, and color modes
+ * decided in `tty.ts` so callers never have to branch on environment.
+ */
 class Logger {
 	private static instance: Logger;
 	private activeSpinner: ReturnType<typeof createSpinner> | null = null;
 
+	/** Singleton accessor. Use the exported `logger` const instead in normal code. */
 	static getInstance(): Logger {
 		if (!Logger.instance) Logger.instance = new Logger();
 		return Logger.instance;
@@ -40,6 +47,7 @@ class Logger {
 		this.writeStderr(this.color(dim, msg));
 	}
 
+	/** Advisory warn — yellow on TTY, suppressed in JSON mode. */
 	warn(msg: string): void {
 		if (isJson()) return;
 		this.writeStderr(this.color(yellow, msg));
@@ -50,6 +58,7 @@ class Logger {
 		this.writeStderr(this.color(red, msg));
 	}
 
+	/** Verbose-only debug. Silent unless `--verbose` is set, and always silent in JSON mode. */
 	debug(msg: string): void {
 		if (!isVerbose() || isJson()) return;
 		this.writeStderr(this.color(dim, msg));
@@ -66,6 +75,11 @@ class Logger {
 		}
 	}
 
+	/**
+	 * Start a stderr spinner. Returns a `Spinner` controller in interactive
+	 * mode; in JSON / piped / `CI=true` / `NO_COLOR` environments it returns
+	 * a no-op so call sites can use the same code path either way.
+	 */
 	startSpinner(text: string): Spinner {
 		if (!useSpinner()) return NOOP_SPINNER;
 

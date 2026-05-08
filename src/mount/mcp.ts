@@ -53,6 +53,7 @@ export function mountAsMcpTool<I extends z.ZodObject, O extends z.ZodTypeAny>(
 	);
 }
 
+/** Validate the MCP-supplied input against the operation's zod schema. */
 function parseInput<I extends z.ZodObject, O extends z.ZodTypeAny>(op: Operation<I, O>, raw: unknown): z.infer<I> {
 	const result = op.inputSchema.safeParse(raw);
 	if (!result.success) {
@@ -66,6 +67,7 @@ function parseInput<I extends z.ZodObject, O extends z.ZodTypeAny>(op: Operation
 	return result.data;
 }
 
+/** Validate the handler's return value against the operation's output schema. */
 function parseOutput<I extends z.ZodObject, O extends z.ZodTypeAny>(op: Operation<I, O>, result: unknown): z.infer<O> {
 	const validated = op.outputSchema.safeParse(result);
 	if (!validated.success) {

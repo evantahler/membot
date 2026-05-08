@@ -138,6 +138,12 @@ interface RawFileRow extends Omit<FileRow, "fetcher_args" | "tombstone"> {
 	[key: string]: unknown;
 }
 
+/**
+ * Coerce a raw DuckDB row into a typed `FileRow`. JSON-parses the
+ * `fetcher_args` column (DuckDB returns it as text or a parsed object
+ * depending on driver version) and normalizes `tombstone` to a boolean
+ * (some drivers return 0/1).
+ */
 function toFileRow(row: RawFileRow | null): FileRow | null {
 	if (!row) return null;
 	let parsed: Record<string, unknown> | null = null;
@@ -157,6 +163,7 @@ function toFileRow(row: RawFileRow | null): FileRow | null {
 	};
 }
 
+/** Fetch the current (latest non-tombstoned) row for a logical_path, or null. */
 export async function getCurrent(db: DbConnection, logicalPath: string): Promise<FileRow | null> {
 	const row = await db.queryGet<RawFileRow>(
 		`SELECT ${COLUMN_LIST} FROM current_files WHERE logical_path = ?1`,
@@ -165,6 +172,7 @@ export async function getCurrent(db: DbConnection, logicalPath: string): Promise
 	return toFileRow(row);
 }
 
+/** Fetch the exact (logical_path, version_id) row, or null if it doesn't exist. */
 export async function getVersion(db: DbConnection, logicalPath: string, versionId: string): Promise<FileRow | null> {
 	const row = await db.queryGet<RawFileRow>(
 		`SELECT ${COLUMN_LIST} FROM files
@@ -175,6 +183,7 @@ export async function getVersion(db: DbConnection, logicalPath: string, versionI
 	return toFileRow(row);
 }
 
+/** All versions for a logical_path (including tombstones), newest first. */
 export async function listVersions(db: DbConnection, logicalPath: string): Promise<FileRow[]> {
 	const rows = await db.queryAll<RawFileRow>(
 		`SELECT ${COLUMN_LIST} FROM files WHERE logical_path = ?1 ORDER BY version_id DESC`,
@@ -189,6 +198,11 @@ export interface ListCurrentOptions {
 	offset?: number;
 }
 
+/**
+ * List current (latest, non-tombstoned) rows ordered by logical_path.
+ * `prefix` filters to paths starting with the given string. `limit` defaults
+ * to 1000 and `offset` to 0; together they support cursor-style pagination.
+ */
 export async function listCurrent(db: DbConnection, options: ListCurrentOptions = {}): Promise<FileRow[]> {
 	const where: string[] = [];
 	const params: SqlParam[] = [];
@@ -206,6 +220,7 @@ export async function listCurrent(db: DbConnection, options: ListCurrentOptions 
 	return rows.map((r) => toFileRow(r) as FileRow);
 }
 
+/** Just the logical_paths of every current row, alphabetized. Used by `tree` and discovery flows. */
 export async function listAllCurrentPaths(db: DbConnection): Promise<string[]> {
 	const rows = await db.queryAll<{ logical_path: string }>(
 		`SELECT logical_path FROM current_files ORDER BY logical_path`,
@@ -288,6 +303,12 @@ export async function pruneOldVersions(db: DbConnection, beforeIso: string): Pro
 	return { removed: result.changes };
 }
 
+/**
+ * Hard-delete a single (logical_path, version_id) row and its chunks.
+ * Bypasses the append-only versioning model — used by `prune` to reclaim
+ * space. Prefer `tombstone()` for user-driven deletes so history is
+ * preserved.
+ */
 export async function deleteVersionAndChunks(db: DbConnection, logicalPath: string, versionId: string): Promise<void> {
 	await db.queryRun(
 		`DELETE FROM chunks WHERE logical_path = ?1 AND version_id = CAST(?2 AS TIMESTAMP)`,

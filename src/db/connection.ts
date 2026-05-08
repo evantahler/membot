@@ -34,10 +34,12 @@ export class DbConnection {
 		this.path = path;
 	}
 
+	/** Run a parameter-less SQL statement (DDL, PRAGMA, batch SQL). */
 	async exec(sql: string): Promise<void> {
 		await this.conn.run(sql);
 	}
 
+	/** Run a query and return the first row, or null. SQL uses `?N` placeholders. */
 	async queryGet<T extends Record<string, unknown> = Record<string, unknown>>(
 		sql: string,
 		...params: SqlParam[]
@@ -48,6 +50,7 @@ export class DbConnection {
 		return convertRow(rows[0]) as T;
 	}
 
+	/** Run a query and return all rows. SQL uses `?N` placeholders. */
 	async queryAll<T extends Record<string, unknown> = Record<string, unknown>>(
 		sql: string,
 		...params: SqlParam[]
@@ -57,11 +60,13 @@ export class DbConnection {
 		return rows.map(convertRow) as T[];
 	}
 
+	/** Run a mutation (INSERT/UPDATE/DELETE) and report rows changed. SQL uses `?N` placeholders. */
 	async queryRun(sql: string, ...params: SqlParam[]): Promise<RunResult> {
 		const result = await this.conn.run(translateParams(sql), flattenParams(params) as DuckDBValue[]);
 		return { changes: Number(result.rowsChanged) };
 	}
 
+	/** Disconnect and close the owning DuckDB instance. Idempotent; subsequent calls are no-ops. */
 	async close(): Promise<void> {
 		if (this.closed) return;
 		this.closed = true;
@@ -76,6 +81,7 @@ export class DbConnection {
 	}
 }
 
+/** Type guard for the JS values DuckDB returns directly without further coercion. */
 function isDuckDBPrimitive(v: unknown): v is string | number | boolean | bigint | null | Uint8Array | Date {
 	if (v === null) return true;
 	const t = typeof v;
@@ -89,6 +95,12 @@ function isDuckDBPrimitive(v: unknown): v is string | number | boolean | bigint 
 	);
 }
 
+/**
+ * Normalize a value coming out of DuckDB into something the rest of the
+ * codebase expects: `bigint` → `number` (we never have row counts that
+ * exceed Number.MAX_SAFE_INTEGER), `Date` → ISO string (so JSON
+ * serialization is stable), and recurse into arrays/objects.
+ */
 function convertValue(v: unknown): unknown {
 	if (typeof v === "bigint") {
 		// Bigints from row counts and TIMESTAMP fit in Number safely for our use.
@@ -107,6 +119,7 @@ function convertValue(v: unknown): unknown {
 	return v;
 }
 
+/** Apply `convertValue` to every column of a row. */
 function convertRow(row: Record<string, unknown>): Record<string, unknown> {
 	const out: Record<string, unknown> = {};
 	for (const [k, v] of Object.entries(row)) {
@@ -115,6 +128,7 @@ function convertRow(row: Record<string, unknown>): Record<string, unknown> {
 	return out;
 }
 
+/** Rewrite our `?N` placeholder convention to DuckDB's native `$N` form. */
 function translateParams(sql: string): string {
 	return sql.replace(/\?(\d+)/g, "$$$1");
 }
