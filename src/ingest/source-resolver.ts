@@ -9,9 +9,15 @@ export type ResolvedSource =
 	| { kind: "local-files"; entries: ResolvedLocalEntry[]; basePath: string };
 
 export interface ResolvedLocalEntry {
+	/** Absolute filesystem path (post-realpath). */
 	absPath: string;
-	/** Path relative to the base; used to derive a default logical_path. */
-	relPath: string;
+	/**
+	 * Path relative to the walk base. Used when the caller passes an
+	 * explicit `logical_path` *prefix* (directory/glob mode) — entries land
+	 * at `{prefix}/{relPathFromBase}`. For default logical_paths we use
+	 * `absPath` directly so paths from different filesystems don't collide.
+	 */
+	relPathFromBase: string;
 }
 
 export interface ResolveOptions {
@@ -91,10 +97,11 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 	}
 
 	if (st.isFile()) {
+		const real = await realpath(abs);
 		return {
 			kind: "local-files",
-			basePath: abs,
-			entries: [{ absPath: abs, relPath: source.split(sep).pop() ?? source }],
+			basePath: real,
+			entries: [{ absPath: real, relPathFromBase: real.split(sep).pop() ?? real }],
 		};
 	}
 
@@ -201,7 +208,7 @@ async function walk(
 		if (isExclude?.(relForMatch)) continue;
 		if (!isInclude(relForMatch)) continue;
 		if (extraMatchers.some((m) => !m(relForMatch))) continue;
-		entries.push({ absPath: real, relPath: relForMatch });
+		entries.push({ absPath: real, relPathFromBase: relForMatch });
 	}
 
 	return { kind: "local-files", basePath: base, entries };
