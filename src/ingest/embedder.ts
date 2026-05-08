@@ -64,6 +64,16 @@ async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
 }
 
 /**
+ * Options for `embed()`. `onProgress` fires once after each batch finishes
+ * with `(done, total)` chunk counts so callers can drive a spinner / progress
+ * bar — ONNX WASM holds the JS thread for hundreds of ms per batch and would
+ * otherwise leave nanospinner's setInterval starved between updates.
+ */
+export interface EmbedOptions {
+	onProgress?: (done: number, total: number) => void;
+}
+
+/**
  * Embed an array of texts to L2-normalized vectors with the configured
  * model. Throws a HelpfulError when the model's dimension doesn't match
  * EMBEDDING_DIMENSION (the value baked into the DB schema).
@@ -71,8 +81,16 @@ async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
  * Inputs are sliced into windows of EMBEDDING_BATCH_SIZE so a single
  * forward pass never has to allocate activations for arbitrarily many
  * chunks — large files (hundreds of chunks) otherwise OOM the WASM heap.
+ *
+ * Between batches we yield a macrotask (`setTimeout(0)`) so the event loop
+ * can flush nanospinner renders and stderr writes — without that, the spinner
+ * visibly freezes for the entire embed phase on large files.
  */
-export async function embed(texts: string[], model: string = EMBEDDING_MODEL): Promise<number[][]> {
+export async function embed(
+	texts: string[],
+	model: string = EMBEDDING_MODEL,
+	opts: EmbedOptions = {},
+): Promise<number[][]> {
 	if (texts.length === 0) return [];
 	const extractor = await getPipeline(model);
 	const out: number[][] = [];
@@ -88,6 +106,10 @@ export async function embed(texts: string[], model: string = EMBEDDING_MODEL): P
 			});
 		}
 		for (const vec of data) out.push(vec);
+		opts.onProgress?.(out.length, texts.length);
+		// Yield a macrotask so nanospinner's setInterval and any queued
+		// stderr writes get a chance to run between batches.
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
 	}
 	return out;
 }

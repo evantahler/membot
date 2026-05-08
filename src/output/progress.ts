@@ -15,6 +15,13 @@ import { isSilent, useSpinner } from "./tty.ts";
 export interface Progress {
 	start(total: number, label?: string): void;
 	tick(label: string): void;
+	/**
+	 * Re-render the active spinner with the most recent `tick` label plus an
+	 * extra suffix (e.g. "embedding 32/168") without advancing the counter.
+	 * No-op in non-interactive / silent / JSON modes — sub-step progress is
+	 * deliberately TTY-only so CI logs don't get one line per inner batch.
+	 */
+	update(suffix: string): void;
 	entry(line: string): void;
 	done(summary?: string): void;
 	fail(summary?: string): void;
@@ -51,25 +58,28 @@ function truncateLabel(label: string, max = LABEL_MAX): string {
 export function createProgress(): Progress {
 	let total = 0;
 	let count = 0;
+	let lastLabel = "";
 	let spinner: ReturnType<typeof logger.startSpinner> | null = null;
 
 	const interactive = useSpinner();
 	const silent = isSilent();
 
-	const renderSpinnerText = (label: string): string => {
+	const renderSpinnerText = (label: string, suffix?: string): string => {
 		const bar = renderBar(count, total);
 		const pct = total > 0 ? Math.floor((count / total) * 100) : 0;
-		const tail = label ? ` — ${truncateLabel(label)}` : "";
-		return `${bar} ${count}/${total} (${pct}%)${tail}`;
+		const labelTail = label ? ` — ${truncateLabel(label)}` : "";
+		const suffixTail = suffix ? ` — ${suffix}` : "";
+		return `${bar} ${count}/${total} (${pct}%)${labelTail}${suffixTail}`;
 	};
 
 	return {
 		start(t: number, label?: string) {
 			total = t;
 			count = 0;
+			lastLabel = label ?? "";
 			if (silent) return;
 			if (interactive) {
-				const initial = renderSpinnerText(label ?? "");
+				const initial = renderSpinnerText(lastLabel);
 				spinner = logger.startSpinner(initial);
 			} else if (label) {
 				logger.info(`${label}: 0/${total}`);
@@ -77,12 +87,18 @@ export function createProgress(): Progress {
 		},
 		tick(label: string) {
 			count += 1;
+			lastLabel = label;
 			if (silent) return;
 			if (interactive && spinner) {
 				spinner.update(renderSpinnerText(label));
 			} else {
 				logger.info(`[${count}/${total}] ${label}`);
 			}
+		},
+		update(suffix: string) {
+			if (silent) return;
+			if (!interactive || !spinner) return;
+			spinner.update(renderSpinnerText(lastLabel, suffix));
 		},
 		entry(line: string) {
 			if (silent) return;
