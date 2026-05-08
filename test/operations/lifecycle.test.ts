@@ -76,7 +76,7 @@ describe("operations end-to-end lifecycle", () => {
 	});
 
 	test("tree synthesises a hierarchy from logical paths", async () => {
-		const out = await treeOperation.handler({ max_depth: 4 }, ctx);
+		const out = await treeOperation.handler({ max_depth: 4, max_items: 20 }, ctx);
 		expect(out.tree.length).toBe(3);
 		expect(out.tree.map((n) => n.name).sort()).toEqual(["auth.md", "db.md", "pasta.md"]);
 	});
