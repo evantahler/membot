@@ -31,6 +31,15 @@ function isModelCached(model: string): boolean {
  * Lazily load (and cache) the feature-extraction pipeline for a model. Loading
  * is expensive (downloads weights on first run, ~100s of ms to instantiate
  * ONNX), so we hold one promise per model name for the life of the process.
+ *
+ * Try `wasm` first, fall back to `cpu` on "Unsupported device". The transformers
+ * patch (applied for `bun build --compile` and via `bun run prebuild` for local
+ * dev) registers `wasm` as a supported device backed by onnxruntime-web — that's
+ * mandatory for the single-binary build because native bindings can't be
+ * bundled. When the package is unpatched (npm-installed membot, or `bun dev`
+ * before `prebuild`), `wasm` is rejected and we fall back to the default `cpu`
+ * device, which uses the onnxruntime-node native bindings that ship with the
+ * unpatched package.
  */
 async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
 	let p = pipelinePromises.get(model);
@@ -40,9 +49,15 @@ async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
 		} else {
 			logger.info(`embedder: loading model ${model} (first run, downloading weights)`);
 		}
-		// device: "wasm" matches what our transformers patch supports — the
-		// default ("cpu") errors out because the patch removes onnxruntime-node.
-		p = pipeline("feature-extraction", model, { device: "wasm" }) as Promise<FeatureExtractionPipeline>;
+		p = (async () => {
+			try {
+				return (await pipeline("feature-extraction", model, { device: "wasm" })) as FeatureExtractionPipeline;
+			} catch (err) {
+				if (!String((err as Error)?.message ?? "").includes("Unsupported device")) throw err;
+				logger.debug("embedder: wasm backend unavailable, falling back to cpu (onnxruntime-node)");
+				return (await pipeline("feature-extraction", model, { device: "cpu" })) as FeatureExtractionPipeline;
+			}
+		})();
 		pipelinePromises.set(model, p);
 	}
 	return p;
