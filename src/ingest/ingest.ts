@@ -252,6 +252,13 @@ async function ingestLocalFiles(
 	callbacks?: IngestCallbacks,
 ): Promise<IngestResult> {
 	if (resolved.entries.length === 0) {
+		// `filtered: true` means the source resolved successfully but every
+		// entry was dropped by --exclude / --include / DEFAULT_EXCLUDES.
+		// Treat that as a silent no-op: shell-expanded globs commonly hand
+		// us individual files we should skip without aborting the batch.
+		if (resolved.filtered) {
+			return { ingested: [], total: 0, ok: 0, unchanged: 0, failed: 0 };
+		}
 		throw new HelpfulError({
 			kind: "input_error",
 			message: `Glob/path matched 0 files`,
