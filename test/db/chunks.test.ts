@@ -69,8 +69,24 @@ describe("chunks CRUD", () => {
 		expect(chunks).toEqual([]);
 	});
 
-	test("rebuildFts returns false on empty store", async () => {
-		const built = await rebuildFts(db);
-		expect(built).toBe(false);
+	test("rebuildFts returns no_chunks on empty store", async () => {
+		const result = await rebuildFts(db);
+		expect(result.kind).toBe("no_chunks");
+	});
+
+	test("rebuildFts returns rebuilt with chunk_count after insert", async () => {
+		const v = millisIso(1_700_000_000_000);
+		await insertVersion(db, {
+			logical_path: "p.md",
+			version_id: v,
+			source_type: "local",
+			content: "x",
+		});
+		await insertChunksForVersion(db, "p.md", v, [
+			{ chunk_index: 0, chunk_content: "a", search_text: "p.md\n\n\na", embedding: fakeEmbedding(1) },
+		]);
+		const result = await rebuildFts(db);
+		expect(result.kind).toBe("rebuilt");
+		if (result.kind === "rebuilt") expect(result.chunk_count).toBe(1);
 	});
 });
