@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { ingest } from "../ingest/ingest.ts";
+import {
+	countResolvedEntries,
+	type IngestCallbacks,
+	type IngestEntryResult,
+	type IngestResult,
+	ingestResolved,
+} from "../ingest/ingest.ts";
+import { type ResolvedSource, resolveSource } from "../ingest/source-resolver.ts";
 import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
@@ -97,21 +104,117 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 	},
 	handler: async (input, ctx) => {
 		const { sources, ...rest } = input;
-		const aggregated = {
-			ingested: [] as Awaited<ReturnType<typeof ingest>>["ingested"],
+		const followSymlinks = rest.follow_symlinks ?? true;
+
+		// Phase 1: resolve every source upfront so the shared progress bar
+		// knows its total. A resolve failure (bad path, glob with no base) is
+		// captured per-source so one bad arg doesn't abort the whole batch.
+		type ResolveOutcome = { source: string; resolved: ResolvedSource } | { source: string; error: Error };
+		const outcomes: ResolveOutcome[] = [];
+		for (const source of sources) {
+			try {
+				const resolved = await resolveSource(source, {
+					include: rest.include,
+					exclude: rest.exclude,
+					followSymlinks,
+				});
+				outcomes.push({ source, resolved });
+			} catch (err) {
+				outcomes.push({ source, error: err instanceof Error ? err : new Error(String(err)) });
+			}
+		}
+
+		const total = outcomes.reduce((n, o) => ("error" in o ? n + 1 : n + countResolvedEntries(o.resolved)), 0);
+
+		const aggregated: IngestResult = {
+			ingested: [],
 			total: 0,
 			ok: 0,
 			unchanged: 0,
 			failed: 0,
 		};
-		for (const source of sources) {
-			const r = await ingest({ ...rest, source }, ctx);
-			aggregated.ingested.push(...r.ingested);
-			aggregated.total += r.total;
-			aggregated.ok += r.ok;
-			aggregated.unchanged += r.unchanged;
-			aggregated.failed += r.failed;
+
+		ctx.progress.start(total, "ingest");
+		const callbacks: IngestCallbacks = {
+			onEntryStart: (label) => ctx.progress.tick(label),
+			onEntryComplete: (entry) => ctx.progress.entry(formatEntryLine(entry)),
+		};
+
+		for (const outcome of outcomes) {
+			if ("error" in outcome) {
+				const failed: IngestEntryResult = {
+					source_path: outcome.source,
+					logical_path: outcome.source,
+					version_id: null,
+					status: "failed",
+					error: outcome.error.message,
+					mime_type: null,
+					size_bytes: 0,
+					fetcher: "local",
+					source_sha256: "",
+				};
+				callbacks.onEntryStart?.(outcome.source);
+				callbacks.onEntryComplete?.(failed);
+				aggregated.ingested.push(failed);
+				aggregated.total += 1;
+				aggregated.failed += 1;
+				continue;
+			}
+
+			try {
+				const r = await ingestResolved(outcome.resolved, { ...rest, source: outcome.source }, ctx, callbacks);
+				aggregated.ingested.push(...r.ingested);
+				aggregated.total += r.total;
+				aggregated.ok += r.ok;
+				aggregated.unchanged += r.unchanged;
+				aggregated.failed += r.failed;
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				const failed: IngestEntryResult = {
+					source_path: outcome.source,
+					logical_path: outcome.source,
+					version_id: null,
+					status: "failed",
+					error: message,
+					mime_type: null,
+					size_bytes: 0,
+					fetcher: "local",
+					source_sha256: "",
+				};
+				callbacks.onEntryStart?.(outcome.source);
+				callbacks.onEntryComplete?.(failed);
+				aggregated.ingested.push(failed);
+				aggregated.total += 1;
+				aggregated.failed += 1;
+			}
 		}
+
+		const summary = formatSummary(aggregated);
+		ctx.progress.done(summary);
 		return aggregated;
 	},
 });
+
+/**
+ * Render the persistent stderr line shown for one completed entry. Mirrors
+ * the glyphs used by the final `console_formatter` so users see the same
+ * status indicators twice (once during ingest on stderr, once in the final
+ * stdout summary).
+ */
+function formatEntryLine(entry: IngestEntryResult): string {
+	if (entry.status === "ok") {
+		return `${colors.green("✓")} ${colors.cyan(entry.logical_path)} ${colors.dim(`(${entry.fetcher}, ${entry.size_bytes}B)`)}`;
+	}
+	if (entry.status === "unchanged") {
+		return `${colors.dim("≡")} ${colors.cyan(entry.logical_path)} ${colors.dim("(unchanged)")}`;
+	}
+	return `${colors.red("✗")} ${entry.source_path} ${colors.dim(entry.error ?? "")}`;
+}
+
+/** Compose the final spinner-success line summarising the whole batch. */
+function formatSummary(r: IngestResult): string {
+	const parts: string[] = [`added ${r.ok}/${r.total}`];
+	if (r.unchanged > 0) parts.push(`${r.unchanged} unchanged`);
+	if (r.failed > 0) parts.push(`${r.failed} failed`);
+	return parts.join(", ");
+}
