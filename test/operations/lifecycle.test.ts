@@ -88,8 +88,7 @@ describe("operations end-to-end lifecycle", () => {
 	});
 
 	test("tree synthesises a hierarchy from logical paths", async () => {
-		const out = await treeOperation.handler({ max_depth: 100 }, ctx);
-		// Walk the synthesized tree to collect leaf basenames.
+		const out = await treeOperation.handler({ max_depth: 100, max_items: 20 }, ctx);
 		interface TN {
 			name: string;
 			children?: TN[];

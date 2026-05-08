@@ -8,6 +8,7 @@ interface TreeNode {
 	full_path: string;
 	is_file: boolean;
 	children?: TreeNode[];
+	children_truncated?: number;
 }
 
 export const treeOperation = defineOperation({
@@ -18,6 +19,10 @@ export const treeOperation = defineOperation({
 	inputSchema: z.object({
 		prefix: z.string().optional().describe("Only show paths starting with this prefix"),
 		max_depth: z.number().default(4).describe("How many path segments deep to render"),
+		max_items: z
+			.number()
+			.default(20)
+			.describe("Max children to render at each level; remainder is summarised as '+N more'"),
 	}),
 	outputSchema: z.object({
 		root: z.string(),
@@ -27,21 +32,30 @@ export const treeOperation = defineOperation({
 				full_path: z.string(),
 				is_file: z.boolean(),
 				children: z.array(z.unknown()).optional(),
+				children_truncated: z.number().optional(),
 			}),
 		),
+		truncated: z.number().optional(),
 	}),
 	cli: { positional: ["prefix"] },
 	console_formatter: (result) => {
 		const lines: string[] = [colors.bold(result.root)];
 		const nodes = result.tree as TreeNode[];
-		renderNodes(nodes, "", lines);
+		const topTruncated = (result as { truncated?: number }).truncated ?? 0;
+		renderNodes(nodes, "", lines, topTruncated);
 		if (lines.length === 1) lines.push(colors.dim("(empty)"));
 		return lines.join("\n");
 	},
 	handler: async (input, ctx) => {
 		const allPaths = await listAllCurrentPaths(ctx.db);
 		const filtered = input.prefix ? allPaths.filter((p) => p.startsWith(input.prefix!)) : allPaths;
-		return { root: input.prefix ?? "/", tree: buildTree(filtered, input.max_depth) };
+		const tree = buildTree(filtered, input.max_depth);
+		const truncated = truncateTree(tree, input.max_items);
+		return {
+			root: input.prefix ?? "/",
+			tree,
+			...(truncated > 0 ? { truncated } : {}),
+		};
 	},
 });
 
@@ -50,9 +64,10 @@ export const treeOperation = defineOperation({
  * Splits each path into segments and groups by common prefix. Segments
  * deeper than `maxDepth` are folded into the deepest visible ancestor —
  * that ancestor is marked `is_file=true` so the renderer surfaces it as a
- * leaf even though longer paths exist underneath.
+ * leaf even though longer paths exist underneath. Children are sorted by
+ * name within each level so downstream truncation is deterministic.
  */
-function buildTree(paths: string[], maxDepth: number): TreeNode[] {
+export function buildTree(paths: string[], maxDepth: number): TreeNode[] {
 	interface MutableNode {
 		name: string;
 		full_path: string;
@@ -91,18 +106,42 @@ function buildTree(paths: string[], maxDepth: number): TreeNode[] {
 }
 
 /**
- * Walk a tree and append `├── name` / `└── name` lines with proper continuation
- * prefixes. Directories are rendered in cyan-bold; files in plain text.
+ * Trim each child list (and the root list) to `maxItems`, mutating in place.
+ * Returns the number of root entries dropped; per-node drops are recorded on
+ * `node.children_truncated`. Input is assumed pre-sorted (by `buildTree`) so
+ * "first N" is stable.
  */
-function renderNodes(nodes: TreeNode[], prefix: string, out: string[]): void {
-	const sorted = [...nodes].sort((a, b) => a.name.localeCompare(b.name));
-	sorted.forEach((node, i) => {
-		const last = i === sorted.length - 1;
+export function truncateTree(nodes: TreeNode[], maxItems: number): number {
+	for (const node of nodes) {
+		if (node.children?.length) {
+			const dropped = truncateTree(node.children, maxItems);
+			if (dropped > 0) node.children_truncated = dropped;
+		}
+	}
+	if (nodes.length > maxItems) {
+		const dropped = nodes.length - maxItems;
+		nodes.length = maxItems;
+		return dropped;
+	}
+	return 0;
+}
+
+/**
+ * Walk a tree and append `├── name` / `└── name` lines with proper continuation
+ * prefixes. Directories are rendered in cyan-bold; files in plain text. When a
+ * level was truncated, a dim trailing `+N more` line is appended at that level.
+ */
+function renderNodes(nodes: TreeNode[], prefix: string, out: string[], truncatedCount = 0): void {
+	nodes.forEach((node, i) => {
+		const last = i === nodes.length - 1 && truncatedCount === 0;
 		const branch = last ? "└── " : "├── ";
 		const label = node.is_file && !node.children?.length ? node.name : colors.cyan(colors.bold(node.name));
 		out.push(`${prefix}${branch}${label}`);
 		if (node.children?.length) {
-			renderNodes(node.children, prefix + (last ? "    " : "│   "), out);
+			renderNodes(node.children, prefix + (last ? "    " : "│   "), out, node.children_truncated ?? 0);
 		}
 	});
+	if (truncatedCount > 0) {
+		out.push(`${prefix}└── ${colors.dim(`+${truncatedCount} more`)}`);
+	}
 }
