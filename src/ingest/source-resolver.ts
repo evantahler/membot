@@ -43,10 +43,12 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 	}
 
 	const followSymlinks = options.followSymlinks !== false;
-	const includeMatchers = (options.include ?? "**/*")
-		.split(",")
-		.map((g) => g.trim())
-		.filter(Boolean);
+	const userIncludes = options.include
+		? options.include
+				.split(",")
+				.map((g) => g.trim())
+				.filter(Boolean)
+		: [];
 	const excludeMatchers = [
 		...DEFAULT_EXCLUDES,
 		...(options.exclude ?? "")
@@ -57,9 +59,14 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 
 	if (isGlob(source)) {
 		const base = globBase(source);
+		const remainder = globRemainder(source);
 		try {
 			const realBase = await realpath(base);
-			return walk(realBase, [source, ...includeMatchers], excludeMatchers, followSymlinks);
+			// Source glob acts as a hard filter; user includes (if any) further
+			// narrow the result via AND. Pass them as a separate matcher so the
+			// two sets aren't picomatch-OR'd together.
+			const extraIncludes = userIncludes.length > 0 ? [userIncludes] : [];
+			return walk(realBase, [remainder], excludeMatchers, followSymlinks, extraIncludes);
 		} catch (err) {
 			throw asHelpful(
 				err,
@@ -93,7 +100,8 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 
 	if (st.isDirectory()) {
 		const realBase = await realpath(abs);
-		return walk(realBase, includeMatchers, excludeMatchers, followSymlinks);
+		const dirIncludes = userIncludes.length > 0 ? userIncludes : ["**/*"];
+		return walk(realBase, dirIncludes, excludeMatchers, followSymlinks);
 	}
 
 	throw new HelpfulError({
@@ -121,21 +129,39 @@ export function globBase(glob: string): string {
 }
 
 /**
+ * Take the wildcard portion of a glob — everything from the first segment
+ * containing a wildcard onward. We strip the static prefix so the matcher
+ * runs against entry paths relative to `globBase`. Without this, a glob like
+ * `docs/star-star/star.md` never matches anything under base=`docs/`, since
+ * walk() exposes `sub/file.md` to picomatch, not `docs/sub/file.md`.
+ */
+export function globRemainder(glob: string): string {
+	const parts = glob.split(sep);
+	const wildcardIdx = parts.findIndex((p) => /[*?[\]{}!]/.test(p));
+	if (wildcardIdx === -1) return glob;
+	return parts.slice(wildcardIdx).join(sep);
+}
+
+/**
  * Recursively walk `base`, returning files matched by `includes` and not
  * matched by `excludes`. Both globsets match against the entry's path
  * relative to `base`. Symlinks are followed when `followSymlinks` is true,
- * with cycles detected via a realpath cache.
+ * with cycles detected via a realpath cache. `extraIncludeSets` is a list
+ * of additional include groups, each ANDed onto the primary `includes` —
+ * use it when two filters must both match (e.g. source glob + --include).
  */
 async function walk(
 	base: string,
 	includes: string[],
 	excludes: string[],
 	followSymlinks: boolean,
+	extraIncludeSets: string[][] = [],
 ): Promise<ResolvedSource> {
 	const seen = new Set<string>();
 	const entries: ResolvedLocalEntry[] = [];
 
 	const isInclude = picomatch(includes, { dot: false, nocase: false });
+	const extraMatchers = extraIncludeSets.map((set) => picomatch(set, { dot: false, nocase: false }));
 	const isExclude = excludes.length ? picomatch(excludes, { dot: false }) : null;
 
 	const queue: string[] = [base];
@@ -174,6 +200,7 @@ async function walk(
 		const relForMatch = rel.length === 0 ? (cur.split(sep).pop() ?? cur) : rel;
 		if (isExclude?.(relForMatch)) continue;
 		if (!isInclude(relForMatch)) continue;
+		if (extraMatchers.some((m) => !m(relForMatch))) continue;
 		entries.push({ absPath: real, relPath: relForMatch });
 	}
 

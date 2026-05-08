@@ -21,13 +21,14 @@ export interface IngestInput {
 	refresh_frequency?: string;
 	fetcher_hint?: string;
 	change_note?: string;
+	force?: boolean;
 }
 
 export interface IngestEntryResult {
 	source_path: string;
 	logical_path: string;
 	version_id: string | null;
-	status: "ok" | "failed";
+	status: "ok" | "unchanged" | "failed";
 	error?: string;
 	mime_type: string | null;
 	size_bytes: number;
@@ -39,6 +40,7 @@ export interface IngestResult {
 	ingested: IngestEntryResult[];
 	total: number;
 	ok: number;
+	unchanged: number;
 	failed: number;
 }
 
@@ -57,14 +59,15 @@ export async function ingest(input: IngestInput, ctx: AppContext): Promise<Inges
 	});
 
 	const refreshSec = parseDuration(input.refresh_frequency);
+	const force = input.force === true;
 
 	if (resolved.kind === "inline") {
 		return ingestInline(resolved.text, input, ctx, refreshSec);
 	}
 	if (resolved.kind === "url") {
-		return ingestUrl(resolved.url, input, ctx, refreshSec);
+		return ingestUrl(resolved.url, input, ctx, refreshSec, force);
 	}
-	return ingestLocalFiles(resolved, input, ctx, refreshSec);
+	return ingestLocalFiles(resolved, input, ctx, refreshSec, force);
 }
 
 /** Ingest a single inline blob (source_type='inline'). */
@@ -119,6 +122,7 @@ async function ingestUrl(
 	input: IngestInput,
 	ctx: AppContext,
 	refreshSec: number | null,
+	force: boolean,
 ): Promise<IngestResult> {
 	const mcpxAdapter = ctx.mcpx
 		? {
@@ -151,6 +155,15 @@ async function ingestUrl(
 		result.fetcher = fetched.fetcher;
 		result.source_sha256 = fetched.sha256;
 
+		if (!force) {
+			const cur = await getCurrent(ctx.db, logicalPath);
+			if (cur && cur.source_sha256 === fetched.sha256) {
+				result.status = "unchanged";
+				result.version_id = cur.version_id;
+				return summarize([result]);
+			}
+		}
+
 		const versionId = await pipelineForBytes(ctx, {
 			logicalPath,
 			bytes: fetched.bytes,
@@ -181,6 +194,7 @@ async function ingestLocalFiles(
 	input: IngestInput,
 	ctx: AppContext,
 	refreshSec: number | null,
+	force: boolean,
 ): Promise<IngestResult> {
 	if (resolved.entries.length === 0) {
 		throw new HelpfulError({
@@ -213,6 +227,16 @@ async function ingestLocalFiles(
 			result.size_bytes = local.sizeBytes;
 			result.source_sha256 = local.sha256;
 
+			if (!force) {
+				const cur = await getCurrent(ctx.db, logicalPath);
+				if (cur && cur.source_sha256 === local.sha256) {
+					result.status = "unchanged";
+					result.version_id = cur.version_id;
+					results.push(result);
+					continue;
+				}
+			}
+
 			const versionId = await pipelineForBytes(ctx, {
 				logicalPath,
 				bytes: local.bytes,
@@ -236,7 +260,10 @@ async function ingestLocalFiles(
 		}
 		results.push(result);
 	}
-	ctx.progress.done(`ingested ${results.filter((r) => r.status === "ok").length}/${results.length}`);
+	const okCount = results.filter((r) => r.status === "ok").length;
+	const unchangedCount = results.filter((r) => r.status === "unchanged").length;
+	const suffix = unchangedCount > 0 ? ` (${unchangedCount} unchanged)` : "";
+	ctx.progress.done(`ingested ${okCount}/${results.length}${suffix}`);
 
 	return summarize(results);
 }
@@ -428,12 +455,14 @@ export function parseDuration(input: string | null | undefined): number | null {
 /** Roll a list of per-entry results into the top-level summary shape. */
 function summarize(entries: IngestEntryResult[]): IngestResult {
 	let ok = 0;
+	let unchanged = 0;
 	let failed = 0;
 	for (const e of entries) {
 		if (e.status === "ok") ok += 1;
+		else if (e.status === "unchanged") unchanged += 1;
 		else failed += 1;
 	}
-	return { ingested: entries, total: entries.length, ok, failed };
+	return { ingested: entries, total: entries.length, ok, unchanged, failed };
 }
 
 function errorMessage(err: unknown): string {
