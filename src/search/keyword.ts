@@ -1,4 +1,4 @@
-import { isFtsAvailable, rebuildFts } from "../db/chunks.ts";
+import { rebuildFts } from "../db/chunks.ts";
 import type { DbConnection } from "../db/connection.ts";
 
 export interface KeywordHit {
@@ -32,9 +32,8 @@ export async function searchKeyword(
 	query: string,
 	options: { limit?: number; pathPrefix?: string } = {},
 ): Promise<KeywordHit[]> {
-	const built = await rebuildFts(db);
-	if (!built && !isFtsAvailable()) return [];
-	if (!isFtsAvailable()) return [];
+	const result = await rebuildFts(db);
+	if (result.kind !== "rebuilt") return [];
 
 	const limit = options.limit ?? 50;
 	try {
