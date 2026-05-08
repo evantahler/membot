@@ -3,13 +3,17 @@
 import { bold, cyan, dim, green, yellow } from "ansis";
 import { program } from "commander";
 import pkg from "../package.json" with { type: "json" };
+import { registerCheckUpdateCommand } from "./commands/check-update.ts";
 import { registerMcpxCommand } from "./commands/mcpx.ts";
 import { registerReindexCommand } from "./commands/reindex.ts";
 import { registerServeCommand } from "./commands/serve.ts";
 import { registerSkillCommand } from "./commands/skill.ts";
+import { registerUpgradeCommand } from "./commands/upgrade.ts";
 import type { BuildContextOptions } from "./context.ts";
 import { mountAsCommanderCommand } from "./mount/commander.ts";
 import { OPERATIONS } from "./operations/index.ts";
+import { logger } from "./output/logger.ts";
+import { maybeCheckForUpdate } from "./update/background.ts";
 
 program
 	.name("membot")
@@ -55,5 +59,14 @@ registerServeCommand(program);
 registerReindexCommand(program);
 registerMcpxCommand(program);
 registerSkillCommand(program);
+registerCheckUpdateCommand(program);
+registerUpgradeCommand(program);
+
+const updateNotice = maybeCheckForUpdate();
 
 program.parse();
+
+process.on("beforeExit", async () => {
+	const notice = await updateNotice;
+	if (notice) logger.writeRaw(notice);
+});

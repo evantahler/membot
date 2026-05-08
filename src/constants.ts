@@ -14,6 +14,7 @@ export const ENV = {
 	DEBUG: "MEMBOT_DEBUG",
 	ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
 	MCPX_CONFIG_PATH: "MCP_CONFIG_PATH",
+	NO_UPDATE_CHECK: "MEMBOT_NO_UPDATE_CHECK",
 } as const;
 
 export const EMBEDDING_MODEL = "Xenova/bge-small-en-v1.5";
@@ -29,6 +30,8 @@ export const DEFAULTS = {
 	CHUNKER_MODEL: "claude-haiku-4-5-20251001",
 	DESCRIBER_MODEL: "claude-haiku-4-5-20251001",
 	VISION_MODEL: "claude-haiku-4-5-20251001",
+	UPDATE_CHECK_INTERVAL_MS: 24 * 60 * 60 * 1000,
+	UPDATE_CHECK_TIMEOUT_MS: 5_000,
 } as const;
 
 export const FILES = {
