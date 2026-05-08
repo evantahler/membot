@@ -1,6 +1,6 @@
 {
 	"name": "membot",
-	"version": "0.2.1",
+	"version": "0.3.0",
 	"description": "Versioned context store with hybrid search for AI agents. Stdio + HTTP MCP server and CLI.",
 	"type": "module",
 	"exports": {
