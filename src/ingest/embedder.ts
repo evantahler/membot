@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { env, type FeatureExtractionPipeline, pipeline } from "@huggingface/transformers";
-import { EMBEDDING_DIMENSION, EMBEDDING_MODEL } from "../constants.ts";
+import { EMBEDDING_BATCH_SIZE, EMBEDDING_DIMENSION, EMBEDDING_MODEL } from "../constants.ts";
 import { HelpfulError } from "../errors.ts";
 import { logger } from "../output/logger.ts";
 
@@ -67,20 +67,29 @@ async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
  * Embed an array of texts to L2-normalized vectors with the configured
  * model. Throws a HelpfulError when the model's dimension doesn't match
  * EMBEDDING_DIMENSION (the value baked into the DB schema).
+ *
+ * Inputs are sliced into windows of EMBEDDING_BATCH_SIZE so a single
+ * forward pass never has to allocate activations for arbitrarily many
+ * chunks — large files (hundreds of chunks) otherwise OOM the WASM heap.
  */
 export async function embed(texts: string[], model: string = EMBEDDING_MODEL): Promise<number[][]> {
 	if (texts.length === 0) return [];
 	const extractor = await getPipeline(model);
-	const output = await extractor(texts, { pooling: "mean", normalize: true });
-	const data = output.tolist() as number[][];
-	if (data[0] && data[0].length !== EMBEDDING_DIMENSION) {
-		throw new HelpfulError({
-			kind: "internal_error",
-			message: `embedding model ${model} returned ${data[0].length}-dim vectors, expected ${EMBEDDING_DIMENSION}`,
-			hint: `Set config.embedding_model to a ${EMBEDDING_DIMENSION}-dim model (default: ${EMBEDDING_MODEL}).`,
-		});
+	const out: number[][] = [];
+	for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
+		const slice = texts.slice(i, i + EMBEDDING_BATCH_SIZE);
+		const output = await extractor(slice, { pooling: "mean", normalize: true });
+		const data = output.tolist() as number[][];
+		if (out.length === 0 && data[0] && data[0].length !== EMBEDDING_DIMENSION) {
+			throw new HelpfulError({
+				kind: "internal_error",
+				message: `embedding model ${model} returned ${data[0].length}-dim vectors, expected ${EMBEDDING_DIMENSION}`,
+				hint: `Set config.embedding_model to a ${EMBEDDING_DIMENSION}-dim model (default: ${EMBEDDING_MODEL}).`,
+			});
+		}
+		for (const vec of data) out.push(vec);
 	}
-	return data;
+	return out;
 }
 
 /** Embed a single text — convenience wrapper for query-time embedding. */
