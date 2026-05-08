@@ -2,7 +2,7 @@
 
 ## Context
 
-`membot` is a new standalone Bun project — npm package `membot`, CLI binary `membot` — that extracts and reshapes the context system currently embedded in `botholomew` (paths under `botholomew/src/context/`, `src/tools/`, `src/db/`). Distribution and CLI shape mirror `mcpx`.
+`membot` is a new standalone Bun project — Bun package `membot`, CLI binary `membot` — that extracts and reshapes the context system currently embedded in `botholomew` (paths under `botholomew/src/context/`, `src/tools/`, `src/db/`). Distribution and CLI shape mirror `mcpx`.
 
 Goals (from user):
 

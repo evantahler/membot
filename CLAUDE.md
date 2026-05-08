@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repo. Pair with `docs/plan.md` (th
 
 ## What this project is
 
-`membot` is a standalone Bun CLI + MCP server (npm package `membot`, binary `membot`) that gives AI agents a persistent, versioned, searchable context store. Files (markdown, PDF, DOCX, HTML, URLs) are ingested, converted to markdown, chunked, embedded locally with `@huggingface/transformers` (WASM, 384-dim `Xenova/bge-small-en-v1.5`), and indexed in DuckDB with hybrid search (vector + BM25). Every agent-visible artifact is a row in `files`, addressed by a virtual `logical_path` — there is **no** on-disk tree of stored content.
+`membot` is a standalone Bun CLI + MCP server (Bun package `membot`, binary `membot`) that gives AI agents a persistent, versioned, searchable context store. Files (markdown, PDF, DOCX, HTML, URLs) are ingested, converted to markdown, chunked, embedded locally with `@huggingface/transformers` (WASM, 384-dim `Xenova/bge-small-en-v1.5`), and indexed in DuckDB with hybrid search (vector + BM25). Every agent-visible artifact is a row in `files`, addressed by a virtual `logical_path` — there is **no** on-disk tree of stored content.
 
 Reference projects (read these to understand the conventions before changing anything):
 
@@ -29,7 +29,7 @@ Reference projects (read these to understand the conventions before changing any
 - **Every method gets a docstring.** Every exported (and most internal) function, method, or class member must have a JSDoc-style comment that explains *what it does* — preferably also *why* when the rationale isn't obvious. One short line is fine for trivial wrappers; multi-line comments are appropriate for orchestration paths or anything with a non-obvious contract. Don't restate the signature; explain the intent and the contract.
 - **Tests are written alongside code, not bolted on.** Every new module ships with unit tests covering the happy path, the error path, and the edge cases (empty input, malformed input, boundary conditions). DB-touching code uses real ephemeral DuckDB files, not mocks. Error types are tested for both their invariants and their rendering.
 - **Migrations are logged.** Every migration applied at startup writes an `info` line so users can see what changed when they upgrade.
-- **User-facing changes bump `package.json`.** Any change that ships behavior to users (new flag, new command, fixed bug they could observe, output-format change) must increment `version` in `package.json` in the same PR. The `auto-release` workflow only fires when the version changes — no bump means no npm release and no binaries. Internal-only refactors, comment edits, and test changes don't need a bump.
+- **User-facing changes bump `package.json`.** Any change that ships behavior to users (new flag, new command, fixed bug they could observe, output-format change) must increment `version` in `package.json` in the same PR. The `auto-release` workflow only fires when the version changes — no bump means no release and no binaries. Internal-only refactors, comment edits, and test changes don't need a bump.
 
 ## Architecture at a glance
 
@@ -112,7 +112,7 @@ Server-level `instructions` (the string handed to the MCP client when it connect
 
 Three files are the public face of the project. Whenever you change the operation surface, command names, flags, install steps, or env vars, update **all three** in the same change:
 
-- `README.md` — the user-facing entry point on GitHub and npm.
+- `README.md` — the user-facing entry point on GitHub.
 - `.claude/skills/membot.md` — the Claude Code skill (bundled into the binary via Bun text imports and shipped via `membot skill install --claude`).
 - `.cursor/rules/membot.mdc` — the Cursor rule (bundled the same way, shipped via `membot skill install --cursor`).
 
@@ -129,9 +129,9 @@ If a command, flag, or workflow changes, the README command table, the skill com
 ## Build & distribution
 
 - Pre-build: `scripts/apply-patches.sh` (applies the transformers WASM patch — copy from mcpx — and stubs `@evantahler/mcpx`'s `src/search/onnx-wasm-paths.ts` so its build-time-static asset imports don't break `bun --compile`).
-- Build: `bun build --compile --minify --sourcemap --external '@duckdb/*' ./src/cli.ts --outfile dist/membot`. `@duckdb/*` is externalized because `@duckdb/node-bindings` ships per-platform `.node` native files (`@duckdb/node-bindings-{darwin-arm64,darwin-x64,linux-arm64,linux-x64,win32-arm64,win32-x64}`) that `bun build --compile` cannot resolve and bundle. The trade-off: the published binary expects `@duckdb/node-api` to be reachable at runtime, so the README directs users to `bun add -g membot` (or `npm install -g`) as the primary install path. `install.sh` / `install.ps1` are documented as a secondary path that requires DuckDB to be installed separately.
+- Build: `bun build --compile --minify --sourcemap --external '@duckdb/*' ./src/cli.ts --outfile dist/membot`. `@duckdb/*` is externalized because `@duckdb/node-bindings` ships per-platform `.node` native files (`@duckdb/node-bindings-{darwin-arm64,darwin-x64,linux-arm64,linux-x64,win32-arm64,win32-x64}`) that `bun build --compile` cannot resolve and bundle. The trade-off: the published binary expects `@duckdb/node-api` to be reachable at runtime, so the README directs users to `bun add -g membot` as the primary install path. `install.sh` / `install.ps1` are documented as a secondary path that requires DuckDB to be installed separately.
 - Targets: darwin-arm64, darwin-x64, linux-arm64, linux-x64, windows-x64, windows-arm64.
-- Distribution: `install.sh` / `install.ps1` mirror mcpx; published to NPM as well.
+- Distribution: `install.sh` / `install.ps1` mirror mcpx.
 
 ## Things to avoid
 
