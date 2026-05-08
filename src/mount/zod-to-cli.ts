@@ -47,7 +47,7 @@ export function applySchemaToCommand<S extends z.ZodObject>(
  * value-taking flag whose argument is parsed as the field's primitive type.
  */
 function buildOption(
-	fieldName: string,
+	_fieldName: string,
 	flag: string,
 	desc: string,
 	schema: z.ZodTypeAny,

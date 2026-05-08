@@ -67,7 +67,7 @@ describe("chunker", () => {
 	});
 
 	test("chunkDeterministic is stable on same input", () => {
-		const text = "x".repeat(300) + "\n\n" + "y".repeat(300);
+		const text = `${"x".repeat(300)}\n\n${"y".repeat(300)}`;
 		const a = chunkDeterministic(text, { mode: "deterministic", target_chars: 200, max_chars: 500 });
 		const b = chunkDeterministic(text, { mode: "deterministic", target_chars: 200, max_chars: 500 });
 		expect(a).toEqual(b);

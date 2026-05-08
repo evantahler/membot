@@ -66,7 +66,7 @@ export function defaultCliName(op: { name: string; cliName?: string }): string {
  * agents (`tools/list`) and humans (`--help`).
  */
 export function composeDescription(op: { description: string; bashEquivalent?: string }): string {
-	if (op.bashEquivalent && op.bashEquivalent.trim()) {
+	if (op.bashEquivalent?.trim()) {
 		return `[[ bash equivalent: ${op.bashEquivalent.trim()} ]] ${op.description}`;
 	}
 	return op.description;

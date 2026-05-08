@@ -50,7 +50,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<{
 	}
 
 	const envKey = process.env[ENV.ANTHROPIC_API_KEY];
-	if (envKey && envKey.trim()) {
+	if (envKey?.trim()) {
 		config = { ...config, llm: { ...config.llm, anthropic_api_key: envKey } };
 	}
 
@@ -62,9 +62,9 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<{
 }
 
 function resolveDataDir(flag?: string): string {
-	if (flag && flag.trim()) return resolve(flag);
+	if (flag?.trim()) return resolve(flag);
 	const env = process.env[ENV.HOME];
-	if (env && env.trim()) return resolve(env);
+	if (env?.trim()) return resolve(env);
 	return defaultMembotHome();
 }
 

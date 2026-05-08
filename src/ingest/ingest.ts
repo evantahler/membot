@@ -8,7 +8,7 @@ import { convert } from "./converter/index.ts";
 import { describe } from "./describer.ts";
 import { embed } from "./embedder.ts";
 import { fetchRemote } from "./fetcher.ts";
-import { mimeFromPath, readLocalFile, sha256Hex } from "./local-reader.ts";
+import { readLocalFile, sha256Hex } from "./local-reader.ts";
 import { buildSearchText } from "./search-text.ts";
 import { type ResolvedLocalEntry, type ResolvedSource, resolveSource } from "./source-resolver.ts";
 
@@ -410,7 +410,7 @@ function defaultInlinePath(): string {
  * malformed input.
  */
 export function parseDuration(input: string | null | undefined): number | null {
-	if (!input || !input.trim()) return null;
+	if (!input?.trim()) return null;
 	const m = input.trim().match(/^(\d+)([smhd])$/i);
 	if (!m) {
 		throw new HelpfulError({

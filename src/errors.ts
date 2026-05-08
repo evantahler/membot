@@ -29,7 +29,7 @@ export class HelpfulError extends Error {
 
 	constructor(args: HelpfulErrorArgs) {
 		super(args.message);
-		if (!args.hint || !args.hint.trim()) {
+		if (!args.hint?.trim()) {
 			throw new Error("HelpfulError requires a non-empty hint");
 		}
 		this.name = "HelpfulError";

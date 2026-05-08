@@ -4,7 +4,7 @@ import { join } from "node:path";
 /** Default data directory: `~/.membot`. Override via $MEMBOT_HOME or `--config`. */
 export function defaultMembotHome(): string {
 	const env = process.env.MEMBOT_HOME;
-	if (env && env.trim()) return env;
+	if (env?.trim()) return env;
 	return join(homedir(), ".membot");
 }
 

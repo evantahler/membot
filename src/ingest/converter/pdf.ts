@@ -18,7 +18,7 @@ const LOW_TEXT_RATIO = 0.005; // < ~5 chars per kB → very likely scanned
 export async function convertPdf(bytes: Uint8Array): Promise<PdfConversion> {
 	try {
 		const pdf = await getDocumentProxy(bytes);
-		const { totalPages, text } = await extractText(pdf, { mergePages: false });
+		const { text } = await extractText(pdf, { mergePages: false });
 		const pages: string[] = Array.isArray(text) ? text : [String(text)];
 		const md = pages
 			.map((p, i) => `## Page ${i + 1}\n\n${p.trim()}`)
