@@ -129,7 +129,7 @@ If a command, flag, or workflow changes, the README command table, the skill com
 ## Build & distribution
 
 - Pre-build: `scripts/apply-patches.sh` (applies the transformers WASM patch — copy from mcpx — and stubs `@evantahler/mcpx`'s `src/search/onnx-wasm-paths.ts` so its build-time-static asset imports don't break `bun --compile`).
-- Build: `bun build --compile --minify --sourcemap ./src/cli.ts --outfile dist/membot`.
+- Build: `bun build --compile --minify --sourcemap --external '@duckdb/*' ./src/cli.ts --outfile dist/membot`. `@duckdb/*` is externalized because `@duckdb/node-bindings` ships per-platform `.node` native files (`@duckdb/node-bindings-{darwin-arm64,darwin-x64,linux-arm64,linux-x64,win32-arm64,win32-x64}`) that `bun build --compile` cannot resolve and bundle. The trade-off: the published binary expects `@duckdb/node-api` to be reachable at runtime, so the README directs users to `bun add -g membot` (or `npm install -g`) as the primary install path. `install.sh` / `install.ps1` are documented as a secondary path that requires DuckDB to be installed separately.
 - Targets: darwin-arm64, darwin-x64, linux-arm64, linux-x64, windows-x64, windows-arm64.
 - Distribution: `install.sh` / `install.ps1` mirror mcpx; published to NPM as well.
 

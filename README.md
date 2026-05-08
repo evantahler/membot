@@ -14,17 +14,23 @@
 
 ## Install
 
+The recommended install is from npm — it pulls in DuckDB's platform-specific native bindings, which `bun build --compile` cannot embed in a standalone binary.
+
 ```bash
-# macOS / Linux — pre-built binary
+# Recommended — installs DuckDB native bindings alongside membot
+bun add -g membot
+# or
+npm install -g membot
+```
+
+Pre-built single-file binaries are also published with each release for users who can't install from npm. They require `@duckdb/node-api` to be reachable at runtime (e.g. via a global `bun add -g @duckdb/node-api` or `npm install -g @duckdb/node-api`):
+
+```bash
+# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/evantahler/membot/main/install.sh | bash
 
 # Windows — PowerShell
 iwr -useb https://raw.githubusercontent.com/evantahler/membot/main/install.ps1 | iex
-
-# From npm (requires Bun or Node)
-bun add -g membot
-# or
-npm install -g membot
 ```
 
 ## Quick start
