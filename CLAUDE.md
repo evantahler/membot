@@ -108,6 +108,16 @@ Operation descriptions are the user interface — for the LLM AND for the human 
 
 Server-level `instructions` (the string handed to the MCP client when it connects) is defined in `src/mcp/instructions.ts`. It frames the discovery → ingest → consume → write workflow and explicitly tells the agent how versioning, refresh, and the `version` parameter behave. CLI users get the same framing through `membot --help` (commander's top-level help). Update both that file and `docs/plan.md` together if you change the operation surface.
 
+## User-facing docs and agent skills MUST stay in sync
+
+Three files are the public face of the project. Whenever you change the operation surface, command names, flags, install steps, or env vars, update **all three** in the same change:
+
+- `README.md` — the user-facing entry point on GitHub and npm.
+- `.claude/skills/membot.md` — the Claude Code skill (bundled into the binary via Bun text imports and shipped via `membot skill install --claude`).
+- `.cursor/rules/membot.mdc` — the Cursor rule (bundled the same way, shipped via `membot skill install --cursor`).
+
+If a command, flag, or workflow changes, the README command table, the skill command tables, and the workflow sections must all reflect the new shape. Drift between these and the actual CLI is a bug. The skill files are imported via `import ... with { type: "text" }` in `src/commands/skill.ts`, so a stale file in `.claude/` or `.cursor/` ships to every user the moment they upgrade.
+
 ## Testing
 
 - `bun test`. Test preload at `test/_preload.ts` applies the transformers WASM patch.

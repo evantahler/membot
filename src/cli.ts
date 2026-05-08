@@ -7,6 +7,7 @@ import { registerCheckUpdateCommand } from "./commands/check-update.ts";
 import { registerMcpxCommand } from "./commands/mcpx.ts";
 import { registerReindexCommand } from "./commands/reindex.ts";
 import { registerServeCommand } from "./commands/serve.ts";
+import { registerSkillCommand } from "./commands/skill.ts";
 import { registerUpgradeCommand } from "./commands/upgrade.ts";
 import type { BuildContextOptions } from "./context.ts";
 import { mountAsCommanderCommand } from "./mount/commander.ts";
@@ -57,6 +58,7 @@ for (const op of OPERATIONS) {
 registerServeCommand(program);
 registerReindexCommand(program);
 registerMcpxCommand(program);
+registerSkillCommand(program);
 registerCheckUpdateCommand(program);
 registerUpgradeCommand(program);
 
