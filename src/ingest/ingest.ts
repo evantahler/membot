@@ -54,6 +54,13 @@ export interface IngestResult {
 export interface IngestCallbacks {
 	onEntryStart?: (label: string) => void;
 	onEntryComplete?: (entry: IngestEntryResult) => void;
+	/**
+	 * Fires for sub-step progress within a single entry (e.g. "embedding
+	 * 32/168"). The callback runs many times per entry and is intended for
+	 * driving an interactive spinner — non-interactive callers should ignore
+	 * it to avoid log spam.
+	 */
+	onEntryProgress?: (label: string, sublabel: string) => void;
 }
 
 /**
@@ -140,23 +147,27 @@ async function ingestInline(
 		source_sha256: sha,
 	};
 	try {
-		const versionId = await persistVersion(ctx, {
-			logicalPath,
-			sourceType: "inline",
-			sourcePath: null,
-			sourceMtimeMs: null,
-			sourceSha: sha,
-			blobSha: null,
-			mime: "text/markdown",
-			bytes: null,
-			markdown: text,
-			fetcher: "inline",
-			fetcherServer: null,
-			fetcherTool: null,
-			fetcherArgs: null,
-			refreshSec,
-			changeNote: input.change_note ?? null,
-		});
+		const versionId = await persistVersion(
+			ctx,
+			{
+				logicalPath,
+				sourceType: "inline",
+				sourcePath: null,
+				sourceMtimeMs: null,
+				sourceSha: sha,
+				blobSha: null,
+				mime: "text/markdown",
+				bytes: null,
+				markdown: text,
+				fetcher: "inline",
+				fetcherServer: null,
+				fetcherTool: null,
+				fetcherArgs: null,
+				refreshSec,
+				changeNote: input.change_note ?? null,
+			},
+			(done, total) => callbacks?.onEntryProgress?.(logicalPath, `embedding ${done}/${total}`),
+		);
 		result.version_id = versionId;
 	} catch (err) {
 		result.status = "failed";
@@ -217,22 +228,26 @@ async function ingestUrl(
 			}
 		}
 
-		const versionId = await pipelineForBytes(ctx, {
-			logicalPath,
-			bytes: fetched.bytes,
-			mime: fetched.mimeType,
-			source: url,
-			sourceType: "remote",
-			sourcePath: url,
-			sourceMtimeMs: null,
-			sourceSha: fetched.sha256,
-			fetcher: fetched.fetcher,
-			fetcherServer: fetched.fetcherServer,
-			fetcherTool: fetched.fetcherTool,
-			fetcherArgs: fetched.fetcherArgs,
-			refreshSec,
-			changeNote: input.change_note ?? null,
-		});
+		const versionId = await pipelineForBytes(
+			ctx,
+			{
+				logicalPath,
+				bytes: fetched.bytes,
+				mime: fetched.mimeType,
+				source: url,
+				sourceType: "remote",
+				sourcePath: url,
+				sourceMtimeMs: null,
+				sourceSha: fetched.sha256,
+				fetcher: fetched.fetcher,
+				fetcherServer: fetched.fetcherServer,
+				fetcherTool: fetched.fetcherTool,
+				fetcherArgs: fetched.fetcherArgs,
+				refreshSec,
+				changeNote: input.change_note ?? null,
+			},
+			(done, total) => callbacks?.onEntryProgress?.(url, `embedding ${done}/${total}`),
+		);
 		result.version_id = versionId;
 	} catch (err) {
 		result.status = "failed";
@@ -299,22 +314,26 @@ async function ingestLocalFiles(
 				}
 			}
 
-			const versionId = await pipelineForBytes(ctx, {
-				logicalPath,
-				bytes: local.bytes,
-				mime: local.mimeType,
-				source: entry.absPath,
-				sourceType: "local",
-				sourcePath: entry.absPath,
-				sourceMtimeMs: local.mtimeMs,
-				sourceSha: local.sha256,
-				fetcher: "local",
-				fetcherServer: null,
-				fetcherTool: null,
-				fetcherArgs: null,
-				refreshSec,
-				changeNote: input.change_note ?? null,
-			});
+			const versionId = await pipelineForBytes(
+				ctx,
+				{
+					logicalPath,
+					bytes: local.bytes,
+					mime: local.mimeType,
+					source: entry.absPath,
+					sourceType: "local",
+					sourcePath: entry.absPath,
+					sourceMtimeMs: local.mtimeMs,
+					sourceSha: local.sha256,
+					fetcher: "local",
+					fetcherServer: null,
+					fetcherTool: null,
+					fetcherArgs: null,
+					refreshSec,
+					changeNote: input.change_note ?? null,
+				},
+				(done, total) => callbacks?.onEntryProgress?.(entry.relPathFromBase, `embedding ${done}/${total}`),
+			);
 			result.version_id = versionId;
 		} catch (err) {
 			result.status = "failed";
@@ -353,9 +372,14 @@ interface PipelineParams {
  * Run the bytes-in / version-out pipeline: store the blob, convert to
  * markdown, describe, chunk, embed, and write a new files row + chunks
  * rows under a fresh version_id. Returns the version_id so callers can
- * report it back.
+ * report it back. The optional `onEmbedProgress` is forwarded to the
+ * embedder so callers can drive a spinner during the slow phase.
  */
-async function pipelineForBytes(ctx: AppContext, p: PipelineParams): Promise<string> {
+async function pipelineForBytes(
+	ctx: AppContext,
+	p: PipelineParams,
+	onEmbedProgress?: (done: number, total: number) => void,
+): Promise<string> {
 	await upsertBlob(ctx.db, {
 		sha256: p.sourceSha,
 		mime_type: p.mime,
@@ -367,24 +391,28 @@ async function pipelineForBytes(ctx: AppContext, p: PipelineParams): Promise<str
 	const markdown = conversion.markdown;
 	const contentSha = sha256Hex(new TextEncoder().encode(markdown));
 
-	return persistVersion(ctx, {
-		logicalPath: p.logicalPath,
-		sourceType: p.sourceType,
-		sourcePath: p.sourcePath,
-		sourceMtimeMs: p.sourceMtimeMs,
-		sourceSha: p.sourceSha,
-		blobSha: p.sourceSha,
-		mime: p.mime,
-		bytes: p.bytes,
-		markdown,
-		contentSha,
-		fetcher: p.fetcher,
-		fetcherServer: p.fetcherServer,
-		fetcherTool: p.fetcherTool,
-		fetcherArgs: p.fetcherArgs,
-		refreshSec: p.refreshSec,
-		changeNote: p.changeNote,
-	});
+	return persistVersion(
+		ctx,
+		{
+			logicalPath: p.logicalPath,
+			sourceType: p.sourceType,
+			sourcePath: p.sourcePath,
+			sourceMtimeMs: p.sourceMtimeMs,
+			sourceSha: p.sourceSha,
+			blobSha: p.sourceSha,
+			mime: p.mime,
+			bytes: p.bytes,
+			markdown,
+			contentSha,
+			fetcher: p.fetcher,
+			fetcherServer: p.fetcherServer,
+			fetcherTool: p.fetcherTool,
+			fetcherArgs: p.fetcherArgs,
+			refreshSec: p.refreshSec,
+			changeNote: p.changeNote,
+		},
+		onEmbedProgress,
+	);
 }
 
 interface PersistParams {
@@ -412,13 +440,17 @@ interface PersistParams {
  * embedded text per chunk is `<path>\n<description>\n\n<body>`, stored
  * verbatim as `chunks.search_text` and later FTS-indexed.
  */
-async function persistVersion(ctx: AppContext, p: PersistParams): Promise<string> {
+async function persistVersion(
+	ctx: AppContext,
+	p: PersistParams,
+	onEmbedProgress?: (done: number, total: number) => void,
+): Promise<string> {
 	const description = await describe(p.logicalPath, p.mime, p.markdown, ctx.config.llm);
 	const chunks = chunkDeterministic(p.markdown, ctx.config.chunker);
 	const searchTexts = chunks.map((c) => buildSearchText(p.logicalPath, description, c.content));
 	let embeddings: number[][];
 	try {
-		embeddings = await embed(searchTexts, ctx.config.embedding_model);
+		embeddings = await embed(searchTexts, ctx.config.embedding_model, { onProgress: onEmbedProgress });
 	} catch (err) {
 		throw asHelpful(
 			err,
