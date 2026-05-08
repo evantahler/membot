@@ -45,11 +45,35 @@ export interface IngestResult {
 }
 
 /**
+ * Per-entry hooks invoked while a resolved source is being ingested. Used by
+ * `add` to drive a single shared progress reporter across many sources
+ * without re-resolving anything. `onEntryStart` fires before the pipeline
+ * touches an entry; `onEntryComplete` fires after the result (ok / unchanged
+ * / failed) is known. Both are optional.
+ */
+export interface IngestCallbacks {
+	onEntryStart?: (label: string) => void;
+	onEntryComplete?: (entry: IngestEntryResult) => void;
+}
+
+/**
+ * Count how many per-entry results a `ResolvedSource` will produce. Used by
+ * `add` to size a shared progress bar before ingestion starts.
+ */
+export function countResolvedEntries(resolved: ResolvedSource): number {
+	if (resolved.kind === "local-files") return resolved.entries.length;
+	return 1;
+}
+
+/**
  * Top-level ingest orchestrator. Resolves the source arg, dispatches to the
  * right reader (local / remote / inline), runs the pipeline (convert →
  * describe → chunk → embed → write), and returns one entry per matched
  * file. Partial failures are reported per-entry; the entire call doesn't
- * abort because one URL or PDF is bad.
+ * abort because one URL or PDF is bad. Drives `ctx.progress` itself, so
+ * single-source SDK callers get a usable indicator out of the box. When
+ * orchestrating many sources at once (e.g. `add`), call `resolveSource` +
+ * `ingestResolved` directly so one shared progress spans every entry.
  */
 export async function ingest(input: IngestInput, ctx: AppContext): Promise<IngestResult> {
 	const resolved = await resolveSource(input.source, {
@@ -57,17 +81,40 @@ export async function ingest(input: IngestInput, ctx: AppContext): Promise<Inges
 		exclude: input.exclude,
 		followSymlinks: input.follow_symlinks ?? true,
 	});
+	const total = countResolvedEntries(resolved);
+	ctx.progress.start(total, "ingest");
+	const callbacks: IngestCallbacks = {
+		onEntryStart: (label) => ctx.progress.tick(label),
+	};
+	const result = await ingestResolved(resolved, input, ctx, callbacks);
+	const okCount = result.ok;
+	const unchangedSuffix = result.unchanged > 0 ? ` (${result.unchanged} unchanged)` : "";
+	ctx.progress.done(`ingested ${okCount}/${result.total}${unchangedSuffix}`);
+	return result;
+}
 
+/**
+ * Run the ingest pipeline against a pre-resolved source. Same as `ingest`
+ * but skips the resolve step and delegates progress reporting to the caller
+ * via `callbacks`. This is the entry point used by multi-source orchestrators
+ * (`add`) so a single progress bar can span every entry across every source.
+ */
+export async function ingestResolved(
+	resolved: ResolvedSource,
+	input: IngestInput,
+	ctx: AppContext,
+	callbacks?: IngestCallbacks,
+): Promise<IngestResult> {
 	const refreshSec = parseDuration(input.refresh_frequency);
 	const force = input.force === true;
 
 	if (resolved.kind === "inline") {
-		return ingestInline(resolved.text, input, ctx, refreshSec);
+		return ingestInline(resolved.text, input, ctx, refreshSec, callbacks);
 	}
 	if (resolved.kind === "url") {
-		return ingestUrl(resolved.url, input, ctx, refreshSec, force);
+		return ingestUrl(resolved.url, input, ctx, refreshSec, force, callbacks);
 	}
-	return ingestLocalFiles(resolved, input, ctx, refreshSec, force);
+	return ingestLocalFiles(resolved, input, ctx, refreshSec, force, callbacks);
 }
 
 /** Ingest a single inline blob (source_type='inline'). */
@@ -76,8 +123,10 @@ async function ingestInline(
 	input: IngestInput,
 	ctx: AppContext,
 	refreshSec: number | null,
+	callbacks?: IngestCallbacks,
 ): Promise<IngestResult> {
 	const logicalPath = input.logical_path ?? defaultInlinePath();
+	callbacks?.onEntryStart?.(logicalPath);
 	const bytes = new TextEncoder().encode(text);
 	const sha = sha256Hex(bytes);
 	const result: IngestEntryResult = {
@@ -113,6 +162,7 @@ async function ingestInline(
 		result.status = "failed";
 		result.error = errorMessage(err);
 	}
+	callbacks?.onEntryComplete?.(result);
 	return summarize([result]);
 }
 
@@ -123,6 +173,7 @@ async function ingestUrl(
 	ctx: AppContext,
 	refreshSec: number | null,
 	force: boolean,
+	callbacks?: IngestCallbacks,
 ): Promise<IngestResult> {
 	const mcpxAdapter = ctx.mcpx
 		? {
@@ -137,6 +188,7 @@ async function ingestUrl(
 		: null;
 
 	const logicalPath = input.logical_path ?? defaultLogicalForUrl(url);
+	callbacks?.onEntryStart?.(url);
 	const result: IngestEntryResult = {
 		source_path: url,
 		logical_path: logicalPath,
@@ -160,6 +212,7 @@ async function ingestUrl(
 			if (cur && cur.source_sha256 === fetched.sha256) {
 				result.status = "unchanged";
 				result.version_id = cur.version_id;
+				callbacks?.onEntryComplete?.(result);
 				return summarize([result]);
 			}
 		}
@@ -185,6 +238,7 @@ async function ingestUrl(
 		result.status = "failed";
 		result.error = errorMessage(err);
 	}
+	callbacks?.onEntryComplete?.(result);
 	return summarize([result]);
 }
 
@@ -195,6 +249,7 @@ async function ingestLocalFiles(
 	ctx: AppContext,
 	refreshSec: number | null,
 	force: boolean,
+	callbacks?: IngestCallbacks,
 ): Promise<IngestResult> {
 	if (resolved.entries.length === 0) {
 		// `filtered: true` means the source resolved successfully but every
@@ -212,11 +267,10 @@ async function ingestLocalFiles(
 	}
 
 	const results: IngestEntryResult[] = [];
-	ctx.progress.start(resolved.entries.length, "ingest");
 	const isMulti = resolved.entries.length > 1;
 
 	for (const entry of resolved.entries) {
-		ctx.progress.tick(entry.relPathFromBase);
+		callbacks?.onEntryStart?.(entry.relPathFromBase);
 		const logicalPath = pickLogicalPath(input.logical_path, entry, isMulti);
 		const result: IngestEntryResult = {
 			source_path: entry.absPath,
@@ -240,6 +294,7 @@ async function ingestLocalFiles(
 					result.status = "unchanged";
 					result.version_id = cur.version_id;
 					results.push(result);
+					callbacks?.onEntryComplete?.(result);
 					continue;
 				}
 			}
@@ -266,11 +321,8 @@ async function ingestLocalFiles(
 			result.error = errorMessage(err);
 		}
 		results.push(result);
+		callbacks?.onEntryComplete?.(result);
 	}
-	const okCount = results.filter((r) => r.status === "ok").length;
-	const unchangedCount = results.filter((r) => r.status === "unchanged").length;
-	const suffix = unchangedCount > 0 ? ` (${unchangedCount} unchanged)` : "";
-	ctx.progress.done(`ingested ${okCount}/${results.length}${suffix}`);
 
 	return summarize(results);
 }
