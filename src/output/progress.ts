@@ -17,6 +17,10 @@ export interface Progress {
 	info(msg: string): void;
 }
 
+/**
+ * Build a `Progress` reporter whose mode is decided once, at call time, from
+ * the current TTY state. Use one per multi-entry operation.
+ */
 export function createProgress(): Progress {
 	let total = 0;
 	let count = 0;

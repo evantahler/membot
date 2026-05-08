@@ -61,6 +61,11 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<{
 	return { config, dataDir, configPath };
 }
 
+/**
+ * Pick the membot data directory. Precedence: explicit `--config` flag,
+ * then `MEMBOT_HOME` env var, then `~/.membot`. The chosen path is later
+ * created (recursive mkdir) and stamped back into `config.data_dir`.
+ */
 function resolveDataDir(flag?: string): string {
 	if (flag && flag.trim()) return resolve(flag);
 	const env = process.env[ENV.HOME];
@@ -68,6 +73,12 @@ function resolveDataDir(flag?: string): string {
 	return defaultMembotHome();
 }
 
+/**
+ * Persist config to disk, with the Anthropic API key blanked out — the env
+ * var (`ANTHROPIC_API_KEY`) is the source of truth, never the file. Writing
+ * the key to disk would land it in shell history, dotfile syncs, and
+ * accidental commits.
+ */
 export async function saveConfig(configPath: string, config: MembotConfig): Promise<void> {
 	const safe: MembotConfig = {
 		...config,
@@ -76,6 +87,10 @@ export async function saveConfig(configPath: string, config: MembotConfig): Prom
 	await Bun.write(configPath, `${JSON.stringify(safe, null, 2)}\n`);
 }
 
+/**
+ * Tree-shaking guard. Not called at runtime — its presence keeps the module
+ * from being eliminated by aggressive bundlers when only types are imported.
+ */
 export function _ensureExportedSentinel(): never {
 	throw new HelpfulError({
 		kind: "internal_error",

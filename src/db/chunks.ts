@@ -14,6 +14,12 @@ export interface ChunkRow extends ChunkInput {
 	version_id: string;
 }
 
+/**
+ * Insert all chunks for a given version. Throws `HelpfulError` if any
+ * embedding's dimensionality doesn't match `EMBEDDING_DIMENSION` — DuckDB's
+ * `FLOAT[N]` column would reject the bind, so we surface a clearer error
+ * before reaching the driver.
+ */
 export async function insertChunksForVersion(
 	db: DbConnection,
 	logical_path: string,
@@ -41,6 +47,7 @@ export async function insertChunksForVersion(
 	}
 }
 
+/** Drop every chunk for a single version. Called by `deleteVersionAndChunks` during prune. */
 export async function deleteChunksForVersion(
 	db: DbConnection,
 	logical_path: string,
@@ -63,6 +70,7 @@ interface RawChunkRow {
 	[key: string]: unknown;
 }
 
+/** All chunks for a single version, ordered by `chunk_index`. */
 export async function listChunksForVersion(
 	db: DbConnection,
 	logical_path: string,
@@ -131,10 +139,17 @@ export async function rebuildFts(db: DbConnection): Promise<boolean> {
 	}
 }
 
+/**
+ * True once `rebuildFts` has succeeded at least once in this process.
+ * False until then, or permanently false on platforms where the DuckDB
+ * `fts` extension cannot load — in which case search degrades to
+ * semantic-only without erroring.
+ */
 export function isFtsAvailable(): boolean {
 	return ftsAvailable;
 }
 
+/** Test-only: reset the cached extension-load state so per-test ephemeral DBs start clean. */
 export function _resetFtsState(): void {
 	ftsAttempted = false;
 	ftsAvailable = false;
