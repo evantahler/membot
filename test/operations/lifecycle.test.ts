@@ -113,6 +113,18 @@ describe("operations end-to-end lifecycle", () => {
 		expect(r.hits[0]?.logical_path).toBe(authPath);
 	}, 60_000);
 
+	test("search with no query and no pattern throws HelpfulError(input_error)", async () => {
+		try {
+			await searchOperation.handler({ mode: "hybrid", limit: 3, include_history: false }, ctx);
+			throw new Error("expected throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(HelpfulError);
+			const helpful = err as HelpfulError;
+			expect(helpful.kind).toBe("input_error");
+			expect(helpful.hint).toMatch(/query|pattern/);
+		}
+	});
+
 	test("read returns markdown surrogate by default, original bytes when bytes=true", async () => {
 		const surrogate = await readOperation.handler({ logical_path: authPath, bytes: false }, ctx);
 		expect(surrogate.content).toContain("OAuth");

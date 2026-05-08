@@ -1,12 +1,26 @@
 import { realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import picomatch from "picomatch";
 import { asHelpful, HelpfulError } from "../errors.ts";
 
+/**
+ * Expand a leading `~` or `~/` to the user's home directory. The shell does
+ * this for us when the arg is unquoted, but `bun dev add "~/foo/*.md"` passes
+ * the literal `~` through, and `path.resolve("~/foo")` treats `~` as a
+ * regular directory name. We patch it up so quoted args work like users
+ * expect. Inline literals and URLs are caught earlier and never reach here.
+ */
+function expandHome(p: string): string {
+	if (p === "~") return homedir();
+	if (p.startsWith("~/") || p.startsWith(`~${sep}`)) return join(homedir(), p.slice(2));
+	return p;
+}
+
 export type ResolvedSource =
 	| { kind: "inline"; text: string; logicalHint: string | null }
 	| { kind: "url"; url: string; logicalHint: string | null }
-	| { kind: "local-files"; entries: ResolvedLocalEntry[]; basePath: string };
+	| { kind: "local-files"; entries: ResolvedLocalEntry[]; basePath: string; filtered?: boolean };
 
 export interface ResolvedLocalEntry {
 	/** Absolute filesystem path (post-realpath). */
@@ -29,6 +43,45 @@ export interface ResolveOptions {
 const DEFAULT_EXCLUDES = ["**/node_modules/**", "**/.git/**", "**/.DS_Store", "**/dist/**", "**/.cache/**"];
 
 /**
+ * Expand a user-supplied include/exclude pattern into a small set of
+ * gitignore-ish equivalents so common spellings all do the intuitive thing.
+ * Examples (all exclude the whole subtree): a bare name like `node_modules`,
+ * a trailing-slash form like `node_modules/`, the shell-style `node_modules`
+ * followed by single-star, the canonical doublestar forms — every spelling
+ * a user would reasonably reach for ends up matching nested files.
+ * Patterns starting with `**`-slash, `/`, or `./` are considered anchored
+ * and are not given an any-depth variant. `DEFAULT_EXCLUDES` are already
+ * canonical and bypass this helper.
+ */
+export function expandUserPattern(p: string): string[] {
+	const out = new Set<string>([p]);
+	const anchored = p.startsWith("**/") || p.startsWith("/") || p.startsWith("./");
+	const hasSlash = p.includes("/");
+	const hasGlob = /[*?[\]{}!]/.test(p);
+	// Path-like patterns ("foo/bar", "node_modules/*") imply the user is
+	// thinking about a directory tree — match at any depth. Bare globs like
+	// "*.md" are left alone so they keep their anchored top-level meaning.
+	if (hasSlash && !anchored) out.add(`**/${p}`);
+	if (p.endsWith("/*") && !p.endsWith("/**/*")) {
+		const base = p.slice(0, -2);
+		out.add(`${base}/**`);
+		if (!anchored) out.add(`**/${base}/**`);
+	}
+	if (p.endsWith("/")) {
+		const base = p.slice(0, -1);
+		out.add(`${base}/**`);
+		if (!anchored) out.add(`**/${base}/**`);
+	}
+	// Bare name with no slashes and no glob chars (e.g. "node_modules",
+	// "dist") → treat as a directory match anywhere in the tree.
+	if (!hasSlash && !hasGlob) {
+		out.add(`**/${p}`);
+		out.add(`**/${p}/**`);
+	}
+	return [...out];
+}
+
+/**
  * Polymorphic source-arg expander. Accepts:
  *   - "inline:<text>"             → inline literal
  *   - "http://..." | "https://..." → URL (fetched downstream by fetcher)
@@ -48,20 +101,28 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 		return { kind: "url", url: source, logicalHint: null };
 	}
 
+	source = expandHome(source);
+
 	const followSymlinks = options.followSymlinks !== false;
-	const userIncludes = options.include
+	const userIncludesRaw = options.include
 		? options.include
 				.split(",")
 				.map((g) => g.trim())
 				.filter(Boolean)
 		: [];
-	const excludeMatchers = [
-		...DEFAULT_EXCLUDES,
-		...(options.exclude ?? "")
-			.split(",")
-			.map((g) => g.trim())
-			.filter(Boolean),
-	];
+	const userExcludesRaw = (options.exclude ?? "")
+		.split(",")
+		.map((g) => g.trim())
+		.filter(Boolean);
+	const userIncludesExpanded = userIncludesRaw.flatMap(expandUserPattern);
+	const userExcludesExpanded = userExcludesRaw.flatMap(expandUserPattern);
+	const excludeMatchers = [...DEFAULT_EXCLUDES, ...userExcludesExpanded];
+	// Single-file matchers run against the absolute path so shell-expanded
+	// globs (where each file lands here individually) still honor excludes.
+	const isExcludeAbs = picomatch(excludeMatchers, { dot: false });
+	const isIncludeAbs = userIncludesExpanded.length
+		? picomatch(userIncludesExpanded, { dot: false, nocase: false })
+		: null;
 
 	if (isGlob(source)) {
 		const base = globBase(source);
@@ -71,7 +132,7 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 			// Source glob acts as a hard filter; user includes (if any) further
 			// narrow the result via AND. Pass them as a separate matcher so the
 			// two sets aren't picomatch-OR'd together.
-			const extraIncludes = userIncludes.length > 0 ? [userIncludes] : [];
+			const extraIncludes = userIncludesExpanded.length > 0 ? [userIncludesExpanded] : [];
 			return walk(realBase, [remainder], excludeMatchers, followSymlinks, extraIncludes);
 		} catch (err) {
 			throw asHelpful(
@@ -98,6 +159,16 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 
 	if (st.isFile()) {
 		const real = await realpath(abs);
+		// Shell-expanded globs (e.g. zsh expanding `~/foo/**/*.md`) deliver
+		// each match here individually, so this branch must enforce both
+		// DEFAULT_EXCLUDES and the user's own --include/--exclude. Otherwise
+		// `node_modules` paths slip through whenever the shell expanded for us.
+		if (isExcludeAbs(real)) {
+			return { kind: "local-files", basePath: real, entries: [], filtered: true };
+		}
+		if (isIncludeAbs && !isIncludeAbs(real)) {
+			return { kind: "local-files", basePath: real, entries: [], filtered: true };
+		}
 		return {
 			kind: "local-files",
 			basePath: real,
@@ -107,7 +178,7 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 
 	if (st.isDirectory()) {
 		const realBase = await realpath(abs);
-		const dirIncludes = userIncludes.length > 0 ? userIncludes : ["**/*"];
+		const dirIncludes = userIncludesExpanded.length > 0 ? userIncludesExpanded : ["**/*"];
 		return walk(realBase, dirIncludes, excludeMatchers, followSymlinks);
 	}
 
@@ -170,6 +241,14 @@ async function walk(
 	const isInclude = picomatch(includes, { dot: false, nocase: false });
 	const extraMatchers = extraIncludeSets.map((set) => picomatch(set, { dot: false, nocase: false }));
 	const isExclude = excludes.length ? picomatch(excludes, { dot: false }) : null;
+	// Directory-prune patterns: derived from excludes by stripping a trailing
+	// `/**` or `/*`. Without this we descend into massive subtrees (e.g.
+	// every `node_modules/` under a workspace) before discarding files one
+	// by one — which on real machines presents as a hang.
+	const dirPrunePatterns = excludes
+		.map((p) => (p.endsWith("/**") ? p.slice(0, -3) : p.endsWith("/*") ? p.slice(0, -2) : p))
+		.filter((p) => p.length > 0);
+	const isExcludeDir = dirPrunePatterns.length ? picomatch(dirPrunePatterns, { dot: false }) : null;
 
 	const queue: string[] = [base];
 	while (queue.length > 0) {
@@ -191,6 +270,8 @@ async function walk(
 		}
 		if (st.isSymbolicLink() && !followSymlinks) continue;
 		if (st.isDirectory()) {
+			const rel = relative(base, real);
+			if (rel.length > 0 && isExcludeDir?.(rel)) continue;
 			let names: string[];
 			try {
 				names = await readdir(real);
