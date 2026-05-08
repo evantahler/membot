@@ -1,5 +1,6 @@
 import { rebuildFts } from "../db/chunks.ts";
 import type { DbConnection } from "../db/connection.ts";
+import { asHelpful } from "../errors.ts";
 
 export interface KeywordHit {
 	logical_path: string;
@@ -23,9 +24,10 @@ interface RawKeywordRow {
 
 /**
  * BM25 keyword search over `chunks.search_text` via the FTS extension.
- * Returns an empty list when FTS isn't available on this platform — the
- * hybrid layer treats missing keyword hits as "no signal" and degrades
- * to semantic-only.
+ * Returns an empty list when FTS isn't available on this platform or the
+ * index is empty — the hybrid layer treats missing keyword hits as "no
+ * signal" and degrades to semantic-only. Genuine SQL/runtime errors are
+ * surfaced as HelpfulError so they don't get silently buried.
  */
 export async function searchKeyword(
 	db: DbConnection,
@@ -36,15 +38,15 @@ export async function searchKeyword(
 	if (result.kind !== "rebuilt") return [];
 
 	const limit = options.limit ?? 50;
+	const sql = `SELECT row_key, logical_path, version_id, chunk_index,
+	                   chunk_content, search_text,
+	                   fts_main__current_chunks_fts.match_bm25(row_key, ?1) AS bm25_score
+	            FROM _current_chunks_fts
+	           WHERE fts_main__current_chunks_fts.match_bm25(row_key, ?1) IS NOT NULL
+	             ${options.pathPrefix ? "AND logical_path LIKE ?2" : ""}
+	           ORDER BY bm25_score DESC
+	           LIMIT ${Number(limit)}`;
 	try {
-		const sql = `SELECT row_key, logical_path, version_id, chunk_index,
-		                   chunk_content, search_text,
-		                   fts_main__current_chunks_fts.match_bm25(row_key, ?1) AS bm25_score
-		            FROM _current_chunks_fts
-		           WHERE fts_main__current_chunks_fts.match_bm25(row_key, ?1) IS NOT NULL
-		             ${options.pathPrefix ? "AND logical_path LIKE ?2" : ""}
-		           ORDER BY bm25_score DESC
-		           LIMIT ${Number(limit)}`;
 		const rows: RawKeywordRow[] = options.pathPrefix
 			? await db.queryAll<RawKeywordRow>(sql, query, `${options.pathPrefix}%`)
 			: await db.queryAll<RawKeywordRow>(sql, query);
@@ -56,7 +58,12 @@ export async function searchKeyword(
 			search_text: r.search_text,
 			score: Number(r.bm25_score),
 		}));
-	} catch {
-		return [];
+	} catch (e) {
+		throw asHelpful(
+			e,
+			"while running BM25 keyword search",
+			"Run `membot reindex` to rebuild the FTS index, then retry the search.",
+			"internal_error",
+		);
 	}
 }

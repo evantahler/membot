@@ -140,7 +140,8 @@ export async function rebuildFts(db: DbConnection): Promise<RebuildFtsResult> {
 		await db.exec(
 			`CREATE TABLE _current_chunks_fts AS
 			 SELECT (logical_path || '::' || CAST(version_id AS VARCHAR) || '::' || chunk_index) AS row_key,
-			        logical_path, CAST(version_id AS VARCHAR) AS version_id, chunk_index, search_text
+			        logical_path, CAST(version_id AS VARCHAR) AS version_id, chunk_index,
+			        chunk_content, search_text
 			 FROM current_chunks`,
 		);
 		await db.exec(
