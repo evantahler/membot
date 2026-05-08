@@ -20,6 +20,15 @@ export const ENV = {
 export const EMBEDDING_MODEL = "Xenova/bge-small-en-v1.5";
 export const EMBEDDING_DIMENSION = 384;
 
+/**
+ * Max chunks fed to the feature-extraction pipeline in one forward pass.
+ * ONNX/WASM allocates activations linearly with batch size, so a single
+ * unbounded call OOMs (`std::bad_alloc`) on large files — a 168-chunk file
+ * was the original repro. 16 is comfortably within the WASM heap for
+ * bge-small-en-v1.5 at 512 tokens and still amortizes the per-call overhead.
+ */
+export const EMBEDDING_BATCH_SIZE = 16;
+
 export const DEFAULTS = {
 	CHUNKER_MODE: "deterministic" as const,
 	CHUNKER_TARGET_CHARS: 4_000,
