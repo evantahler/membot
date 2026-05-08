@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { listVersions } from "../db/files.ts";
+import { colors, renderTable } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
 export const versionsOperation = defineOperation({
@@ -25,6 +26,39 @@ export const versionsOperation = defineOperation({
 		),
 	}),
 	cli: { positional: ["logical_path"] },
+	console_formatter: (result) => {
+		if (result.versions.length === 0) {
+			return `${colors.cyan(result.logical_path)}\n${colors.dim("(no versions)")}`;
+		}
+		// Newest first — first row is current unless tombstoned.
+		let currentMarked = false;
+		const rows = result.versions.map((v) => {
+			let marker = " ";
+			if (!currentMarked && !v.tombstone) {
+				marker = colors.green("→");
+				currentMarked = true;
+			}
+			const status = v.tombstone
+				? colors.red("tombstone")
+				: v.last_refresh_status === "failed"
+					? colors.red(v.last_refresh_status)
+					: (v.last_refresh_status ?? "-");
+			return [
+				marker,
+				v.tombstone ? colors.dim(v.version_id) : v.version_id,
+				v.created_at,
+				v.size_bytes !== null ? String(v.size_bytes) : "-",
+				(v.content_sha256 ?? "-").slice(0, 12),
+				status,
+				v.change_note ?? "",
+			];
+		});
+		const header = `${colors.bold(result.logical_path)}`;
+		const table = renderTable(["", "VERSION", "CREATED", "SIZE", "SHA", "STATUS", "NOTE"], rows, {
+			columnStyles: [undefined, colors.cyan, colors.dim, colors.dim, colors.dim],
+		});
+		return `${header}\n${table}`;
+	},
 	handler: async (input, ctx) => {
 		const versions = await listVersions(ctx.db, input.logical_path);
 		return {

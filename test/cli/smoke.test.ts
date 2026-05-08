@@ -39,7 +39,21 @@ describe("CLI smoke (spawns the real binary entrypoint)", () => {
 		expect(r.exit).toBe(0);
 		// commander's --help goes to stdout
 		const helpText = r.stdout || r.stderr;
-		for (const cmd of ["add", "ls", "tree", "read", "search", "info", "versions", "diff", "write", "mv", "rm", "refresh", "prune"]) {
+		for (const cmd of [
+			"add",
+			"ls",
+			"tree",
+			"read",
+			"search",
+			"info",
+			"versions",
+			"diff",
+			"write",
+			"mv",
+			"rm",
+			"refresh",
+			"prune",
+		]) {
 			expect(helpText).toContain(cmd);
 		}
 	});

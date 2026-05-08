@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getCurrent, getVersion } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
+import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
 export const diffOperation = defineOperation({
@@ -19,6 +20,20 @@ export const diffOperation = defineOperation({
 		diff: z.string(),
 	}),
 	cli: { positional: ["logical_path", "a", "b"] },
+	console_formatter: (result) => {
+		const header = `${colors.bold(result.logical_path)} ${colors.dim(`${result.a} → ${result.b}`)}`;
+		if (!result.diff.trim()) return `${header}\n${colors.dim("(no changes)")}`;
+		const body = result.diff
+			.split("\n")
+			.map((line) => {
+				if (line.startsWith("---") || line.startsWith("+++") || line.startsWith("@@")) return colors.cyan(line);
+				if (line.startsWith("+")) return colors.green(line);
+				if (line.startsWith("-")) return colors.red(line);
+				return line;
+			})
+			.join("\n");
+		return `${header}\n${body}`;
+	},
 	handler: async (input, ctx) => {
 		const aRow = await getVersion(ctx.db, input.logical_path, input.a);
 		const bRow = input.b

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { listCurrent } from "../db/files.ts";
+import { colors, renderTable } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
 export const listOperation = defineOperation({
@@ -28,6 +29,19 @@ export const listOperation = defineOperation({
 		count: z.number(),
 	}),
 	cli: { positional: ["prefix"] },
+	console_formatter: (result) => {
+		if (result.entries.length === 0) return colors.dim("(no entries)");
+		const rows = result.entries.map((e) => [
+			e.logical_path,
+			e.size_bytes !== null ? formatSize(e.size_bytes) : "-",
+			e.mime_type ?? "-",
+			e.last_refresh_status ?? "-",
+		]);
+		const table = renderTable(["PATH", "SIZE", "MIME", "STATUS"], rows, {
+			columnStyles: [colors.cyan, colors.dim, colors.dim, statusStyle],
+		});
+		return `${table}\n${colors.dim(`${result.count} ${result.count === 1 ? "entry" : "entries"}`)}`;
+	},
 	handler: async (input, ctx) => {
 		const rows = await listCurrent(ctx.db, {
 			prefix: input.prefix,
@@ -49,3 +63,25 @@ export const listOperation = defineOperation({
 		};
 	},
 });
+
+/** Map refresh status → semantic color. `failed` red, `stale`/`partial` yellow, `ok` green, anything else plain. */
+function statusStyle(s: string): string {
+	const trimmed = s.trim();
+	if (trimmed === "failed" || trimmed === "error") return colors.red(s);
+	if (trimmed === "stale" || trimmed === "partial") return colors.yellow(s);
+	if (trimmed === "ok" || trimmed === "fresh") return colors.green(s);
+	return s;
+}
+
+/** Format a byte count in human units. 1024 boundary, two-digit precision past KB. */
+function formatSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes}B`;
+	const units = ["KB", "MB", "GB", "TB"];
+	let i = -1;
+	let n = bytes;
+	while (n >= 1024 && i < units.length - 1) {
+		n /= 1024;
+		i++;
+	}
+	return `${n.toFixed(n >= 100 ? 0 : 1)}${units[i]}`;
+}

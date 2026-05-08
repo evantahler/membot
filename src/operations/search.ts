@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { embedSingle } from "../ingest/embedder.ts";
+import { colors } from "../output/formatter.ts";
 import { fuseRRF } from "../search/hybrid.ts";
 import { searchKeyword } from "../search/keyword.ts";
 import { searchSemantic } from "../search/semantic.ts";
@@ -33,6 +34,20 @@ export const searchOperation = defineOperation({
 		mode: z.string(),
 	}),
 	cli: { positional: ["query"] },
+	console_formatter: (result) => {
+		if (result.hits.length === 0) {
+			return colors.dim(`(no hits in ${result.mode} mode)`);
+		}
+		const blocks = result.hits.map((h) => {
+			const head = `${colors.cyan(h.logical_path)} ${colors.dim(`v=${h.version_id}`)} ${colors.green(`score=${h.score.toFixed(3)}`)}`;
+			const snippet = h.snippet
+				.split("\n")
+				.map((l) => `  ${l}`)
+				.join("\n");
+			return `${head}\n${colors.dim(snippet)}`;
+		});
+		return `${blocks.join("\n\n")}\n${colors.dim(`${result.hits.length} hit${result.hits.length === 1 ? "" : "s"} in ${result.mode} mode`)}`;
+	},
 	handler: async (input, ctx) => {
 		const query = input.query ?? input.pattern ?? "";
 		const pattern = input.pattern ?? input.query ?? "";
