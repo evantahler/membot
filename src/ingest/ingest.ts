@@ -209,7 +209,7 @@ async function ingestLocalFiles(
 	const isMulti = resolved.entries.length > 1;
 
 	for (const entry of resolved.entries) {
-		ctx.progress.tick(entry.relPath);
+		ctx.progress.tick(entry.relPathFromBase);
 		const logicalPath = pickLogicalPath(input.logical_path, entry, isMulti);
 		const result: IngestEntryResult = {
 			source_path: entry.absPath,
@@ -404,26 +404,47 @@ async function persistVersion(ctx: AppContext, p: PersistParams): Promise<string
 }
 
 /**
- * Pick the logical path for a single matched entry. For a single-file
- * ingest with explicit `logical_path`, use it as-is. For multi-entry
- * ingests with `logical_path` set, treat it as a *prefix* under which
- * each entry's relative path is placed.
+ * Pick the logical path for a single matched entry.
+ *
+ * - Default (no explicit logical_path): use the entry's absolute filesystem
+ *   path with `\` normalized to `/` and the leading `/` stripped. This
+ *   keeps `~/projA/README.md` and `~/projB/README.md` from colliding under
+ *   a shared `README.md`. Two adds of the same absolute path produce the
+ *   same logical_path, so the second add correctly creates a new version.
+ * - Single-source with explicit logical_path: use it verbatim.
+ * - Multi-entry (directory/glob) with explicit logical_path: treat as a
+ *   prefix and append each entry's path relative to the walk base.
  */
-function pickLogicalPath(explicit: string | undefined, entry: ResolvedLocalEntry, isMulti: boolean): string {
-	if (!explicit) return entry.relPath.replaceAll("\\", "/");
+export function pickLogicalPath(explicit: string | undefined, entry: ResolvedLocalEntry, isMulti: boolean): string {
+	if (!explicit) return normalizeAbs(entry.absPath);
 	if (!isMulti) return explicit;
 	const prefix = explicit.endsWith("/") ? explicit.slice(0, -1) : explicit;
-	return `${prefix}/${entry.relPath.replaceAll("\\", "/")}`;
+	return `${prefix}/${entry.relPathFromBase.replaceAll("\\", "/")}`;
 }
 
-/** Default logical path for an ingested URL — host + path, sanitized. */
-function defaultLogicalForUrl(url: string): string {
+/**
+ * Normalize an absolute filesystem path into a logical_path:
+ * `\` → `/`, leading `/` stripped. Drive letters (Windows `C:`) are kept
+ * as the first path segment.
+ */
+export function normalizeAbs(absPath: string): string {
+	return absPath.replaceAll("\\", "/").replace(/^\/+/, "");
+}
+
+/**
+ * Default logical path for an ingested URL: `remotes/{host}/{pathname}`
+ * with slashes preserved so two projects on the same host (e.g.,
+ * github.com) don't collide. Query string and fragment are dropped from
+ * the logical_path for stable identity — the full URL is still preserved
+ * on the row in `source_path` and used for refresh.
+ */
+export function defaultLogicalForUrl(url: string): string {
 	try {
 		const u = new URL(url);
-		const tail = u.pathname.replace(/^\/+/, "").replaceAll("/", "_") || "root";
-		return `urls/${u.hostname}/${tail || "root"}`;
+		const tail = u.pathname.replace(/^\/+/, "").replace(/\/+$/, "") || "index";
+		return `remotes/${u.hostname}/${tail}`;
 	} catch {
-		return `urls/${url.replace(/[^a-z0-9.-]/gi, "_")}`;
+		return `remotes/${url.replace(/[^a-z0-9.-]/gi, "_")}`;
 	}
 }
 
