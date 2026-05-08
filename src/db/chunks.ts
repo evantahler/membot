@@ -92,32 +92,46 @@ export async function listChunksForVersion(
 	}));
 }
 
+/**
+ * Outcome of a `rebuildFts` call. Distinct kinds let callers (and the
+ * `reindex` CLI) distinguish "empty DB — that's fine" from "extension truly
+ * couldn't load — search will degrade".
+ */
+export type RebuildFtsResult =
+	| { kind: "rebuilt"; chunk_count: number }
+	| { kind: "extension_unavailable"; cause?: string }
+	| { kind: "no_chunks" }
+	| { kind: "rebuild_failed"; cause?: string };
+
 let ftsAttempted = false;
 let ftsAvailable = false;
+let ftsLoadError: string | undefined;
 
 /**
  * Build/refresh the FTS index over `current_chunks(search_text)`. DuckDB's FTS
  * is a snapshot — call this after batch inserts/deletes that change the
- * current_chunks set. The first call attempts to LOAD fts; subsequent failures
- * are silently swallowed so search degrades to semantic-only on platforms
- * where the extension can't load.
+ * current_chunks set. The first call attempts to LOAD fts; on failure the
+ * underlying error is captured and returned via `extension_unavailable.cause`
+ * so callers can render it diagnostically.
  */
-export async function rebuildFts(db: DbConnection): Promise<boolean> {
+export async function rebuildFts(db: DbConnection): Promise<RebuildFtsResult> {
 	if (!ftsAttempted) {
 		ftsAttempted = true;
 		try {
 			await db.exec(`INSTALL fts`);
 			await db.exec(`LOAD fts`);
 			ftsAvailable = true;
-		} catch {
+		} catch (e) {
 			ftsAvailable = false;
-			return false;
+			ftsLoadError = errorMessage(e);
+			return { kind: "extension_unavailable", cause: ftsLoadError };
 		}
 	}
-	if (!ftsAvailable) return false;
+	if (!ftsAvailable) return { kind: "extension_unavailable", cause: ftsLoadError };
 
 	const sample = await db.queryGet<{ n: number }>(`SELECT COUNT(*) AS n FROM current_chunks`);
-	if (!sample || Number(sample.n) === 0) return false;
+	const chunkCount = sample ? Number(sample.n) : 0;
+	if (chunkCount === 0) return { kind: "no_chunks" };
 
 	try {
 		// FTS over current_chunks (a view) requires materializing into a table.
@@ -133,10 +147,15 @@ export async function rebuildFts(db: DbConnection): Promise<boolean> {
 			`PRAGMA create_fts_index('_current_chunks_fts', 'row_key', 'search_text', stemmer='porter', overwrite=1)`,
 		);
 		await db.exec(`CHECKPOINT`);
-		return true;
-	} catch {
-		return false;
+		return { kind: "rebuilt", chunk_count: chunkCount };
+	} catch (e) {
+		return { kind: "rebuild_failed", cause: errorMessage(e) };
 	}
+}
+
+function errorMessage(e: unknown): string {
+	if (e instanceof Error) return e.message;
+	return String(e);
 }
 
 /**
@@ -153,4 +172,5 @@ export function isFtsAvailable(): boolean {
 export function _resetFtsState(): void {
 	ftsAttempted = false;
 	ftsAvailable = false;
+	ftsLoadError = undefined;
 }

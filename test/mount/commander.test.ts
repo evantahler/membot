@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Command } from "commander";
 import { z } from "zod";
+import { isHelpfulError } from "../../src/errors.ts";
 import { applySchemaToCommand } from "../../src/mount/zod-to-cli.ts";
 import { composeDescription, defaultCliName, defineOperation } from "../../src/operations/types.ts";
 
@@ -48,5 +49,30 @@ describe("operation framework", () => {
 		expect(helpText).toContain("--mode");
 		expect(helpText).toContain("--tags");
 		expect(helpText).toContain("--flag");
+	});
+
+	test("number argParser throws HelpfulError on non-numeric input", async () => {
+		const cmd = new Command("test").exitOverride().configureOutput({
+			writeErr: () => {},
+			writeOut: () => {},
+		});
+		applySchemaToCommand(cmd, z.object({ limit: z.number().describe("max items") }), {});
+
+		let caught: unknown;
+		try {
+			await cmd.parseAsync(["--limit", "not-a-number"], { from: "user" });
+		} catch (err) {
+			caught = err;
+		}
+
+		expect(caught).toBeDefined();
+		// Commander wraps argParser errors in CommanderError but exposes the original via `.cause`.
+		const inner = caught instanceof Error && caught.cause !== undefined ? caught.cause : caught;
+		expect(isHelpfulError(inner)).toBe(true);
+		if (isHelpfulError(inner)) {
+			expect(inner.kind).toBe("input_error");
+			expect(inner.hint.length).toBeGreaterThan(0);
+			expect(inner.message).toContain("--limit");
+		}
 	});
 });

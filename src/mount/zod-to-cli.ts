@@ -1,5 +1,6 @@
 import { type Command, Option } from "commander";
 import { z } from "zod";
+import { HelpfulError } from "../errors.ts";
 
 /**
  * Walk a zod object schema and register its fields onto a commander command.
@@ -88,7 +89,13 @@ function buildOption(
 		const opt = new Option(`${alias ? `${alias}, ` : ""}--${flag} <value>`, desc);
 		opt.argParser((v: string) => {
 			const n = Number(v);
-			if (Number.isNaN(n)) throw new Error(`invalid number for --${flag}: ${v}`);
+			if (Number.isNaN(n)) {
+				throw new HelpfulError({
+					kind: "input_error",
+					message: `invalid number for --${flag}: ${JSON.stringify(v)}`,
+					hint: `Pass a numeric value, e.g. \`--${flag} 10\`. Run \`membot <command> --help\` to see expected types.`,
+				});
+			}
 			return n;
 		});
 		const def = defaultOf(schema);
