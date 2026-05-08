@@ -2,8 +2,7 @@
 
 > Versioned context store with hybrid search for AI agents. Stdio + HTTP MCP server and CLI.
 
-[![npm](https://img.shields.io/npm/v/membot.svg)](https://www.npmjs.com/package/membot)
-[![license](https://img.shields.io/npm/l/membot.svg)](./LICENSE)
+[![license](https://img.shields.io/github/license/evantahler/membot.svg)](./LICENSE)
 
 `membot` is a single-binary CLI and MCP server that gives AI agents a persistent, versioned, searchable context store. Files (markdown, PDFs, DOCX, HTML, URLs, agent-authored notes) are ingested, converted to markdown, chunked, embedded **locally** with `@huggingface/transformers` (WASM, no cloud calls), and indexed in DuckDB with hybrid search (semantic vector + BM25). Every change creates a new version — nothing is overwritten in place.
 
@@ -16,11 +15,9 @@
 
 ```bash
 bun install -g membot
-# or
-npm install -g membot
 ```
 
-This pulls in DuckDB's per-platform native bindings alongside membot. The build externalizes `@duckdb/*` (those `.node` bindings can't be embedded by `bun build --compile`), so a global npm/bun install is the supported path.
+This pulls in DuckDB's per-platform native bindings alongside membot. The build externalizes `@duckdb/*` (those `.node` bindings can't be embedded by `bun build --compile`), so a global Bun install is the supported path.
 
 ## Quick start
 
