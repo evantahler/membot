@@ -1,0 +1,26 @@
+{
+  "name": "membot",
+  "version": "0.0.1",
+  "description": "Versioned context store with hybrid search for AI agents. Stdio + HTTP MCP server and CLI.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "context",
+    "memory",
+    "agent",
+    "rag",
+    "embeddings",
+    "duckdb",
+    "bun"
+  ],
+  "license": "MIT",
+  "author": "Evan Tahler <evan@arcade.dev>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/evantahler/membot.git"
+  },
+  "homepage": "https://github.com/evantahler/membot",
+  "bugs": {
+    "url": "https://github.com/evantahler/membot/issues"
+  }
+}
