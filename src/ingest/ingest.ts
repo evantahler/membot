@@ -319,6 +319,11 @@ async function ingestLocalFiles(
 		} catch (err) {
 			result.status = "failed";
 			result.error = errorMessage(err);
+		} finally {
+			// Release the DB lock between files in a directory/glob walk so
+			// concurrent processes can wedge in mid-batch. The next entry's
+			// first DB call reopens (cheap — same-process reopen).
+			await ctx.db.release();
 		}
 		results.push(result);
 		callbacks?.onEntryComplete?.(result);

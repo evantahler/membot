@@ -48,6 +48,14 @@ export function mountAsMcpTool<I extends z.ZodObject, O extends z.ZodTypeAny>(
 				};
 			} catch (err) {
 				return renderMcpError(err);
+			} finally {
+				// Drop the DuckDB lock between MCP tool calls so concurrent CLI
+				// or daemon callers can claim it. The next tool call reopens.
+				try {
+					await ctx.db.release();
+				} catch {
+					// best effort — never let release failures mask a tool result
+				}
 			}
 		},
 	);

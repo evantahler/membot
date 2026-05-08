@@ -39,7 +39,11 @@ export async function buildContext(options: BuildContextOptions = {}): Promise<A
 
 	const { config, dataDir, configPath } = await loadConfig({ configFlag: options.configFlag });
 	const dbPath = join(dataDir, FILES.INDEX_DUCKDB);
-	const db = await openDb(dbPath);
+	const db = await openDb(dbPath, {
+		maxAttempts: config.db_lock_retry.max_attempts,
+		baseDelayMs: config.db_lock_retry.base_delay_ms,
+		maxDelayMs: config.db_lock_retry.max_delay_ms,
+	});
 
 	const mcpx = await maybeMcpx(config);
 

@@ -186,6 +186,11 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 				aggregated.ingested.push(failed);
 				aggregated.total += 1;
 				aggregated.failed += 1;
+			} finally {
+				// Release the DB lock between sources so other consumers (a
+				// concurrent CLI call, the daemon, or a separate MCP server)
+				// can wedge in. The next source's first DB call reopens.
+				await ctx.db.release();
 			}
 		}
 

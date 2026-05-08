@@ -23,6 +23,12 @@ export const DaemonConfigSchema = z.object({
 	tick_interval_sec: z.number().int().positive().default(DEFAULTS.DAEMON_TICK_SEC),
 });
 
+export const DbLockRetryConfigSchema = z.object({
+	max_attempts: z.number().int().positive().default(30),
+	base_delay_ms: z.number().int().positive().default(100),
+	max_delay_ms: z.number().int().positive().default(2000),
+});
+
 export const MembotConfigSchema = z.object({
 	data_dir: z.string().default(defaultMembotHome()),
 	embedding_model: z.string().default(EMBEDDING_MODEL),
@@ -31,6 +37,7 @@ export const MembotConfigSchema = z.object({
 	llm: LlmConfigSchema.default(() => LlmConfigSchema.parse({})),
 	mcpx: McpxConfigSchema.default(() => McpxConfigSchema.parse({})),
 	daemon: DaemonConfigSchema.default(() => DaemonConfigSchema.parse({})),
+	db_lock_retry: DbLockRetryConfigSchema.default(() => DbLockRetryConfigSchema.parse({})),
 	default_refresh_frequency_sec: z.number().int().positive().nullable().default(null),
 });
 
