@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { $ } from "bun";
 
 const CLI = join(import.meta.dir, "..", "..", "src", "cli.ts");
 
@@ -72,7 +73,7 @@ describe("skill install", () => {
 	test("existing file without --force errors with a HelpfulError JSON in --json mode", async () => {
 		const cwd = mkdtempSync(join(root, "conflict-"));
 		const dest = join(cwd, ".claude", "skills", "membot.md");
-		Bun.spawnSync(["mkdir", "-p", join(cwd, ".claude", "skills")]);
+		await $`mkdir -p ${join(cwd, ".claude", "skills")}`;
 		writeFileSync(dest, "pre-existing");
 
 		const r = await runCli(["--json", "skill", "install", "--claude", "--project"], cwd);
@@ -89,7 +90,7 @@ describe("skill install", () => {
 
 	test("--force overwrites an existing file", async () => {
 		const cwd = mkdtempSync(join(root, "force-"));
-		Bun.spawnSync(["mkdir", "-p", join(cwd, ".claude", "skills")]);
+		await $`mkdir -p ${join(cwd, ".claude", "skills")}`;
 		const dest = join(cwd, ".claude", "skills", "membot.md");
 		writeFileSync(dest, "stale content");
 
