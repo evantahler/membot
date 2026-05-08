@@ -17,11 +17,30 @@ export interface Migration {
 const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002];
 
 /**
+ * Process-level cache of paths whose migrations have been applied (or
+ * confirmed already-current) in this process. With lazy-claim DB connections,
+ * `applyMigrations` runs on every reopen — caching here keeps the DDL/SELECT
+ * traffic and "migration: applied" log lines off the hot reopen path.
+ * Cleared by `forgetMigrations` so tests can simulate a fresh process.
+ */
+const checkedPaths = new Set<string>();
+
+/** Reset the per-process migration cache. Test-only — production code never calls this. */
+export function forgetMigrations(path?: string): void {
+	if (path === undefined) checkedPaths.clear();
+	else checkedPaths.delete(path);
+}
+
+/**
  * Apply every unapplied migration in id order. Tracks applied ids in
  * `_migrations`. Each successful run is logged via the shared logger so a
- * user upgrading membot can see exactly what changed in their store.
+ * user upgrading membot can see exactly what changed in their store. The
+ * first call for a given DB path checks the table; subsequent calls in the
+ * same process short-circuit via `checkedPaths`.
  */
 export async function applyMigrations(db: DbConnection): Promise<void> {
+	if (checkedPaths.has(db.path)) return;
+
 	await db.exec(`CREATE TABLE IF NOT EXISTS _migrations (
 		id INTEGER PRIMARY KEY,
 		name TEXT NOT NULL,
@@ -42,4 +61,6 @@ export async function applyMigrations(db: DbConnection): Promise<void> {
 		await db.queryRun(`INSERT INTO _migrations(id, name) VALUES (?1, ?2)`, migration.id, migration.name);
 		logger.info(`migration: applied  ${String(migration.id).padStart(3, "0")}-${migration.name}`);
 	}
+
+	checkedPaths.add(db.path);
 }

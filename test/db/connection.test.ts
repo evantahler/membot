@@ -1,9 +1,10 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DbConnection } from "../../src/db/connection.ts";
-import { openDb } from "../../src/db/connection.ts";
+import { type DbConnection, isLockConflictError, openDb, withLockRetry } from "../../src/db/connection.ts";
+import { forgetMigrations } from "../../src/db/migrations.ts";
+import { isHelpfulError } from "../../src/errors.ts";
 
 describe("openDb / connection", () => {
 	let tmp: string;
@@ -61,5 +62,117 @@ describe("openDb / connection", () => {
 		db = await openDb(join(tmp, "test.duckdb"));
 		const applied = await db.queryAll<{ id: number }>(`SELECT id FROM _migrations ORDER BY id`);
 		expect(applied.map((r) => Number(r.id))).toEqual([1, 2]);
+	});
+});
+
+describe("DbConnection — lazy claim / release", () => {
+	let tmp: string;
+	let path: string;
+
+	beforeAll(() => {
+		tmp = mkdtempSync(join(tmpdir(), "membot-db-lazy-"));
+		path = join(tmp, "lazy.duckdb");
+	});
+
+	afterAll(() => {
+		rmSync(tmp, { recursive: true, force: true });
+	});
+
+	afterEach(() => {
+		forgetMigrations(path);
+	});
+
+	test("release() then a query reopens the connection", async () => {
+		const db = await openDb(path);
+		await db.queryRun(`CREATE TABLE IF NOT EXISTS _kv (k TEXT, v INTEGER)`);
+		await db.queryRun(`INSERT INTO _kv VALUES (?1, ?2)`, "lazy", 42);
+
+		await db.release();
+		// After release, the next query should transparently reopen the file.
+		const row = await db.queryGet<{ v: number }>(`SELECT v FROM _kv WHERE k = ?1`, "lazy");
+		expect(row?.v).toBe(42);
+
+		await db.close();
+	});
+
+	test("release() is idempotent", async () => {
+		const db = await openDb(path);
+		await db.release();
+		await db.release();
+		await db.release();
+		// Still usable afterwards.
+		await db.queryGet(`SELECT 1`);
+		await db.close();
+	});
+
+	test("close() is permanent — subsequent queries throw", async () => {
+		const db = await openDb(path);
+		await db.close();
+		await expect(db.queryGet(`SELECT 1`)).rejects.toThrow(/closed/);
+	});
+});
+
+describe("isLockConflictError", () => {
+	test("matches DuckDB's lock-conflict shapes", () => {
+		expect(isLockConflictError(new Error("IO Error: Could not set lock on file foo.db"))).toBe(true);
+		expect(isLockConflictError(new Error("conflicting lock is held by another process"))).toBe(true);
+		expect(isLockConflictError(new Error("database is locked"))).toBe(true);
+	});
+
+	test("does not match unrelated errors", () => {
+		expect(isLockConflictError(new Error("file not found"))).toBe(false);
+		expect(isLockConflictError(new Error("syntax error near 'SELECT'"))).toBe(false);
+		expect(isLockConflictError(null)).toBe(false);
+	});
+});
+
+describe("withLockRetry", () => {
+	test("retries on lock errors and ultimately succeeds", async () => {
+		let calls = 0;
+		const factory = async () => {
+			calls += 1;
+			if (calls < 3) throw new Error("IO Error: Could not set lock on file /tmp/x.duckdb");
+			return "ok";
+		};
+		const result = await withLockRetry(factory, "/tmp/x.duckdb", {
+			maxAttempts: 10,
+			baseDelayMs: 5,
+			maxDelayMs: 10,
+		});
+		expect(result).toBe("ok");
+		expect(calls).toBe(3);
+	});
+
+	test("non-lock errors throw immediately as HelpfulError without retrying", async () => {
+		let calls = 0;
+		const factory = async () => {
+			calls += 1;
+			throw new Error("permission denied");
+		};
+		try {
+			await withLockRetry(factory, "/tmp/y.duckdb", { maxAttempts: 5, baseDelayMs: 50, maxDelayMs: 50 });
+			expect.unreachable("should have thrown");
+		} catch (err) {
+			expect(isHelpfulError(err)).toBe(true);
+			expect(calls).toBe(1);
+		}
+	});
+
+	test("exhausting retries throws HelpfulError naming the concurrent-process problem", async () => {
+		let calls = 0;
+		const factory = async () => {
+			calls += 1;
+			throw new Error("Could not set lock on file");
+		};
+		try {
+			await withLockRetry(factory, "/tmp/z.duckdb", { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 2 });
+			expect.unreachable("should have thrown");
+		} catch (err) {
+			expect(isHelpfulError(err)).toBe(true);
+			if (isHelpfulError(err)) {
+				expect(err.hint).toMatch(/Another process is holding the database lock/);
+			}
+			expect(calls).toBe(3);
+		}
 	});
 });
