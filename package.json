@@ -16,6 +16,8 @@
 		"src",
 		"patches",
 		"scripts",
+		".claude",
+		".cursor",
 		"README.md",
 		"LICENSE"
 	],
@@ -39,7 +41,7 @@
 		"bun"
 	],
 	"license": "MIT",
-	"author": "Evan Tahler <evan@arcade.dev>",
+	"author": "Evan Tahler <evan@evantahler.com>",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/evantahler/membot.git"

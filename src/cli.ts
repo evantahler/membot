@@ -6,6 +6,7 @@ import pkg from "../package.json" with { type: "json" };
 import { registerMcpxCommand } from "./commands/mcpx.ts";
 import { registerReindexCommand } from "./commands/reindex.ts";
 import { registerServeCommand } from "./commands/serve.ts";
+import { registerSkillCommand } from "./commands/skill.ts";
 import type { BuildContextOptions } from "./context.ts";
 import { mountAsCommanderCommand } from "./mount/commander.ts";
 import { OPERATIONS } from "./operations/index.ts";
@@ -53,5 +54,6 @@ for (const op of OPERATIONS) {
 registerServeCommand(program);
 registerReindexCommand(program);
 registerMcpxCommand(program);
+registerSkillCommand(program);
 
 program.parse();

@@ -1,0 +1,137 @@
+---
+name: membot
+description: Persistent, versioned context store for AI agents — ingest, search, read, and write knowledge via the membot CLI or MCP server
+trigger: when the user wants to remember, recall, or search project knowledge, ingest documents into a long-lived store, or surface relevant context for a task
+---
+
+# membot — Persistent Context for Agents
+
+You have access to a long-lived context store via `membot`. Files (markdown, PDFs, DOCX, HTML, URLs, agent notes) are ingested, converted to markdown, chunked, embedded locally, and indexed in DuckDB with hybrid search (semantic + BM25). Every artifact is addressed by a virtual `logical_path`. Every change creates a new immutable version — nothing is overwritten in place.
+
+Use this workflow:
+
+## 1. Discover what's already there
+
+Before ingesting, check whether the knowledge already exists.
+
+```bash
+membot tree                         # synthesised directory tree of logical_paths
+membot ls                           # one row per current file (size, mime, refresh status)
+membot ls docs/                     # filter by prefix
+membot search "<question>"          # hybrid search (semantic + keyword)
+```
+
+`search` is the primary discovery tool — prefer it over scanning files.
+
+## 2. Ingest
+
+```bash
+membot add ./README.md                            # single file
+membot add ./docs                                 # recursive directory walk
+membot add "docs/**/*.md"                         # glob
+membot add https://example.com/spec.pdf           # URL (auto-converted to markdown)
+membot add "inline:Decision: use X because Y"     # literal text
+membot add ./docs --refresh-frequency 24h         # auto-refresh every day
+```
+
+Each entry becomes a new version under its own `logical_path`. PDFs/DOCX/HTML are converted to markdown; images get vision captions; original bytes are kept and reachable via `membot read --bytes`.
+
+## 3. Read
+
+```bash
+membot read <logical_path>                       # current markdown surrogate
+membot read <logical_path> --bytes               # original bytes (base64) — PDF/DOCX/image as ingested
+membot read <logical_path> --version <ts>        # historical snapshot
+membot info <logical_path>                       # metadata only (no content)
+membot versions <logical_path>                   # every version, newest first
+membot diff <logical_path> --a <ts> [--b <ts>]   # unified diff between versions
+```
+
+Defaults to the current (non-tombstoned) version. Pass `--version` only when you need history.
+
+## 4. Write your own notes
+
+Persist agent-authored summaries, decisions, or synthesised context so they survive across conversations:
+
+```bash
+membot write notes/decision-2026-05.md --content "Decided to ..."
+```
+
+Inline writes create a new `(logical_path, version_id)` row just like file ingests — `membot versions` lists them, `membot diff` compares them. To mirror an external doc that should re-fetch over time, use `membot add <url> --refresh-frequency` instead.
+
+## 5. Refresh, rename, delete, prune
+
+```bash
+membot refresh <logical_path>          # re-read source; new version only if bytes changed
+membot refresh                         # refresh all rows whose schedule has elapsed
+membot mv old/path new/path            # rename (history preserved under both)
+membot rm <logical_path>               # tombstone (history still queryable)
+membot prune --before <iso-ts>         # drop non-current versions older than cutoff (irreversible)
+```
+
+Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --version <ts>` still work. Pruning is the only way to actually remove data.
+
+## Versioning rules
+
+- Defaults always operate on the current, non-tombstoned version.
+- Pass an explicit `--version <timestamp>` (from `membot versions`) to read or diff history.
+- `membot_add`, refresh-with-changes, `write`, and `mv` each create a new version. The previous version is preserved.
+- Mutating an existing version is not possible — corrections are new versions.
+
+## When to use this skill
+
+- The user asks to remember, recall, save, or look up something across conversations.
+- You need project-specific context (specs, decisions, transcripts, rendered docs) that's larger than fits in the prompt.
+- You need to ingest a document (PDF, DOCX, HTML, URL) and reason over it.
+- You're producing a summary or decision that should survive past this conversation.
+
+## When NOT to use this skill
+
+- Reading a file the user just pointed at — use the regular file-read tool unless they want it persisted.
+- Storing secrets, credentials, or anything that shouldn't sit in `~/.membot/index.duckdb`.
+- Quick scratch state for the current turn — keep that in the conversation.
+
+## MCP server
+
+`membot serve` exposes the same operations as MCP tools (`membot_add`, `membot_search`, etc.) over stdio (default) or HTTP (`--http <port>`). When connected, prefer the MCP tools over shelling out — they return structured `outputSchema` data with `version_id` echoed on every read.
+
+## Available commands
+
+| Command                               | Purpose                                                                        |
+| ------------------------------------- | ------------------------------------------------------------------------------ |
+| `membot add <source>`                 | Ingest file, directory, glob, URL, or `inline:<text>` (one new version each)   |
+| `membot ls [prefix]`                  | List current files (size, mime, refresh status)                                |
+| `membot tree [prefix]`                | Render the synthesised logical-path tree                                       |
+| `membot read <path>`                  | Read current markdown surrogate (or `--bytes` for original)                    |
+| `membot write <path> --content <txt>` | Write inline agent-authored markdown as a new version                          |
+| `membot search <query>`               | Hybrid search (semantic + BM25); add `--include-history` to search older versions |
+| `membot info <path>`                  | Inspect metadata (source, fetcher, refresh schedule, digests) without content  |
+| `membot versions <path>`              | List every version newest-first with version_id and change notes               |
+| `membot diff <path> --a <ts>`         | Unified diff between two versions                                              |
+| `membot mv <old> <new>`               | Rename a logical_path (history preserved)                                      |
+| `membot rm <path>`                    | Tombstone a logical_path (history still queryable)                             |
+| `membot refresh [path]`               | Re-read source; create new version only if bytes changed                       |
+| `membot prune --before <ts>`          | Permanently drop non-current versions older than cutoff (irreversible)         |
+| `membot serve`                        | Start MCP server (stdio default, `--http <port>` for HTTP)                     |
+| `membot reindex`                      | Rebuild the FTS keyword index over current chunks                              |
+
+## Output formats
+
+- TTY → spinners, colors, tables. `--no-color` disables ANSI.
+- Piped, `--json`, `CI=true`, or `NO_COLOR` → JSON to stdout, structured logs to stderr, no ANSI bytes.
+- Use `--json` when parsing output programmatically (it's automatic when piped, but explicit is safer).
+- Use `--verbose` if a command fails unexpectedly.
+
+## Troubleshooting
+
+- **"ingest failed: unsupported mime"** → Add a converter or pass `--bytes` to keep the original; LLM-fallback only runs when `ANTHROPIC_API_KEY` is set.
+- **"refresh failed: auth"** → The original fetch used an authenticated mcpx tool; re-auth via `mcpx auth <server>`.
+- **Search returns nothing** → Confirm the file ingested with `membot info <path>`; if needed, run `membot reindex` to rebuild the FTS keyword index.
+- **Stale results after manual DB edits** → `membot reindex`.
+- **Two paths point at the same content** → `membot mv` doesn't merge; tombstone one with `membot rm`.
+
+## Configuration
+
+- Data lives in `~/.membot/index.duckdb` (override via `MEMBOT_HOME`).
+- Optional `ANTHROPIC_API_KEY` enables LLM fallback for messy/binary input. Without it, conversion degrades to deterministic native output.
+- Config file: `~/.membot/config.json` (see `membot --help` for the global flags).
