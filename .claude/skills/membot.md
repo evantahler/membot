@@ -112,7 +112,7 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 | ------------------------------------- | ------------------------------------------------------------------------------ |
 | `membot add <sources...>`             | Ingest one or more files, directories, globs, URLs, or `inline:<text>`. Skips unchanged sources; pass `--force` to re-ingest |
 | `membot ls [prefix]`                  | List current files (size, mime, refresh status)                                |
-| `membot tree [prefix]`                | Render the synthesised logical-path tree                                       |
+| `membot tree [prefix]`                | Render the synthesised logical-path tree (`--max-depth`, `--max-items` cap output) |
 | `membot read <path>`                  | Read current markdown surrogate (or `--bytes` for original)                    |
 | `membot write <path> --content <txt>` | Write inline agent-authored markdown as a new version                          |
 | `membot search <query>`               | Hybrid search (semantic + BM25); add `--include-history` to search older versions |

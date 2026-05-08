@@ -98,6 +98,49 @@ describe("tree.console_formatter", () => {
 		const out = treeOperation.console_formatter?.({ root: "/", tree: [] }) ?? "";
 		expect(STRIP(out)).toContain("(empty)");
 	});
+
+	test("renders '+N more' when a node's children were truncated", () => {
+		const out =
+			treeOperation.console_formatter?.({
+				root: "/",
+				tree: [
+					{
+						name: "docs",
+						full_path: "docs",
+						is_file: false,
+						children: [
+							{ name: "a.md", full_path: "docs/a.md", is_file: true },
+							{ name: "b.md", full_path: "docs/b.md", is_file: true },
+						],
+						children_truncated: 99,
+					},
+				],
+			}) ?? "";
+		const visible = STRIP(out);
+		expect(visible).toContain("+99 more");
+		expect(visible).toContain("a.md");
+		expect(visible).toContain("b.md");
+	});
+
+	test("renders '+N more' at root when top-level entries were truncated", () => {
+		const out =
+			treeOperation.console_formatter?.({
+				root: "/",
+				tree: [{ name: "a.md", full_path: "a.md", is_file: true }],
+				truncated: 5,
+			}) ?? "";
+		const visible = STRIP(out);
+		expect(visible).toContain("+5 more");
+	});
+
+	test("does not render '+N more' when nothing was truncated", () => {
+		const out =
+			treeOperation.console_formatter?.({
+				root: "/",
+				tree: [{ name: "a.md", full_path: "a.md", is_file: true }],
+			}) ?? "";
+		expect(STRIP(out)).not.toContain("more");
+	});
 });
 
 describe("search.console_formatter", () => {
