@@ -29,6 +29,7 @@ membot search "<question>"          # hybrid search (semantic + keyword)
 membot add ./README.md                            # single file
 membot add ./docs                                 # recursive directory walk
 membot add "docs/**/*.md"                         # glob
+membot add a.md b.md "docs/**/*.md"               # any number of args; each resolved independently
 membot add https://example.com/spec.pdf           # URL (auto-converted to markdown)
 membot add "inline:Decision: use X because Y"     # literal text
 membot add ./docs --refresh-frequency 24h         # auto-refresh every day
@@ -65,7 +66,8 @@ Inline writes create a new `(logical_path, version_id)` row just like file inges
 membot refresh <logical_path>          # re-read source; new version only if bytes changed
 membot refresh                         # refresh all rows whose schedule has elapsed
 membot mv old/path new/path            # rename (history preserved under both)
-membot rm <logical_path>               # tombstone (history still queryable)
+membot rm <paths...>                   # tombstone one or more paths/globs (history still queryable)
+membot rm "docs/**/*.md" notes/old.md  # globs match logical_paths in the DB; literals + globs can mix
 membot prune --before <iso-ts>         # drop non-current versions older than cutoff (irreversible)
 ```
 
@@ -99,7 +101,7 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 
 | Command                               | Purpose                                                                        |
 | ------------------------------------- | ------------------------------------------------------------------------------ |
-| `membot add <source>`                 | Ingest file, directory, glob, URL, or `inline:<text>` (one new version each)   |
+| `membot add <sources...>`             | Ingest one or more files, directories, globs, URLs, or `inline:<text>` (one new version each) |
 | `membot ls [prefix]`                  | List current files (size, mime, refresh status)                                |
 | `membot tree [prefix]`                | Render the synthesised logical-path tree                                       |
 | `membot read <path>`                  | Read current markdown surrogate (or `--bytes` for original)                    |
@@ -109,7 +111,7 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 | `membot versions <path>`              | List every version newest-first with version_id and change notes               |
 | `membot diff <path> --a <ts>`         | Unified diff between two versions                                              |
 | `membot mv <old> <new>`               | Rename a logical_path (history preserved)                                      |
-| `membot rm <path>`                    | Tombstone a logical_path (history still queryable)                             |
+| `membot rm <paths...>`                | Tombstone one or more logical_paths or globs (e.g. `"docs/**/*.md"`); history kept |
 | `membot refresh [path]`               | Re-read source; create new version only if bytes changed                       |
 | `membot prune --before <ts>`          | Permanently drop non-current versions older than cutoff (irreversible)         |
 | `membot serve`                        | Start MCP server (stdio default, `--http <port>` for HTTP)                     |

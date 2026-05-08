@@ -8,16 +8,26 @@ const FetcherKindEnum = z.enum(["http", "mcpx", "local", "inline"]);
 export const addOperation = defineOperation({
 	name: "membot_add",
 	cliName: "add",
-	description: `Ingest one or many sources into the store. \`source\` accepts:
+	description: `Ingest one or many sources into the store. Each \`sources\` arg accepts:
   - a local file path
   - a local directory (recursive walk, symlinks followed)
   - a glob pattern (e.g. "docs/**/*.md")
   - a URL (fetched via mcpx if configured, otherwise plain HTTP)
   - "inline:<text>" literal
-PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, vision/OCR for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. Each ingested file becomes a NEW version under its own logical_path; existing versions stay queryable via membot_versions. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status.`,
+Pass any number of args; each is resolved independently and the matched entries are concatenated into one response. PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, vision/OCR for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. Each ingested file becomes a NEW version under its own logical_path; existing versions stay queryable via membot_versions. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status. When \`logical_path\` is set with multiple matched entries (multi-source, directory, or glob), it acts as a prefix and each entry gets \`<prefix>/<relpath>\`.`,
 	inputSchema: z.object({
-		source: z.string().describe("Local path, directory, glob, URL, or `inline:<text>` literal"),
-		logical_path: z.string().optional().describe("Destination logical_path (single source) or prefix (directory/glob)"),
+		sources: z
+			.array(z.string())
+			.min(1)
+			.describe(
+				"One or more sources. Each arg is independently resolved as a local path, directory, glob, URL, or `inline:<text>` literal.",
+			),
+		logical_path: z
+			.string()
+			.optional()
+			.describe(
+				"Destination logical_path (single source resolving to a single entry) or prefix (multi-arg / directory / glob)",
+			),
 		include: z.string().optional().describe("Glob include filter (comma-separated for multiple); default `**/*`"),
 		exclude: z.string().optional().describe("Glob exclude filter (comma-separated for multiple)"),
 		follow_symlinks: z
@@ -50,7 +60,7 @@ PDF, DOCX, HTML, images, and other binaries are converted to markdown — native
 		failed: z.number(),
 	}),
 	cli: {
-		positional: ["source"],
+		positional: ["sources"],
 		aliases: { logical_path: "-p", refresh_frequency: "-r", change_note: "-m" },
 	},
 	console_formatter: (result) => {
@@ -65,5 +75,16 @@ PDF, DOCX, HTML, images, and other binaries are converted to markdown — native
 			: colors.green(`added ${result.ok}`);
 		return `${lines.join("\n")}\n${summary}`;
 	},
-	handler: async (input, ctx) => ingest(input, ctx),
+	handler: async (input, ctx) => {
+		const { sources, ...rest } = input;
+		const aggregated = { ingested: [] as Awaited<ReturnType<typeof ingest>>["ingested"], total: 0, ok: 0, failed: 0 };
+		for (const source of sources) {
+			const r = await ingest({ ...rest, source }, ctx);
+			aggregated.ingested.push(...r.ingested);
+			aggregated.total += r.total;
+			aggregated.ok += r.ok;
+			aggregated.failed += r.failed;
+		}
+		return aggregated;
+	},
 });
