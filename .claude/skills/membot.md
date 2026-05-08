@@ -36,6 +36,15 @@ membot add ./docs --refresh-frequency 24h         # auto-refresh every day
 
 Each entry becomes a new version under its own `logical_path`. PDFs/DOCX/HTML are converted to markdown; images get vision captions; original bytes are kept and reachable via `membot read --bytes`.
 
+The default `logical_path` mirrors the source path so files with the same basename in different projects don't collide:
+
+- Local file → absolute path with leading `/` stripped (e.g. `/Users/me/projA/README.md` → `Users/me/projA/README.md`).
+- Local directory or glob → each entry's absolute path under the same shape.
+- URL → `remotes/{host}/{path}` with `/`'s preserved (e.g. `https://github.com/userA/projA/blob/main/README.md` → `remotes/github.com/userA/projA/blob/main/README.md`). Query strings and fragments are dropped from the logical_path (the full URL is still stored for refresh).
+- `inline:<text>` → `inline/{timestamp}.md`.
+
+Pass `-p <path>` (or `--logical-path`) to override. On a directory walk it's treated as a *prefix* — entries land at `{prefix}/{path-relative-to-walk-base}`. Re-running `membot add` on the same source reuses the same logical_path and creates a new version (correct refresh behavior).
+
 ## 3. Read
 
 ```bash

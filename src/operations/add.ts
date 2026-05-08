@@ -14,7 +14,14 @@ export const addOperation = defineOperation({
   - a glob pattern (e.g. "docs/**/*.md")
   - a URL (fetched via mcpx if configured, otherwise plain HTTP)
   - "inline:<text>" literal
-PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, vision/OCR for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. By default, re-ingesting an unchanged source (same source_sha256 as the current version) is a no-op and reports \`status: "unchanged"\`; pass \`force=true\` to always create a new version. Each newly-ingested file becomes a new version under its own logical_path; existing versions stay queryable via membot_versions. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status.`,
+PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, vision/OCR for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. By default, re-ingesting an unchanged source (same source_sha256 as the current version) is a no-op and reports \`status: "unchanged"\`; pass \`force=true\` to always create a new version. Each newly-ingested file becomes a new version under its own logical_path; existing versions stay queryable via membot_versions. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status.
+
+When \`logical_path\` is omitted, it is derived from the source so files with the same basename in different projects do not collide:
+  - Local sources use the entry's absolute filesystem path with the leading "/" stripped (e.g. "/Users/me/projA/README.md" → "Users/me/projA/README.md").
+  - URLs use "remotes/{host}/{path}" with slashes preserved (e.g. "https://github.com/u/p/blob/main/README.md" → "remotes/github.com/u/p/blob/main/README.md"). Query strings and fragments are dropped from the logical_path; the full URL is still stored on the row for refresh.
+  - "inline:<text>" defaults to "inline/{timestamp}.md".
+
+Pass \`logical_path\` to override. For a directory or glob walk it is treated as a PREFIX — each entry is placed at "{prefix}/{path-relative-to-walk-base}". Re-running \`membot_add\` on the same source resolves to the same logical_path; if bytes are unchanged the call is a no-op (status \`unchanged\`), otherwise a new version is created.`,
 	inputSchema: z.object({
 		source: z.string().describe("Local path, directory, glob, URL, or `inline:<text>` literal"),
 		logical_path: z.string().optional().describe("Destination logical_path (single source) or prefix (directory/glob)"),

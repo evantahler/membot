@@ -47,42 +47,47 @@ export const treeOperation = defineOperation({
 
 /**
  * Build a tree of TreeNode objects from a flat list of `/`-delimited paths.
- * Splits each path into segments and groups by common prefix; nodes deeper
- * than `maxDepth` are folded into their parent's `children` summary count.
+ * Splits each path into segments and groups by common prefix. Segments
+ * deeper than `maxDepth` are folded into the deepest visible ancestor —
+ * that ancestor is marked `is_file=true` so the renderer surfaces it as a
+ * leaf even though longer paths exist underneath.
  */
 function buildTree(paths: string[], maxDepth: number): TreeNode[] {
-	const root: Map<string, TreeNode> = new Map();
+	interface MutableNode {
+		name: string;
+		full_path: string;
+		is_file: boolean;
+		children: Map<string, MutableNode>;
+	}
+	const root = new Map<string, MutableNode>();
 	for (const path of paths) {
 		const segs = path.split("/").filter(Boolean);
+		if (segs.length === 0) continue;
 		let level = root;
 		const trail: string[] = [];
-		for (let i = 0; i < segs.length && i < maxDepth; i++) {
+		const stop = Math.min(segs.length, maxDepth);
+		for (let i = 0; i < stop; i++) {
 			const seg = segs[i]!;
 			trail.push(seg);
-			const fullPath = trail.join("/");
 			let node = level.get(seg);
 			if (!node) {
-				node = { name: seg, full_path: fullPath, is_file: i === segs.length - 1 };
+				node = { name: seg, full_path: trail.join("/"), is_file: false, children: new Map() };
 				level.set(seg, node);
-			} else if (i === segs.length - 1) {
-				node.is_file = true;
 			}
-			if (i < segs.length - 1) {
-				if (!node.children) node.children = [];
-				const childMap = new Map(node.children.map((c) => [c.name, c] as const));
-				node.children = [...childMap.values()];
-				level = childMap;
-				if (childMap.size === 0) {
-					level = new Map();
-					node.children = [];
-				} else {
-					// rebuild level pointer
-					level = new Map(node.children.map((c) => [c.name, c] as const));
-				}
-			}
+			const isTerminal = i === segs.length - 1 || i === maxDepth - 1;
+			if (isTerminal) node.is_file = true;
+			level = node.children;
 		}
 	}
-	return [...root.values()].sort((a, b) => a.name.localeCompare(b.name));
+	const finalize = (m: Map<string, MutableNode>): TreeNode[] => {
+		const arr = [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
+		return arr.map((n) => {
+			const out: TreeNode = { name: n.name, full_path: n.full_path, is_file: n.is_file };
+			if (n.children.size > 0) out.children = finalize(n.children);
+			return out;
+		});
+	};
+	return finalize(root);
 }
 
 /**
