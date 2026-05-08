@@ -32,12 +32,17 @@ describe("resolveSource", () => {
 		if (r.kind === "url") expect(r.url).toBe("https://example.com/x");
 	});
 
-	test("single file source", async () => {
+	test("single file source carries the absolute realpath", async () => {
 		const r = await resolveSource(join(tmp, "a.md"));
 		expect(r.kind).toBe("local-files");
 		if (r.kind === "local-files") {
 			expect(r.entries).toHaveLength(1);
-			expect(r.entries[0]?.absPath.endsWith("a.md")).toBe(true);
+			const entry = r.entries[0]!;
+			expect(entry.absPath.endsWith("a.md")).toBe(true);
+			// absPath is absolute (starts with `/` on posix), so a default
+			// logical_path can be derived without losing directory context.
+			expect(entry.absPath.startsWith("/") || /^[A-Z]:/.test(entry.absPath)).toBe(true);
+			expect(entry.relPathFromBase).toBe("a.md");
 		}
 	});
 
@@ -45,7 +50,7 @@ describe("resolveSource", () => {
 		const r = await resolveSource(tmp, { include: "**/*.md" });
 		expect(r.kind).toBe("local-files");
 		if (r.kind === "local-files") {
-			const paths = r.entries.map((e) => e.relPath).sort();
+			const paths = r.entries.map((e) => e.relPathFromBase).sort();
 			expect(paths).toEqual(["a.md", "sub/c.md"]);
 		}
 	});
@@ -54,7 +59,7 @@ describe("resolveSource", () => {
 		const r = await resolveSource(tmp, { include: "**/*", exclude: "**/sub/**" });
 		expect(r.kind).toBe("local-files");
 		if (r.kind === "local-files") {
-			const paths = r.entries.map((e) => e.relPath).sort();
+			const paths = r.entries.map((e) => e.relPathFromBase).sort();
 			expect(paths).toEqual(["a.md", "b.txt"]);
 		}
 	});
@@ -76,7 +81,7 @@ describe("resolveSource", () => {
 			const r = await resolveSource("*.md");
 			expect(r.kind).toBe("local-files");
 			if (r.kind === "local-files") {
-				const paths = r.entries.map((e) => e.relPath).sort();
+				const paths = r.entries.map((e) => e.relPathFromBase).sort();
 				expect(paths).toEqual(["a.md"]);
 			}
 		} finally {
@@ -88,7 +93,7 @@ describe("resolveSource", () => {
 		const r = await resolveSource(join(tmp, "**", "*.md"));
 		expect(r.kind).toBe("local-files");
 		if (r.kind === "local-files") {
-			const paths = r.entries.map((e) => e.relPath).sort();
+			const paths = r.entries.map((e) => e.relPathFromBase).sort();
 			expect(paths).toEqual(["a.md", "sub/c.md"]);
 		}
 	});
@@ -97,7 +102,7 @@ describe("resolveSource", () => {
 		const r = await resolveSource(join(tmp, "**", "*"), { include: "*.md" });
 		expect(r.kind).toBe("local-files");
 		if (r.kind === "local-files") {
-			const paths = r.entries.map((e) => e.relPath).sort();
+			const paths = r.entries.map((e) => e.relPathFromBase).sort();
 			expect(paths).toEqual(["a.md"]);
 		}
 	});
@@ -106,7 +111,7 @@ describe("resolveSource", () => {
 		const r = await resolveSource(tmp);
 		expect(r.kind).toBe("local-files");
 		if (r.kind === "local-files") {
-			const paths = r.entries.map((e) => e.relPath).sort();
+			const paths = r.entries.map((e) => e.relPathFromBase).sort();
 			expect(paths).toEqual(["a.md", "b.txt", "sub/c.md", "sub/d.json"]);
 		}
 	});

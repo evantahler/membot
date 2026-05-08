@@ -11,13 +11,6 @@ interface TreeNode {
 	children_truncated?: number;
 }
 
-interface BuildNode {
-	name: string;
-	full_path: string;
-	is_file: boolean;
-	childMap: Map<string, BuildNode>;
-}
-
 export const treeOperation = defineOperation({
 	name: "membot_tree",
 	cliName: "tree",
@@ -68,52 +61,54 @@ export const treeOperation = defineOperation({
 
 /**
  * Build a tree of TreeNode objects from a flat list of `/`-delimited paths.
- * Splits each path into segments and groups by common prefix; segments deeper
- * than `maxDepth` are dropped (the ancestor at depth `maxDepth - 1` keeps no
- * trace of them). Children are sorted by name within each level.
+ * Splits each path into segments and groups by common prefix. Segments
+ * deeper than `maxDepth` are folded into the deepest visible ancestor —
+ * that ancestor is marked `is_file=true` so the renderer surfaces it as a
+ * leaf even though longer paths exist underneath. Children are sorted by
+ * name within each level so downstream truncation is deterministic.
  */
 export function buildTree(paths: string[], maxDepth: number): TreeNode[] {
-	const roots = new Map<string, BuildNode>();
+	interface MutableNode {
+		name: string;
+		full_path: string;
+		is_file: boolean;
+		children: Map<string, MutableNode>;
+	}
+	const root = new Map<string, MutableNode>();
 	for (const path of paths) {
 		const segs = path.split("/").filter(Boolean);
 		if (segs.length === 0) continue;
-		let level = roots;
+		let level = root;
 		const trail: string[] = [];
-		for (let i = 0; i < segs.length && i < maxDepth; i++) {
+		const stop = Math.min(segs.length, maxDepth);
+		for (let i = 0; i < stop; i++) {
 			const seg = segs[i]!;
 			trail.push(seg);
-			const isLastSeg = i === segs.length - 1;
 			let node = level.get(seg);
 			if (!node) {
-				node = { name: seg, full_path: trail.join("/"), is_file: isLastSeg, childMap: new Map() };
+				node = { name: seg, full_path: trail.join("/"), is_file: false, children: new Map() };
 				level.set(seg, node);
-			} else if (isLastSeg) {
-				node.is_file = true;
 			}
-			level = node.childMap;
+			const isTerminal = i === segs.length - 1 || i === maxDepth - 1;
+			if (isTerminal) node.is_file = true;
+			level = node.children;
 		}
 	}
-	return finalize([...roots.values()]);
-}
-
-/**
- * Convert the internal BuildNode graph into the public TreeNode shape, sorting
- * each level by name so downstream rendering and truncation are deterministic.
- */
-function finalize(nodes: BuildNode[]): TreeNode[] {
-	return nodes
-		.map((n) => {
+	const finalize = (m: Map<string, MutableNode>): TreeNode[] => {
+		const arr = [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
+		return arr.map((n) => {
 			const out: TreeNode = { name: n.name, full_path: n.full_path, is_file: n.is_file };
-			if (n.childMap.size > 0) out.children = finalize([...n.childMap.values()]);
+			if (n.children.size > 0) out.children = finalize(n.children);
 			return out;
-		})
-		.sort((a, b) => a.name.localeCompare(b.name));
+		});
+	};
+	return finalize(root);
 }
 
 /**
  * Trim each child list (and the root list) to `maxItems`, mutating in place.
  * Returns the number of root entries dropped; per-node drops are recorded on
- * `node.children_truncated`. Input is assumed pre-sorted (by `finalize`) so
+ * `node.children_truncated`. Input is assumed pre-sorted (by `buildTree`) so
  * "first N" is stable.
  */
 export function truncateTree(nodes: TreeNode[], maxItems: number): number {
