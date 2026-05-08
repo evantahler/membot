@@ -29,6 +29,7 @@ Reference projects (read these to understand the conventions before changing any
 - **Every method gets a docstring.** Every exported (and most internal) function, method, or class member must have a JSDoc-style comment that explains *what it does* — preferably also *why* when the rationale isn't obvious. One short line is fine for trivial wrappers; multi-line comments are appropriate for orchestration paths or anything with a non-obvious contract. Don't restate the signature; explain the intent and the contract.
 - **Tests are written alongside code, not bolted on.** Every new module ships with unit tests covering the happy path, the error path, and the edge cases (empty input, malformed input, boundary conditions). DB-touching code uses real ephemeral DuckDB files, not mocks. Error types are tested for both their invariants and their rendering.
 - **Migrations are logged.** Every migration applied at startup writes an `info` line so users can see what changed when they upgrade.
+- **User-facing changes bump `package.json`.** Any change that ships behavior to users (new flag, new command, fixed bug they could observe, output-format change) must increment `version` in `package.json` in the same PR. The `auto-release` workflow only fires when the version changes — no bump means no npm release and no binaries. Internal-only refactors, comment edits, and test changes don't need a bump.
 
 ## Architecture at a glance
 

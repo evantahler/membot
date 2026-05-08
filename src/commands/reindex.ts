@@ -24,9 +24,7 @@ export function registerReindexCommand(program: Command): void {
 						console.log(JSON.stringify({ ok: true, chunk_count: result.chunk_count }));
 						break;
 					case "no_chunks":
-						logger.info(
-							"reindex: no chunks to index — run `membot add <path>` to ingest content first",
-						);
+						logger.info("reindex: no chunks to index — run `membot add <path>` to ingest content first");
 						console.log(JSON.stringify({ ok: true, chunk_count: 0 }));
 						break;
 					case "extension_unavailable":
@@ -44,12 +42,8 @@ export function registerReindexCommand(program: Command): void {
 						);
 						break;
 					case "rebuild_failed":
-						logger.warn(
-							`reindex: FTS rebuild failed${result.cause ? ` (${result.cause})` : ""}`,
-						);
-						console.log(
-							JSON.stringify({ ok: false, reason: "rebuild_failed", cause: result.cause }),
-						);
+						logger.warn(`reindex: FTS rebuild failed${result.cause ? ` (${result.cause})` : ""}`);
+						console.log(JSON.stringify({ ok: false, reason: "rebuild_failed", cause: result.cause }));
 						break;
 				}
 			} finally {
