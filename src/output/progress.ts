@@ -1,5 +1,5 @@
 import { logger } from "./logger.ts";
-import { useSpinner } from "./tty.ts";
+import { isSilent, useSpinner } from "./tty.ts";
 
 /**
  * Minimal progress reporter for multi-entry operations (directory/glob ingest,
@@ -23,11 +23,13 @@ export function createProgress(): Progress {
 	let spinner: ReturnType<typeof logger.startSpinner> | null = null;
 
 	const interactive = useSpinner();
+	const silent = isSilent();
 
 	return {
 		start(t: number, label?: string) {
 			total = t;
 			count = 0;
+			if (silent) return;
 			if (interactive) {
 				spinner = logger.startSpinner(label ? `${label} (0/${total})` : `0/${total}`);
 			} else if (label) {
@@ -36,6 +38,7 @@ export function createProgress(): Progress {
 		},
 		tick(label: string) {
 			count += 1;
+			if (silent) return;
 			if (interactive && spinner) {
 				spinner.update(`${count}/${total} — ${label}`);
 			} else {
@@ -43,6 +46,7 @@ export function createProgress(): Progress {
 			}
 		},
 		done(summary?: string) {
+			if (silent) return;
 			if (interactive && spinner) {
 				spinner.success(summary ?? `${count}/${total} done`);
 				spinner = null;
@@ -51,6 +55,10 @@ export function createProgress(): Progress {
 			}
 		},
 		fail(summary?: string) {
+			if (silent) {
+				if (summary) logger.warn(summary);
+				return;
+			}
 			if (interactive && spinner) {
 				spinner.error(summary ?? `failed at ${count}/${total}`);
 				spinner = null;
@@ -59,6 +67,7 @@ export function createProgress(): Progress {
 			}
 		},
 		info(msg: string) {
+			if (silent) return;
 			logger.info(msg);
 		},
 	};

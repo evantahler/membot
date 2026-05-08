@@ -9,6 +9,9 @@
  *   CI=true                                  → forces non-interactive
  *   --no-color or NO_COLOR                   → disables ANSI even if interactive
  *   FORCE_COLOR                              → forces ANSI on regardless
+ *   CI=true OR NODE_ENV=test OR              → silent (suppresses advisory
+ *   MEMBOT_SILENT=1                             info / progress lines)
+ *   --verbose                                → overrides silent
  */
 
 export interface OutputMode {
@@ -16,6 +19,7 @@ export interface OutputMode {
 	color: boolean;
 	json: boolean;
 	verbose: boolean;
+	silent: boolean;
 }
 
 let mode: OutputMode | null = null;
@@ -46,7 +50,11 @@ export function detectMode(opts: DetectModeOptions = {}): OutputMode {
 	else if (noColorFlag || noColorEnv || json) color = false;
 	else color = stderrTty; // colors target stderr (logs) and stdout (formatted output)
 
-	return { interactive, color, json, verbose };
+	const testEnv = process.env.NODE_ENV === "test";
+	const explicitSilent = process.env.MEMBOT_SILENT === "1" || process.env.MEMBOT_SILENT === "true";
+	const silent = !verbose && !json && (ci || testEnv || explicitSilent);
+
+	return { interactive, color, json, verbose, silent };
 }
 
 export function setMode(m: OutputMode): void {
@@ -76,4 +84,8 @@ export function isJson(): boolean {
 
 export function isVerbose(): boolean {
 	return getMode().verbose;
+}
+
+export function isSilent(): boolean {
+	return getMode().silent;
 }

@@ -1,6 +1,6 @@
 import { dim, red, yellow } from "ansis";
 import { createSpinner } from "nanospinner";
-import { getMode, isJson, isVerbose, useColor, useSpinner } from "./tty.ts";
+import { getMode, isJson, isSilent, isVerbose, useColor, useSpinner } from "./tty.ts";
 
 export interface Spinner {
 	update(text: string): void;
@@ -34,9 +34,9 @@ class Logger {
 		}
 	}
 
-	/** Advisory info — stderr in interactive, suppressed in JSON, kept in CI. */
+	/** Advisory info — stderr in interactive, suppressed in JSON or silent (CI/test). */
 	info(msg: string): void {
-		if (isJson()) return;
+		if (isJson() || isSilent()) return;
 		this.writeStderr(this.color(dim, msg));
 	}
 
@@ -93,7 +93,7 @@ class Logger {
 
 	/** True when the logger should emit human output (used by progress). */
 	humanOutput(): boolean {
-		return !isJson() && getMode().interactive;
+		return !isJson() && !isSilent() && getMode().interactive;
 	}
 }
 

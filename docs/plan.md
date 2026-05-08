@@ -44,12 +44,13 @@ The CLI auto-detects its environment and renders appropriately. There is **one**
 | -------------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
 | stdout is a TTY AND stderr is a TTY AND `--json` not set | **interactive**  | ANSI colors, `nanospinner` spinners during work, progress bars for multi-entry ops, aligned tables |
 | stdout is piped, redirected, or `--json` is set          | **non-interactive** | No spinners, no progress bars, no colors. JSON to stdout, structured logs to stderr. Stable, parseable. |
-| `CI=true` env var set                                    | non-interactive (forced) | Same as above; never accidentally emit ANSI/spinners in CI logs                            |
+| `CI=true` env var set                                    | non-interactive (forced) + **silent** | Same as above; never accidentally emit ANSI/spinners in CI logs. Advisory `info` and per-entry progress lines suppressed. |
+| `NODE_ENV=test` (set automatically by `bun test`) or `MEMBOT_SILENT=1` | **silent** | `info` and per-entry progress are no-ops. `warn` and `error` still print. `--verbose` overrides. |
 | `--no-color` flag or `NO_COLOR` env var                  | non-interactive (colors only) | Spinners stay if TTY, but no ANSI color codes (FORCE_COLOR overrides)                       |
 
 Implementation lives in `src/output/`:
 
-- `tty.ts` — single source of truth for `isInteractive()`, `useColor()`, `useSpinner()`. Reads `process.stdout.isTTY`, `process.stderr.isTTY`, `process.env.CI`, `NO_COLOR`, `FORCE_COLOR`, and the `--json` / `--no-interactive` flags.
+- `tty.ts` — single source of truth for `isInteractive()`, `useColor()`, `useSpinner()`, `isSilent()`. Reads `process.stdout.isTTY`, `process.stderr.isTTY`, `process.env.CI`, `NO_COLOR`, `FORCE_COLOR`, `NODE_ENV`, `MEMBOT_SILENT`, and the `--json` / `--verbose` / `--no-interactive` flags.
 - `logger.ts` — spinner-aware (port from `mcpx/src/output/logger.ts`); `info/warn/error/debug/writeRaw` route to stderr in non-interactive mode and don't break parseable stdout.
 - `progress.ts` — wraps `nanospinner` + a multi-entry progress bar (used by directory/glob ingest); in non-interactive mode emits one `info` line per entry instead.
 - `formatter.ts` — final-result rendering: aligned tables / markdown when interactive, single JSON object when not.
