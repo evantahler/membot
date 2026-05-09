@@ -27,6 +27,15 @@ export interface DownloaderCtx {
 	pool: BrowserPool;
 	logger: typeof Logger;
 	config: MembotConfig;
+	/**
+	 * Optional sublabel hook for the host's progress spinner. Long-running
+	 * downloaders (multi-query GraphQL, paginated REST fetches, headless
+	 * browser navigation) can call this with short status strings —
+	 * "fetching", "rendering", "parsing 3/4 pages" — and the CLI will
+	 * surface them under the per-entry progress bar. No-op when the host
+	 * doesn't supply one (e.g. MCP server, JSON-mode CLI).
+	 */
+	onProgress?: (sublabel: string) => void;
 }
 
 /**

@@ -31,6 +31,11 @@ export interface FetchOptions {
 	userDataDir?: string;
 	/** Pre-built BrowserPool to share across many fetches (set by ingest's outer loop). */
 	pool?: BrowserPool;
+	/**
+	 * Sublabel hook forwarded to the downloader's `DownloaderCtx`.
+	 * Drives the per-entry spinner text during multi-step fetches.
+	 */
+	onProgress?: (sublabel: string) => void;
 }
 
 /**
@@ -52,7 +57,7 @@ export async function fetchRemote(
 	const ownsPool = !options.pool;
 	const headless = !downloader.requireHeaded;
 	const pool = options.pool ?? new BrowserPool({ userDataDir, headless });
-	const dctx: DownloaderCtx = { pool, logger, config };
+	const dctx: DownloaderCtx = { pool, logger, config, onProgress: options.onProgress };
 
 	try {
 		// Fetches are strictly non-interactive: there's no auto-launch
