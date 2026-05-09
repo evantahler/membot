@@ -193,7 +193,7 @@ src/
     source-resolver.ts  # file / dir / glob / url / inline detection
     local-reader.ts
     fetcher.ts          # downloader registry dispatch
-    chunker.ts embedder.ts describer.ts search-text.ts
+    chunker.ts embedder.ts embedder-pool.ts embed-worker.ts describer.ts search-text.ts
     converter/          # pdf, docx, html, image, text, ocr, llm
     downloaders/
       index.ts          # Downloader interface, findDownloader, listDownloaders, collectLoginEntries
@@ -247,7 +247,8 @@ or when `CI=true`.
   "embedding_model": "Xenova/bge-small-en-v1.5",
   "embedding_dimension": 384,
   "chunker": { "mode": "deterministic", "target_chars": 4000, "max_chars": 15000 },
-  "converters": { "max_inline_image_captions": 20 },         // per-doc cap on vision captions for embedded images
+  "embedding": { "workers": null },                           // null → cpus()-1; 1 disables the subprocess pool
+  "converters": { "max_inline_image_captions": 20 },          // per-doc cap on vision captions for embedded images
   "llm": {
     "anthropic_api_key": "",                                  // env: ANTHROPIC_API_KEY
     "converter_model": "claude-haiku-4-5-20251001",

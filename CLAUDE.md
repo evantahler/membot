@@ -37,8 +37,15 @@ Reference project (origin):
 membot_add ──► local-reader OR downloader-registry ──► converter (mime dispatch)
                                                          │
                                                          ▼
-                                            chunker ──► embedder (WASM)
-                                                         │
+                                            chunker ──► embedder (WASM; per-command
+                                                         │              subprocess pool of
+                                                         │              `cpus()-1` workers by
+                                                         │              default — spawned at
+                                                         │              the top of `add` /
+                                                         │              `refresh` / `write`
+                                                         │              and killed before the
+                                                         │              command returns. Config
+                                                         │              key `embedding.workers`)
                                                          ▼
                                             db.files.insertVersion + db.chunks.insertForVersion
                                                          │

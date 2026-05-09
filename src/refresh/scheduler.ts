@@ -1,5 +1,6 @@
-import type { AppContext } from "../context.ts";
+import { type AppContext, resolveEmbeddingWorkers } from "../context.ts";
 import { listDueRefreshes } from "../db/files.ts";
+import { withEmbedderPool } from "../ingest/embedder-pool.ts";
 import { logger } from "../output/logger.ts";
 import { type RefreshOutcome, refreshOne } from "./runner.ts";
 
@@ -7,22 +8,30 @@ import { type RefreshOutcome, refreshOne } from "./runner.ts";
  * One scheduler tick: refresh every row whose `refresh_frequency_sec` has
  * elapsed since `refreshed_at`. Errors on individual rows are logged and
  * the loop continues so one bad source doesn't halt the daemon.
+ *
+ * The embedder worker pool is per-tick: spun up only if there are due rows,
+ * torn down before the tick returns. The daemon never holds idle workers
+ * between ticks (which can be minutes apart).
  */
 export async function runDueRefreshes(ctx: AppContext): Promise<RefreshOutcome[]> {
 	const due = await listDueRefreshes(ctx.db);
-	const out: RefreshOutcome[] = [];
-	for (const row of due) {
-		try {
-			const r = await refreshOne(ctx, row.logical_path);
-			out.push(r);
-			if (r.status === "ok") logger.info(`refresh: ${row.logical_path} → new version ${r.new_version_id}`);
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			logger.warn(`refresh: ${row.logical_path} failed (${msg})`);
-			out.push({ logical_path: row.logical_path, status: "failed", error: msg });
+	if (due.length === 0) return [];
+	const workers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
+	return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
+		const out: RefreshOutcome[] = [];
+		for (const row of due) {
+			try {
+				const r = await refreshOne(ctx, row.logical_path);
+				out.push(r);
+				if (r.status === "ok") logger.info(`refresh: ${row.logical_path} → new version ${r.new_version_id}`);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				logger.warn(`refresh: ${row.logical_path} failed (${msg})`);
+				out.push({ logical_path: row.logical_path, status: "failed", error: msg });
+			}
 		}
-	}
-	return out;
+		return out;
+	});
 }
 
 /**

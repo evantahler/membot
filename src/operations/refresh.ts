@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { resolveEmbeddingWorkers } from "../context.ts";
 import { listDueRefreshes } from "../db/files.ts";
+import { withEmbedderPool } from "../ingest/embedder-pool.ts";
 import { colors } from "../output/formatter.ts";
 import { refreshOne } from "../refresh/runner.ts";
 import { defineOperation } from "./types.ts";
@@ -47,26 +49,32 @@ export const refreshOperation = defineOperation({
 		return `${lines.join("\n")}\n${parts.join(", ")}`;
 	},
 	handler: async (input, ctx) => {
-		const targets = input.logical_path
-			? [input.logical_path]
-			: (await listDueRefreshes(ctx.db)).map((r) => r.logical_path);
-		const out: Array<{
-			logical_path: string;
-			status: "ok" | "unchanged" | "failed";
-			new_version_id?: string;
-			error?: string;
-		}> = [];
-		ctx.progress.start(targets.length, "refresh");
-		for (const path of targets) {
-			ctx.progress.tick(path);
-			try {
-				const r = await refreshOne(ctx, path, input.force, (sublabel) => ctx.progress.update(sublabel));
-				out.push(r);
-			} catch (err) {
-				out.push({ logical_path: path, status: "failed", error: err instanceof Error ? err.message : String(err) });
+		// Per-command embedder pool: workers come up at the start of the
+		// refresh sweep and are killed before we return, so a manual
+		// `membot refresh` doesn't leave subprocesses around.
+		const workers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
+		return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
+			const targets = input.logical_path
+				? [input.logical_path]
+				: (await listDueRefreshes(ctx.db)).map((r) => r.logical_path);
+			const out: Array<{
+				logical_path: string;
+				status: "ok" | "unchanged" | "failed";
+				new_version_id?: string;
+				error?: string;
+			}> = [];
+			ctx.progress.start(targets.length, "refresh");
+			for (const path of targets) {
+				ctx.progress.tick(path);
+				try {
+					const r = await refreshOne(ctx, path, input.force, (sublabel) => ctx.progress.update(sublabel));
+					out.push(r);
+				} catch (err) {
+					out.push({ logical_path: path, status: "failed", error: err instanceof Error ? err.message : String(err) });
+				}
 			}
-		}
-		ctx.progress.done(`refresh: ${out.filter((r) => r.status === "ok").length}/${out.length} updated`);
-		return { processed: out, count: out.length };
+			ctx.progress.done(`refresh: ${out.filter((r) => r.status === "ok").length}/${out.length} updated`);
+			return { processed: out, count: out.length };
+		});
 	},
 });

@@ -161,4 +161,5 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 
 - Data lives in `~/.membot/index.duckdb` (override via `MEMBOT_HOME`).
 - Optional `ANTHROPIC_API_KEY` enables LLM fallback for messy/binary input. Without it, conversion degrades to deterministic native output.
+- `embedding.workers` (config key) caps the per-command embed-worker subprocess pool spawned at the top of `add` / `refresh` / `write`. Default `null` resolves to `cpus()-1`; set `1` to disable the pool.
 - Config file: `~/.membot/config.json` (see `membot --help` for the global flags).

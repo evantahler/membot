@@ -68,9 +68,40 @@ async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
  * with `(done, total)` chunk counts so callers can drive a spinner / progress
  * bar — ONNX WASM holds the JS thread for hundreds of ms per batch and would
  * otherwise leave nanospinner's setInterval starved between updates.
+ *
+ * `directOnly` bypasses any registered EmbedderPool and runs the embed call
+ * inline in the current process. Use it for query-time single-text embedding
+ * where IPC overhead would dominate.
  */
 export interface EmbedOptions {
 	onProgress?: (done: number, total: number) => void;
+	directOnly?: boolean;
+}
+
+/**
+ * The minimal surface the embedder needs from a worker pool. Defined as an
+ * interface (not an `import type`) so we don't take a hard dependency on
+ * `embedder-pool.ts` from this hot path — the pool is plugged in via
+ * `setEmbedderPool()` from outside.
+ */
+export interface PooledEmbedder {
+	embed(texts: string[], model?: string, opts?: EmbedOptions): Promise<number[][]>;
+}
+
+let pool: PooledEmbedder | null = null;
+
+/**
+ * Register a worker pool to handle bulk embed calls. After this is set, every
+ * `embed()` call (without `directOnly`) is dispatched through the pool.
+ * Called once during `buildContext()` when `config.embedding.workers > 1`.
+ */
+export function setEmbedderPool(p: PooledEmbedder | null): void {
+	pool = p;
+}
+
+/** Read the currently registered pool, or `null` when running single-process. */
+export function getEmbedderPool(): PooledEmbedder | null {
+	return pool;
 }
 
 /**
@@ -92,6 +123,9 @@ export async function embed(
 	opts: EmbedOptions = {},
 ): Promise<number[][]> {
 	if (texts.length === 0) return [];
+	if (pool && !opts.directOnly) {
+		return pool.embed(texts, model, opts);
+	}
 	const extractor = await getPipeline(model);
 	const out: number[][] = [];
 	for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
@@ -114,9 +148,13 @@ export async function embed(
 	return out;
 }
 
-/** Embed a single text — convenience wrapper for query-time embedding. */
+/**
+ * Embed a single text — convenience wrapper for query-time embedding. Always
+ * runs in-process (`directOnly: true`) so search latency isn't paying the IPC
+ * round-trip through the worker pool for one vector.
+ */
 export async function embedSingle(text: string, model: string = EMBEDDING_MODEL): Promise<number[]> {
-	const all = await embed([text], model);
+	const all = await embed([text], model, { directOnly: true });
 	const vec = all[0];
 	if (!vec) {
 		throw new HelpfulError({
