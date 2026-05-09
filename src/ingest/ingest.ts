@@ -1,4 +1,5 @@
 import type { AppContext } from "../context.ts";
+import { DEFAULTS } from "../constants.ts";
 import { upsertBlob } from "../db/blobs.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { type FetcherKind, getCurrent, insertVersion, millisIso, type SourceType } from "../db/files.ts";
@@ -287,7 +288,7 @@ async function ingestLocalFiles(
 	// Cap worker count by the actual file count so tiny batches don't pay
 	// the cost of spawning N threads (each loads ~130MB of model weights);
 	// also clamp by config and the global MAX_WORKERS ceiling.
-	const configured = Math.min(8, Math.max(1, ctx.config.ingest.worker_concurrency));
+	const configured = Math.min(DEFAULTS.MAX_WORKERS, Math.max(1, ctx.config.ingest.worker_concurrency));
 	const workerCount = Math.max(1, Math.min(configured, resolved.entries.length));
 	const persistMutex = new AsyncMutex();
 	let anyOk = false;
