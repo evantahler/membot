@@ -92,7 +92,11 @@ export async function ingest(input: IngestInput, ctx: AppContext): Promise<Inges
 	const total = countResolvedEntries(resolved);
 	ctx.progress.start(total, "ingest");
 	const callbacks: IngestCallbacks = {
-		onEntryStart: (label) => ctx.progress.tick(label),
+		// Tick on completion so the bar reflects done-and-persisted entries,
+		// not concurrently-in-flight ones. See the matching comment in
+		// src/operations/add.ts.
+		onEntryStart: (label) => ctx.progress.update(label),
+		onEntryComplete: (entry) => ctx.progress.tick(entry.logical_path),
 	};
 	const result = await ingestResolved(resolved, input, ctx, callbacks);
 	const okCount = result.ok;
@@ -456,22 +460,16 @@ interface PreparedEntry {
  * insert the new (logical_path, version_id) row, and write its chunks.
  * Returns the version_id. The caller is responsible for one rebuildFts
  * after all entries have been persisted.
+ *
+ * The blob+version+chunks writes are wrapped in a single DuckDB transaction
+ * so a typical 30-chunk file does one COMMIT instead of ~32 autocommitted
+ * round-trips. ROLLBACK on failure keeps the row+chunk pair atomic.
  */
 async function persistPrepared(
 	ctx: AppContext,
 	p: PreparedEntry,
 	onPhase: (sublabel: string) => void,
 ): Promise<string> {
-	if (p.bytes) {
-		onPhase("storing blob");
-		await upsertBlob(ctx.db, {
-			sha256: p.sourceSha,
-			mime_type: p.mime,
-			size_bytes: p.bytes.byteLength,
-			bytes: p.bytes,
-		});
-	}
-
 	let embeddings: number[][];
 	try {
 		embeddings = await embed(p.searchTexts, ctx.config.embedding_model, {
@@ -488,39 +486,58 @@ async function persistPrepared(
 	onPhase("persisting");
 	const versionId = millisIso(Date.now());
 	const contentSha = sha256Hex(new TextEncoder().encode(p.markdown));
-	await insertVersion(ctx.db, {
-		logical_path: p.logicalPath,
-		version_id: versionId,
-		source_type: p.sourceType,
-		source_path: p.sourcePath,
-		source_mtime_ms: p.sourceMtimeMs,
-		source_sha256: p.sourceSha,
-		blob_sha256: p.blobSha,
-		content_sha256: contentSha,
-		content: p.markdown,
-		description: p.description,
-		mime_type: p.mime,
-		size_bytes: p.bytes?.byteLength ?? new TextEncoder().encode(p.markdown).byteLength,
-		fetcher: p.fetcher,
-		downloader: p.downloader,
-		downloader_args: p.downloaderArgs,
-		refresh_frequency_sec: p.refreshSec,
-		refreshed_at: new Date().toISOString(),
-		last_refresh_status: "ok",
-		change_note: p.changeNote,
-	});
+	await ctx.db.exec("BEGIN TRANSACTION");
+	try {
+		if (p.bytes) {
+			await upsertBlob(ctx.db, {
+				sha256: p.sourceSha,
+				mime_type: p.mime,
+				size_bytes: p.bytes.byteLength,
+				bytes: p.bytes,
+			});
+		}
 
-	await insertChunksForVersion(
-		ctx.db,
-		p.logicalPath,
-		versionId,
-		p.chunks.map((c, i) => ({
-			chunk_index: c.index,
-			chunk_content: c.content,
-			search_text: p.searchTexts[i] ?? buildSearchText(p.logicalPath, p.description, c.content),
-			embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
-		})),
-	);
+		await insertVersion(ctx.db, {
+			logical_path: p.logicalPath,
+			version_id: versionId,
+			source_type: p.sourceType,
+			source_path: p.sourcePath,
+			source_mtime_ms: p.sourceMtimeMs,
+			source_sha256: p.sourceSha,
+			blob_sha256: p.blobSha,
+			content_sha256: contentSha,
+			content: p.markdown,
+			description: p.description,
+			mime_type: p.mime,
+			size_bytes: p.bytes?.byteLength ?? new TextEncoder().encode(p.markdown).byteLength,
+			fetcher: p.fetcher,
+			downloader: p.downloader,
+			downloader_args: p.downloaderArgs,
+			refresh_frequency_sec: p.refreshSec,
+			refreshed_at: new Date().toISOString(),
+			last_refresh_status: "ok",
+			change_note: p.changeNote,
+		});
+
+		await insertChunksForVersion(
+			ctx.db,
+			p.logicalPath,
+			versionId,
+			p.chunks.map((c, i) => ({
+				chunk_index: c.index,
+				chunk_content: c.content,
+				search_text: p.searchTexts[i] ?? buildSearchText(p.logicalPath, p.description, c.content),
+				embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
+			})),
+		);
+		await ctx.db.exec("COMMIT");
+	} catch (err) {
+		await ctx.db.exec("ROLLBACK").catch(() => {
+			// Best effort — if ROLLBACK itself fails (already aborted, lock
+			// dropped, etc.) we still want the original error to surface.
+		});
+		throw err;
+	}
 	return versionId;
 }
 
@@ -638,39 +655,46 @@ async function persistVersion(
 	onPhase?.("persisting");
 	const versionId = millisIso(Date.now());
 	const contentSha = p.contentSha ?? sha256Hex(new TextEncoder().encode(p.markdown));
-	await insertVersion(ctx.db, {
-		logical_path: p.logicalPath,
-		version_id: versionId,
-		source_type: p.sourceType,
-		source_path: p.sourcePath,
-		source_mtime_ms: p.sourceMtimeMs,
-		source_sha256: p.sourceSha,
-		blob_sha256: p.blobSha,
-		content_sha256: contentSha,
-		content: p.markdown,
-		description,
-		mime_type: p.mime,
-		size_bytes: p.bytes?.byteLength ?? new TextEncoder().encode(p.markdown).byteLength,
-		fetcher: p.fetcher,
-		downloader: p.downloader,
-		downloader_args: p.downloaderArgs,
-		refresh_frequency_sec: p.refreshSec,
-		refreshed_at: new Date().toISOString(),
-		last_refresh_status: "ok",
-		change_note: p.changeNote,
-	});
+	await ctx.db.exec("BEGIN TRANSACTION");
+	try {
+		await insertVersion(ctx.db, {
+			logical_path: p.logicalPath,
+			version_id: versionId,
+			source_type: p.sourceType,
+			source_path: p.sourcePath,
+			source_mtime_ms: p.sourceMtimeMs,
+			source_sha256: p.sourceSha,
+			blob_sha256: p.blobSha,
+			content_sha256: contentSha,
+			content: p.markdown,
+			description,
+			mime_type: p.mime,
+			size_bytes: p.bytes?.byteLength ?? new TextEncoder().encode(p.markdown).byteLength,
+			fetcher: p.fetcher,
+			downloader: p.downloader,
+			downloader_args: p.downloaderArgs,
+			refresh_frequency_sec: p.refreshSec,
+			refreshed_at: new Date().toISOString(),
+			last_refresh_status: "ok",
+			change_note: p.changeNote,
+		});
 
-	await insertChunksForVersion(
-		ctx.db,
-		p.logicalPath,
-		versionId,
-		chunks.map((c, i) => ({
-			chunk_index: c.index,
-			chunk_content: c.content,
-			search_text: searchTexts[i] ?? buildSearchText(p.logicalPath, description, c.content),
-			embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
-		})),
-	);
+		await insertChunksForVersion(
+			ctx.db,
+			p.logicalPath,
+			versionId,
+			chunks.map((c, i) => ({
+				chunk_index: c.index,
+				chunk_content: c.content,
+				search_text: searchTexts[i] ?? buildSearchText(p.logicalPath, description, c.content),
+				embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
+			})),
+		);
+		await ctx.db.exec("COMMIT");
+	} catch (err) {
+		await ctx.db.exec("ROLLBACK").catch(() => {});
+		throw err;
+	}
 	onPhase?.("indexing");
 	await rebuildFts(ctx.db);
 	return versionId;

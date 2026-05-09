@@ -138,8 +138,15 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 
 		ctx.progress.start(total, "ingest");
 		const callbacks: IngestCallbacks = {
-			onEntryStart: (label) => ctx.progress.tick(label),
-			onEntryComplete: (entry) => ctx.progress.entry(formatEntryLine(entry)),
+			// Counter advances on COMPLETION so concurrent prep doesn't race the
+			// bar to 100% before any file is fully persisted. In-flight visibility
+			// flows through `update`, which sets the spinner suffix without
+			// touching the count.
+			onEntryStart: (label) => ctx.progress.update(label),
+			onEntryComplete: (entry) => {
+				ctx.progress.tick(entry.logical_path);
+				ctx.progress.entry(formatEntryLine(entry));
+			},
 			onEntryProgress: (_label, sublabel) => ctx.progress.update(sublabel),
 		};
 
