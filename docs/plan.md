@@ -36,6 +36,15 @@ on-disk tree of stored content.
   conversion is the last-resort fallback. Missing
   `ANTHROPIC_API_KEY` is not a hard error — degrades to deterministic
   surrogates.
+- **Embedded images become inline captions.** DOCX and HTML conversion
+  intercept embedded images (mammoth's `convertImage` callback;
+  `<img src="data:…">` extraction for HTML), keep their bytes out of
+  the markdown body, and run each one through `convertImage` (Claude
+  vision + Tesseract OCR). The caption is spliced back in place of the
+  original image reference as its own paragraph block, so embedded
+  diagrams/screenshots become real searchable text instead of megabytes
+  of base64 noise. `converters.max_inline_image_captions` (default 20)
+  caps the per-document fan-out.
 - **Bun-compiled standalone binaries** for darwin/linux/windows ×
   arm64/x64. Runtime must not require Bun installed.
 - **Stdio + HTTP MCP server** exposing every operation as a tool, plus
@@ -238,6 +247,7 @@ or when `CI=true`.
   "embedding_model": "Xenova/bge-small-en-v1.5",
   "embedding_dimension": 384,
   "chunker": { "mode": "deterministic", "target_chars": 4000, "max_chars": 15000 },
+  "converters": { "max_inline_image_captions": 20 },         // per-doc cap on vision captions for embedded images
   "llm": {
     "anthropic_api_key": "",                                  // env: ANTHROPIC_API_KEY
     "converter_model": "claude-haiku-4-5-20251001",

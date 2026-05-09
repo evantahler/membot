@@ -221,7 +221,7 @@ async function runPipelineForRefresh(
 	});
 
 	onPhase?.("converting");
-	const conversion = await convert(p.bytes, p.mime, p.source, ctx.config.llm);
+	const conversion = await convert(p.bytes, p.mime, p.source, ctx.config.llm, ctx.config.converters);
 	const markdown = conversion.markdown;
 	onPhase?.("describing");
 	const description = await describe(p.logicalPath, p.mime, markdown, ctx.config.llm);
