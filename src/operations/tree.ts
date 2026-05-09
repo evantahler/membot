@@ -18,7 +18,7 @@ export const treeOperation = defineOperation({
 	description: `Render the logical-path tree of the current store. Tree is synthesised from "/" segments in logical_path — there are no real directories. Tombstoned and historical versions are hidden. Use this before membot_add to pick a sensible logical path.`,
 	inputSchema: z.object({
 		prefix: z.string().optional().describe("Only show paths starting with this prefix"),
-		max_depth: z.number().default(4).describe("How many path segments deep to render"),
+		max_depth: z.number().default(6).describe("How many path segments deep to render"),
 		max_items: z
 			.number()
 			.default(20)

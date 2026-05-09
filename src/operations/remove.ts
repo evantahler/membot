@@ -10,13 +10,19 @@ export const removeOperation = defineOperation({
 	name: "membot_delete",
 	cliName: "rm",
 	bashEquivalent: "rm",
-	description: `Tombstone one or more logical_paths so they no longer appear in membot_list / membot_tree / membot_search. Each \`paths\` arg is independently treated as either a literal logical_path or a glob pattern (e.g. "docs/**/*.md"); globs are matched against current logical_paths in the DB, not the filesystem. The union of matches is deduplicated, then tombstoned one at a time — partial failures are reported per-entry without aborting the rest. An input arg that matches zero current files is an error (the response includes which arg). Old versions remain queryable via membot_versions and membot_read with an explicit version. Use membot_prune to permanently drop history.`,
+	description: `Tombstone one or more logical_paths so they no longer appear in membot_list / membot_tree / membot_search. Each \`paths\` arg is independently treated as either a literal logical_path or a glob pattern (e.g. "docs/**/*.md"); globs are matched against current logical_paths in the DB, not the filesystem. A literal arg that matches no exact file but is a prefix of existing paths (a "directory") is rejected unless \`recursive\` is true, in which case every path beneath it is tombstoned. The union of matches is deduplicated, then tombstoned one at a time — partial failures are reported per-entry without aborting the rest. An input arg that matches zero current files is an error (the response includes which arg). Old versions remain queryable via membot_versions and membot_read with an explicit version. Use membot_prune to permanently drop history.`,
 	inputSchema: z.object({
 		paths: z
 			.array(z.string())
 			.min(1)
 			.describe(
 				'One or more logical_paths or glob patterns (e.g. "docs/**/*.md"). Each arg is matched independently against current logical_paths in the DB.',
+			),
+		recursive: z
+			.boolean()
+			.default(false)
+			.describe(
+				"If a literal path arg matches no file but is a prefix of existing paths, treat it as a directory and remove everything beneath it. Mirrors `rm -r`. Ignored for glob args.",
 			),
 		change_note: z.string().optional().describe("Why this is being deleted"),
 	}),
@@ -33,7 +39,7 @@ export const removeOperation = defineOperation({
 		ok: z.number(),
 		failed: z.number(),
 	}),
-	cli: { positional: ["paths"], aliases: { change_note: "-m" } },
+	cli: { positional: ["paths"], aliases: { change_note: "-m", recursive: "-r" } },
 	console_formatter: (result) => {
 		const lines = result.removed.map((e) =>
 			e.status === "ok"
@@ -59,6 +65,21 @@ export const removeOperation = defineOperation({
 				}
 			} else if (currentSet.has(arg)) {
 				matches.push(arg);
+			} else {
+				const normalized = arg.endsWith("/") ? arg.slice(0, -1) : arg;
+				const dirPrefix = `${normalized}/`;
+				const dirMatches = currentPaths.filter((p) => p.startsWith(dirPrefix));
+				if (dirMatches.length > 0) {
+					if (input.recursive) {
+						matches.push(...dirMatches);
+					} else {
+						throw new HelpfulError({
+							kind: "not_found",
+							message: `\`${arg}\` is a directory (${dirMatches.length} files); pass --recursive to remove its contents`,
+							hint: `Re-run with \`-r\` / \`--recursive\` to tombstone every path under \`${normalized}/\`.`,
+						});
+					}
+				}
 			}
 			if (matches.length === 0) {
 				throw new HelpfulError({

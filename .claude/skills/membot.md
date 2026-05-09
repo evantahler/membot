@@ -77,6 +77,7 @@ membot refresh                         # refresh all rows whose schedule has ela
 membot mv old/path new/path            # rename (history preserved under both)
 membot rm <paths...>                   # tombstone one or more paths/globs (history still queryable)
 membot rm "docs/**/*.md" notes/old.md  # globs match logical_paths in the DB; literals + globs can mix
+membot rm -r remotes/docs.google.com   # --recursive removes every path under a directory prefix
 membot prune --before <iso-ts>         # drop non-current versions older than cutoff (irreversible)
 ```
 
@@ -120,7 +121,7 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 | `membot versions <path>`              | List every version newest-first with version_id and change notes               |
 | `membot diff <path> --a <ts>`         | Unified diff between two versions                                              |
 | `membot mv <old> <new>`               | Rename a logical_path (history preserved)                                      |
-| `membot rm <paths...>`                | Tombstone one or more logical_paths or globs (e.g. `"docs/**/*.md"`); history kept |
+| `membot rm <paths...>`                | Tombstone one or more logical_paths or globs (e.g. `"docs/**/*.md"`); pass `-r` / `--recursive` to remove a directory prefix; history kept |
 | `membot refresh [path]`               | Re-read source; create new version only if bytes changed                       |
 | `membot prune --before <ts>`          | Permanently drop non-current versions older than cutoff (irreversible)         |
 | `membot serve`                        | Start MCP server (stdio default, `--http <port>` for HTTP)                     |

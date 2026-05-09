@@ -59,7 +59,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot diff <path> <a> [b]`    | Unified diff between two versions                                                 |
 | `membot write <path>`           | Write inline agent-authored markdown as a new version                             |
 | `membot mv <from> <to>`         | Rename a logical_path (history preserved under both)                              |
-| `membot rm <paths...>`          | Tombstone one or more logical_paths or globs (e.g. `"docs/**/*.md"`); history kept |
+| `membot rm <paths...>`          | Tombstone one or more logical_paths or globs (e.g. `"docs/**/*.md"`); pass `-r` / `--recursive` to remove a directory prefix; history kept |
 | `membot refresh [path]`         | Re-read source; new version only if bytes changed                                 |
 | `membot prune --before <ts>`    | Permanently drop non-current versions older than cutoff (irreversible)            |
 | `membot serve`                  | Run the MCP server (stdio default; `--http <port>` for HTTP)                      |
