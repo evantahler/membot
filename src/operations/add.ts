@@ -138,6 +138,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 		const callbacks: IngestCallbacks = {
 			onEntryStart: (label) => ctx.progress.tick(label),
 			onEntryComplete: (entry) => ctx.progress.entry(formatEntryLine(entry)),
+			onEntryProgress: (_label, sublabel) => ctx.progress.update(sublabel),
 		};
 
 		for (const outcome of outcomes) {

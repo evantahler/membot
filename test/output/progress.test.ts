@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { logger, type Spinner } from "../../src/output/logger.ts";
 import { createProgress, renderBar } from "../../src/output/progress.ts";
 import { getMode, type OutputMode, setMode } from "../../src/output/tty.ts";
 
@@ -107,5 +108,51 @@ describe("createProgress", () => {
 			cap.restore();
 		}
 		expect(cap.chunks.join("")).toBe("");
+	});
+
+	test("update is a no-op in non-interactive mode", () => {
+		setMode({ interactive: false, color: false, json: false, verbose: false, silent: false });
+		const cap = captureStderr();
+		try {
+			const p = createProgress();
+			p.start(2, "ingest");
+			p.tick("file.md");
+			const before = cap.chunks.length;
+			p.update("embedding 16/64");
+			p.update("embedding 32/64");
+			expect(cap.chunks.length).toBe(before);
+		} finally {
+			cap.restore();
+		}
+	});
+
+	test("update re-renders the spinner with the last tick label and a suffix", () => {
+		setMode({ interactive: true, color: false, json: false, verbose: false, silent: false });
+		const updates: string[] = [];
+		const fakeSpinner: Spinner = {
+			update: (t) => updates.push(t),
+			success: () => {},
+			error: () => {},
+			stop: () => {},
+		};
+		const original = logger.startSpinner.bind(logger);
+		logger.startSpinner = ((text: string) => {
+			updates.push(text);
+			return fakeSpinner;
+		}) as typeof logger.startSpinner;
+		try {
+			const p = createProgress();
+			p.start(3, "ingest");
+			p.tick("path/to/file.md");
+			updates.length = 0;
+			p.update("embedding 32/168");
+			expect(updates.length).toBe(1);
+			const text = updates[0] ?? "";
+			expect(text).toContain("path/to/file.md");
+			expect(text).toContain("embedding 32/168");
+			expect(text).toContain("1/3");
+		} finally {
+			logger.startSpinner = original;
+		}
 	});
 });

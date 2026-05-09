@@ -24,9 +24,16 @@ export interface RefreshOutcome {
  * via the persisted mcpx invocation), and creates a new version only if
  * the source bytes changed. Always updates `refreshed_at` and
  * `last_refresh_status` on the row. Returns a per-path outcome — never
- * throws unless the path doesn't exist.
+ * throws unless the path doesn't exist. The optional `onEmbedProgress`
+ * callback is forwarded to the embedder so interactive callers (e.g. the
+ * `refresh` operation) can drive a spinner during the slow phase.
  */
-export async function refreshOne(ctx: AppContext, logicalPath: string, force = false): Promise<RefreshOutcome> {
+export async function refreshOne(
+	ctx: AppContext,
+	logicalPath: string,
+	force = false,
+	onEmbedProgress?: (done: number, total: number) => void,
+): Promise<RefreshOutcome> {
 	const cur = await getCurrent(ctx.db, logicalPath);
 	if (!cur) {
 		throw new HelpfulError({
@@ -42,10 +49,10 @@ export async function refreshOne(ctx: AppContext, logicalPath: string, force = f
 
 	try {
 		if (cur.source_type === "local") {
-			return await refreshLocal(ctx, cur, force);
+			return await refreshLocal(ctx, cur, force, onEmbedProgress);
 		}
 		if (cur.source_type === "remote") {
-			return await refreshRemote(ctx, cur, force);
+			return await refreshRemote(ctx, cur, force, onEmbedProgress);
 		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
@@ -74,7 +81,12 @@ interface CurrentRow {
 }
 
 /** Local-file refresh: stat-then-sha gate before re-running the pipeline. */
-async function refreshLocal(ctx: AppContext, cur: CurrentRow, force: boolean): Promise<RefreshOutcome> {
+async function refreshLocal(
+	ctx: AppContext,
+	cur: CurrentRow,
+	force: boolean,
+	onEmbedProgress?: (done: number, total: number) => void,
+): Promise<RefreshOutcome> {
 	if (!cur.source_path) {
 		throw new HelpfulError({
 			kind: "input_error",
@@ -92,26 +104,35 @@ async function refreshLocal(ctx: AppContext, cur: CurrentRow, force: boolean): P
 		return { logical_path: cur.logical_path, status: "unchanged" };
 	}
 
-	const versionId = await runPipelineForRefresh(ctx, {
-		logicalPath: cur.logical_path,
-		bytes: local.bytes,
-		mime: local.mimeType,
-		source: cur.source_path,
-		sourceType: "local",
-		sourcePath: cur.source_path,
-		sourceMtimeMs: local.mtimeMs,
-		sourceSha: local.sha256,
-		fetcher: "local",
-		fetcherServer: null,
-		fetcherTool: null,
-		fetcherArgs: null,
-		refreshSec: cur.refresh_frequency_sec,
-	});
+	const versionId = await runPipelineForRefresh(
+		ctx,
+		{
+			logicalPath: cur.logical_path,
+			bytes: local.bytes,
+			mime: local.mimeType,
+			source: cur.source_path,
+			sourceType: "local",
+			sourcePath: cur.source_path,
+			sourceMtimeMs: local.mtimeMs,
+			sourceSha: local.sha256,
+			fetcher: "local",
+			fetcherServer: null,
+			fetcherTool: null,
+			fetcherArgs: null,
+			refreshSec: cur.refresh_frequency_sec,
+		},
+		onEmbedProgress,
+	);
 	return { logical_path: cur.logical_path, status: "ok", new_version_id: versionId };
 }
 
 /** Remote refresh: replay the persisted mcpx invocation, or plain HTTP. */
-async function refreshRemote(ctx: AppContext, cur: CurrentRow, force: boolean): Promise<RefreshOutcome> {
+async function refreshRemote(
+	ctx: AppContext,
+	cur: CurrentRow,
+	force: boolean,
+	onEmbedProgress?: (done: number, total: number) => void,
+): Promise<RefreshOutcome> {
 	if (!cur.source_path) {
 		throw new HelpfulError({
 			kind: "input_error",
@@ -129,21 +150,25 @@ async function refreshRemote(ctx: AppContext, cur: CurrentRow, force: boolean): 
 		return { logical_path: cur.logical_path, status: "unchanged" };
 	}
 
-	const versionId = await runPipelineForRefresh(ctx, {
-		logicalPath: cur.logical_path,
-		bytes: fetched.bytes,
-		mime: fetched.mimeType,
-		source: cur.source_path,
-		sourceType: "remote",
-		sourcePath: cur.source_path,
-		sourceMtimeMs: null,
-		sourceSha: fetched.sha256,
-		fetcher: cur.fetcher === "mcpx" ? "mcpx" : "http",
-		fetcherServer: fetched.fetcherServer,
-		fetcherTool: fetched.fetcherTool,
-		fetcherArgs: fetched.fetcherArgs,
-		refreshSec: cur.refresh_frequency_sec,
-	});
+	const versionId = await runPipelineForRefresh(
+		ctx,
+		{
+			logicalPath: cur.logical_path,
+			bytes: fetched.bytes,
+			mime: fetched.mimeType,
+			source: cur.source_path,
+			sourceType: "remote",
+			sourcePath: cur.source_path,
+			sourceMtimeMs: null,
+			sourceSha: fetched.sha256,
+			fetcher: cur.fetcher === "mcpx" ? "mcpx" : "http",
+			fetcherServer: fetched.fetcherServer,
+			fetcherTool: fetched.fetcherTool,
+			fetcherArgs: fetched.fetcherArgs,
+			refreshSec: cur.refresh_frequency_sec,
+		},
+		onEmbedProgress,
+	);
 	return { logical_path: cur.logical_path, status: "ok", new_version_id: versionId };
 }
 
@@ -245,7 +270,11 @@ interface PipelineParams {
  * fields (`change_note='refresh: source updated'`) aren't accidentally
  * applied to first-time ingests.
  */
-async function runPipelineForRefresh(ctx: AppContext, p: PipelineParams): Promise<string> {
+async function runPipelineForRefresh(
+	ctx: AppContext,
+	p: PipelineParams,
+	onEmbedProgress?: (done: number, total: number) => void,
+): Promise<string> {
 	await upsertBlob(ctx.db, {
 		sha256: p.sourceSha,
 		mime_type: p.mime,
@@ -258,7 +287,7 @@ async function runPipelineForRefresh(ctx: AppContext, p: PipelineParams): Promis
 	const description = await describe(p.logicalPath, p.mime, markdown, ctx.config.llm);
 	const chunks = chunkDeterministic(markdown, ctx.config.chunker);
 	const searchTexts = chunks.map((c) => buildSearchText(p.logicalPath, description, c.content));
-	const embeddings = await embed(searchTexts, ctx.config.embedding_model);
+	const embeddings = await embed(searchTexts, ctx.config.embedding_model, { onProgress: onEmbedProgress });
 
 	const versionId = millisIso(Date.now());
 	const contentSha = sha256Hex(new TextEncoder().encode(markdown));

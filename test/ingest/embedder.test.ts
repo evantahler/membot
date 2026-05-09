@@ -32,6 +32,23 @@ describe("embed", () => {
 		for (let i = 0; i < single.length; i++) dot += (batched[i] as number) * (single[i] as number);
 		expect(dot).toBeGreaterThan(0.99);
 	}, 120_000);
+
+	test("onProgress fires once per batch with monotonic counts ending at total", async () => {
+		const n = EMBEDDING_BATCH_SIZE * 2 + 5;
+		const texts = Array.from({ length: n }, (_, i) => `progress text ${i}`);
+		const calls: Array<[number, number]> = [];
+		await embed(texts, undefined, { onProgress: (done, total) => calls.push([done, total]) });
+		const expectedBatches = Math.ceil(n / EMBEDDING_BATCH_SIZE);
+		expect(calls.length).toBe(expectedBatches);
+		for (const [done, total] of calls) {
+			expect(total).toBe(n);
+			expect(done).toBeLessThanOrEqual(n);
+		}
+		for (let i = 1; i < calls.length; i++) {
+			expect(calls[i]?.[0]).toBeGreaterThan(calls[i - 1]?.[0] ?? 0);
+		}
+		expect(calls.at(-1)?.[0]).toBe(n);
+	}, 120_000);
 });
 
 describe("embedSingle", () => {
