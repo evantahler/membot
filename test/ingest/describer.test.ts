@@ -23,7 +23,7 @@ describe("tryTitleDescription", () => {
 	});
 
 	test("application/json is treated as textual", () => {
-		const out = tryTitleDescription("application/json", "# Config schema\n\n{\"a\": 1}");
+		const out = tryTitleDescription("application/json", '# Config schema\n\n{"a": 1}');
 		expect(out).toContain("Config schema");
 	});
 

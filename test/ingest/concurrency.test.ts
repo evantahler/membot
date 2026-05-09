@@ -13,12 +13,16 @@ describe("pMap", () => {
 	test("respects the concurrency cap", async () => {
 		let inFlight = 0;
 		let maxInFlight = 0;
-		await pMap(Array.from({ length: 20 }, (_, i) => i), 4, async () => {
-			inFlight += 1;
-			maxInFlight = Math.max(maxInFlight, inFlight);
-			await new Promise((r) => setTimeout(r, 5));
-			inFlight -= 1;
-		});
+		await pMap(
+			Array.from({ length: 20 }, (_, i) => i),
+			4,
+			async () => {
+				inFlight += 1;
+				maxInFlight = Math.max(maxInFlight, inFlight);
+				await new Promise((r) => setTimeout(r, 5));
+				inFlight -= 1;
+			},
+		);
 		expect(maxInFlight).toBeGreaterThan(1);
 		expect(maxInFlight).toBeLessThanOrEqual(4);
 	});

@@ -14,10 +14,17 @@ function captureStderr(): { chunks: string[]; restore: () => void } {
 		chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
 		return true;
 	};
+	// Force a wide terminal so the live area's clipToWidth doesn't truncate
+	// the test fixture text. CI runners default to 80 columns, which is too
+	// narrow for the bar + counts + ETA + label + suffix fixture lines.
+	const originalColumns = process.stderr.columns;
+	const cols = process.stderr as unknown as { columns: number };
+	cols.columns = 200;
 	return {
 		chunks,
 		restore: () => {
 			stream.write = original;
+			cols.columns = originalColumns;
 		},
 	};
 }
