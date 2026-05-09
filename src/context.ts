@@ -27,12 +27,21 @@ export interface BuildContextOptions {
 }
 
 /**
- * Resolve `config.embedding.workers` to a concrete worker count. `null`
- * (the schema default) means "auto" → `max(1, cpus()-1)`. The minus-one
- * leaves a core for the parent process (DB writes, IO, the spinner).
+ * Resolve `config.embedding.workers` to a concrete worker count. Precedence:
+ *   1. An explicit numeric value in the config wins (user opt-in).
+ *   2. `MEMBOT_EMBEDDING_WORKERS` env var, if set to a positive integer.
+ *      The test harness sets this to `1` so unit tests doing tiny writes
+ *      don't pay the per-pool subprocess-spawn cost on slow CI runners.
+ *   3. Otherwise `null`/missing → `max(1, cpus()-1)`. The minus-one leaves
+ *      a core for the parent process (DB writes, IO, the spinner).
  */
 export function resolveEmbeddingWorkers(configured: number | null | undefined): number {
 	if (typeof configured === "number" && configured >= 1) return configured;
+	const envOverride = process.env.MEMBOT_EMBEDDING_WORKERS;
+	if (envOverride) {
+		const n = Number(envOverride);
+		if (Number.isFinite(n) && n >= 1) return Math.floor(n);
+	}
 	return Math.max(1, cpus().length - 1);
 }
 
