@@ -10,6 +10,7 @@
 - **Local everything** — embeddings run on your machine; data lives in `~/.membot/index.duckdb`.
 - **One mental model** — every artifact (markdown, PDF, image, audio) becomes a markdown surrogate that flows through the same chunk → embed → search pipeline.
 - **Append-only versioning** — every ingest, refresh, or write creates a new `(logical_path, version_id)` row. History is queryable; nothing is mutated.
+- **Parallel ingest** — directory/glob ingests run a worker pool (default `cpus - 1`, max 8) with a `Bun.Worker` per slot for the WASM embed step, so a `~/notes/**/*.md` import actually uses your cores. The TTY shows one status line per active worker plus an ETA and a running chunk total.
 - **Two surfaces, one source of truth** — every operation is exposed identically as a CLI subcommand and an MCP tool. The agent sees `membot_search`; you see `membot search`.
 
 ## Install
@@ -137,6 +138,8 @@ Add `--watch` (and optional `--tick <sec>`) to also run the refresh daemon, whic
   membot config set llm.anthropic_api_key sk-ant-...            # enable LLM-fallback paths
   membot config set chunker.target_chars 800                    # tweak any nested value
   membot config set converters.max_inline_image_captions 50     # raise per-doc cap on vision captions for embedded images
+  membot config set ingest.worker_concurrency 4                 # cap parallel ingest workers (default: cpus-1, max 8)
+  membot config set llm.describer_skip_when_titled false        # always LLM-describe (default true skips when markdown has a clear H1)
   membot config get llm.anthropic_api_key --show-secrets        # reveal the masked key
   membot config unset chunker.target_chars                      # back to schema default
   membot config path                                            # print the absolute config path

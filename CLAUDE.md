@@ -51,6 +51,8 @@ membot_refresh ──► re-read source ──► sha256 compare
                           (status only)        (creates new version_id)
 ```
 
+For directory/glob ingests, the pipeline runs concurrently inside a worker pool. Each pMap worker owns one file end-to-end (read → unchanged check → convert → describe → chunk → embed → persist); persist is gated by an AsyncMutex because all workers share one DuckDB connection and DuckDB rejects nested BEGINs. The embed step is offloaded to a `Bun.Worker` pool — each worker hosts its own transformers ONNX session in a separate OS thread, giving real parallelism on the CPU-bound WASM step. Worker count defaults to `cpus - 1`, capped at `MAX_WORKERS = 8`, and is further clamped by entry count so a 3-file batch doesn't spawn 8 threads. One `rebuildFts` runs after the pool drains. The TTY shows a multi-line spinner: top line = bar + counts + ETA + cumulative chunks; below = one row per active worker showing `path — current step`.
+
 The downloader registry maps URLs to a tactic:
 
 | Service | Match | Strategy | Auth |
@@ -86,7 +88,7 @@ src/
   commands/             # CLI-only commands with no MCP equivalent (serve, reindex, login)
   config/               # zod schema + loader (~/.membot/config.json)
   db/                   # DuckDB connection, migrations, files.ts, chunks.ts
-  ingest/               # source-resolver (file/dir/glob/url/inline), local-reader, fetcher, chunker, embedder, describer, search-text, converter/ (pdf/docx/html/image/text/ocr/llm), downloaders/ (per-service: google-docs/sheets/slides, github, linear, generic-web)
+  ingest/               # source-resolver (file/dir/glob/url/inline), local-reader, fetcher, chunker, embedder, describer, search-text, concurrency (pMap + AsyncMutex), embed-pool / embed-worker (Bun.Worker pool for parallel embed), converter/ (pdf/docx/html/image/text/ocr/llm), downloaders/ (per-service: google-docs/sheets/slides, github, linear, generic-web)
   search/               # semantic.ts, keyword.ts, hybrid.ts (RRF)
   refresh/              # runner.ts (per-row), scheduler.ts (daemon)
   mcp/                  # server.ts, instructions.ts
