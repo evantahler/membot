@@ -6,6 +6,7 @@ import { convertWithLlm } from "./llm.ts";
 import { ocrImage } from "./ocr.ts";
 import { convertPdf, shouldOcrPdf } from "./pdf.ts";
 import { convertText } from "./text.ts";
+import { convertXlsx } from "./xlsx.ts";
 
 export interface ConvertResult {
 	markdown: string;
@@ -25,6 +26,10 @@ const STRUCTURED_TEXT_MIMES = new Set([
 	"application/typescript",
 ]);
 const DOCX_MIMES = new Set(["application/vnd.openxmlformats-officedocument.wordprocessingml.document"]);
+const XLSX_MIMES = new Set([
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	"application/vnd.ms-excel",
+]);
 const PDF_MIMES = new Set(["application/pdf"]);
 
 /**
@@ -52,6 +57,10 @@ export async function convert(
 
 	if (DOCX_MIMES.has(mt)) {
 		return { markdown: await convertDocx(bytes), contentMimeType: "text/markdown" };
+	}
+
+	if (XLSX_MIMES.has(mt)) {
+		return { markdown: convertXlsx(bytes), contentMimeType: "text/markdown" };
 	}
 
 	if (PDF_MIMES.has(mt)) {
