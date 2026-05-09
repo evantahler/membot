@@ -32,6 +32,11 @@ export interface FetchOptions {
 	 * mcpx path is skipped and we fall back to plain HTTP.
 	 */
 	llm?: LlmConfig;
+	/**
+	 * Forwarded to the agent loop so callers (e.g. the ingest progress
+	 * reporter) can drive a spinner sublabel from per-turn agent activity.
+	 */
+	onProgress?: (sublabel: string) => void;
 }
 
 /**
@@ -79,7 +84,7 @@ export async function fetchRemote(url: string, options: FetchOptions = {}): Prom
 
 	let outcome: Awaited<ReturnType<typeof agentFetch>>;
 	try {
-		outcome = await agentFetch({ url, mcpx, llm: options.llm!, hint });
+		outcome = await agentFetch({ url, mcpx, llm: options.llm!, hint, onProgress: options.onProgress });
 	} catch (err) {
 		if (err instanceof HelpfulError) throw err;
 		logger.warn(`agent-fetch failed (${err instanceof Error ? err.message : String(err)}) — falling back to HTTP`);
@@ -98,7 +103,7 @@ export async function fetchRemote(url: string, options: FetchOptions = {}): Prom
 			sourceUrl: url,
 		};
 	}
-	logger.debug(`agent-fetch fell back to HTTP: ${outcome.reason}`);
+	logger.info(`[fetcher] falling back to HTTP: ${outcome.reason}`);
 	return httpFetch(url);
 }
 

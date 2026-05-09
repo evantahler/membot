@@ -237,6 +237,7 @@ async function ingestUrl(
 			hint: input.fetcher_hint,
 			mcpx: mcpxAdapter,
 			llm: ctx.config.llm,
+			onProgress: (sublabel) => callbacks?.onEntryProgress?.(url, sublabel),
 		});
 		result.mime_type = fetched.mimeType;
 		result.size_bytes = fetched.bytes.byteLength;

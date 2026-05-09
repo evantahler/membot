@@ -58,6 +58,13 @@ export interface AgentFetchOptions {
 	mcpx: AgentMcpxAdapter;
 	llm: LlmConfig;
 	hint?: string;
+	/**
+	 * Optional sublabel callback. Receives compact, human-readable strings
+	 * describing what the agent is doing each turn (e.g. "mcp_exec
+	 * linear/list_comments (turn 2)"). Wired to the spinner suffix in TTY
+	 * mode so users see live progress without `--verbose`.
+	 */
+	onProgress?: (sublabel: string) => void;
 	/** Test seam: inject a pre-built Anthropic client. */
 	_testClient?: Anthropic;
 }
@@ -238,7 +245,14 @@ export async function agentFetch(opts: AgentFetchOptions): Promise<AgentFetchOut
 
 	const captured = new Map<string, CapturedExec>();
 
+	opts.onProgress?.(`fetching via mcpx agent (turn 1)`);
+
 	for (let turn = 0; turn < MAX_TURNS; turn++) {
+		if (turn > 0) {
+			logger.info(`[fetcher] turn ${turn + 1}/${MAX_TURNS}`);
+			opts.onProgress?.(`fetching via mcpx agent (turn ${turn + 1})`);
+		}
+
 		const response = await client.messages.create({
 			model: opts.llm.converter_model,
 			max_tokens: MAX_RESPONSE_TOKENS,
@@ -249,7 +263,7 @@ export async function agentFetch(opts: AgentFetchOptions): Promise<AgentFetchOut
 
 		for (const block of response.content) {
 			if (block.type === "text" && block.text.trim()) {
-				logger.debug(`agent-fetch turn ${turn + 1}: ${block.text.trim()}`);
+				logger.debug(`[fetcher] turn ${turn + 1} reasoning: ${block.text.trim()}`);
 			}
 		}
 
@@ -263,11 +277,18 @@ export async function agentFetch(opts: AgentFetchOptions): Promise<AgentFetchOut
 
 		const toolUseBlocks = response.content.filter((b): b is ToolUseBlock => b.type === "tool_use");
 		if (toolUseBlocks.length === 0) {
-			logger.debug(`agent-fetch turn ${turn + 1}: no tool calls — falling back to HTTP`);
+			logger.info(`[fetcher] turn ${turn + 1}: no tool calls — falling back to HTTP`);
 			return { kind: "fallback", reason: "agent stopped without selecting an outcome" };
 		}
 
 		messages.push({ role: "assistant", content: response.content });
+
+		// Log selected tools at info-level so users see what the agent is doing
+		// without enabling --verbose. Discovery (search/info/list) stays quiet
+		// at info; the actual mcp_exec calls are the high-signal events.
+		for (const tu of toolUseBlocks) {
+			logToolSelection(tu, turn + 1, opts.onProgress);
+		}
 
 		// Terminal tools — checked in priority order.
 		const failureCall = toolUseBlocks.find((b) => b.name === "report_failure");
@@ -277,6 +298,7 @@ export async function agentFetch(opts: AgentFetchOptions): Promise<AgentFetchOut
 				typeof input.message === "string" && input.message.trim()
 					? input.message.trim()
 					: "Fetch failed but the agent did not provide a message.";
+			logger.info(`[fetcher] turn ${turn + 1}: report_failure: ${message}`);
 			throw new HelpfulError({
 				kind: "input_error",
 				message: `Fetcher agent reported failure for ${opts.url}: ${message}`,
@@ -286,7 +308,7 @@ export async function agentFetch(opts: AgentFetchOptions): Promise<AgentFetchOut
 
 		const fallbackCall = toolUseBlocks.find((b) => b.name === "request_http_fallback");
 		if (fallbackCall) {
-			logger.debug(`agent-fetch turn ${turn + 1}: agent requested HTTP fallback`);
+			logger.info(`[fetcher] turn ${turn + 1}: agent requested HTTP fallback`);
 			return { kind: "fallback", reason: "agent requested HTTP fallback" };
 		}
 
@@ -325,6 +347,10 @@ export async function agentFetch(opts: AgentFetchOptions): Promise<AgentFetchOut
 			}
 			const claimedMime = (input.mime_type ?? cached.mimeType ?? "text/markdown").trim() || "text/markdown";
 			const bytes = new TextEncoder().encode(cached.content);
+			logger.info(`[fetcher] accepted: ${cached.server}/${cached.tool} (${bytes.byteLength} bytes, ${claimedMime})`);
+			logger.debug(`[fetcher] accepted args: ${truncateJson(cached.args, 500)}`);
+			logger.debug(`[fetcher] accepted preview: ${truncate(cached.content, 200)}`);
+			opts.onProgress?.(`accepted ${cached.server}/${cached.tool}`);
 			return {
 				kind: "accepted",
 				result: {
@@ -347,8 +373,50 @@ export async function agentFetch(opts: AgentFetchOptions): Promise<AgentFetchOut
 		messages.push({ role: "user", content: toolResults });
 	}
 
-	logger.debug(`agent-fetch: max turns (${MAX_TURNS}) exceeded — falling back to HTTP`);
+	logger.info(`[fetcher] max turns (${MAX_TURNS}) exceeded — falling back to HTTP`);
 	return { kind: "fallback", reason: `agent exceeded MAX_TURNS=${MAX_TURNS}` };
+}
+
+/**
+ * Emit a per-turn line about which tool the agent is about to invoke. mcp_exec
+ * is the high-signal event that surfaces *which provider was chosen*, so it
+ * goes to info; discovery (search / list / info) stays at debug.
+ */
+function logToolSelection(tu: ToolUseBlock, turn: number, onProgress?: (s: string) => void): void {
+	if (tu.name === "mcp_exec") {
+		const i = tu.input as Partial<{ server: string; tool: string; args: Record<string, unknown> }>;
+		const server = i.server ?? "?";
+		const tool = i.tool ?? "?";
+		logger.info(`[fetcher] turn ${turn}: mcp_exec ${server}/${tool}`);
+		logger.debug(`[fetcher] turn ${turn}: mcp_exec args: ${truncateJson(i.args ?? {}, 500)}`);
+		onProgress?.(`mcp_exec ${server}/${tool} (turn ${turn})`);
+	} else if (tu.name === "mcp_search") {
+		const i = tu.input as Partial<{ query: string }>;
+		logger.debug(`[fetcher] turn ${turn}: mcp_search "${i.query ?? ""}"`);
+	} else if (tu.name === "mcp_info") {
+		const i = tu.input as Partial<{ server: string; tool: string }>;
+		logger.debug(`[fetcher] turn ${turn}: mcp_info ${i.server ?? "?"}/${i.tool ?? "?"}`);
+	} else if (tu.name === "mcp_list_tools") {
+		const i = tu.input as Partial<{ server: string }>;
+		logger.debug(`[fetcher] turn ${turn}: mcp_list_tools${i.server ? ` ${i.server}` : ""}`);
+	}
+}
+
+/** JSON-stringify with a length cap so a giant args payload doesn't bloat logs. */
+function truncateJson(value: unknown, max: number): string {
+	let s: string;
+	try {
+		s = JSON.stringify(value);
+	} catch {
+		s = String(value);
+	}
+	return s.length > max ? `${s.slice(0, max)}… (+${s.length - max} chars)` : s;
+}
+
+/** Single-line truncation for debug previews; collapses whitespace. */
+function truncate(s: string, max: number): string {
+	const oneLine = s.replace(/\s+/g, " ").trim();
+	return oneLine.length > max ? `${oneLine.slice(0, max)}… (+${oneLine.length - max} chars)` : oneLine;
 }
 
 /** Execute one agent tool call and produce the tool_result block fed back to Claude. */
@@ -392,6 +460,8 @@ async function runMcpSearch(toolUse: ToolUseBlock, mcpx: AgentMcpxAdapter): Prom
 	}
 	try {
 		const results = await mcpx.search(input.query);
+		const top = results.slice(0, 3).map((r) => `${r.server}/${r.tool}${r.score ? ` (${r.score.toFixed(2)})` : ""}`);
+		logger.debug(`[fetcher]   mcp_search "${input.query}" → ${top.length ? top.join(", ") : "(no hits)"}`);
 		return {
 			type: "tool_result",
 			tool_use_id: toolUse.id,
@@ -498,10 +568,12 @@ async function runMcpExec(
 	try {
 		result = await mcpx.exec(input.server, input.tool, args);
 	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		logger.info(`[fetcher]   → ${input.server}/${input.tool} threw: ${truncate(msg, 200)}`);
 		return {
 			type: "tool_result",
 			tool_use_id: toolUse.id,
-			content: `mcp_exec ${input.server}/${input.tool} threw: ${err instanceof Error ? err.message : String(err)}. Use mcp_info to verify the schema, then retry — or pivot to a different tool.`,
+			content: `mcp_exec ${input.server}/${input.tool} threw: ${msg}. Use mcp_info to verify the schema, then retry — or pivot to a different tool.`,
 			is_error: true,
 		};
 	}
@@ -509,6 +581,7 @@ async function runMcpExec(
 	const text = extractText(result);
 
 	if (result.isError === true) {
+		logger.info(`[fetcher]   → ${input.server}/${input.tool} error: ${truncate(text, 200)}`);
 		return {
 			type: "tool_result",
 			tool_use_id: toolUse.id,
@@ -518,6 +591,7 @@ async function runMcpExec(
 	}
 
 	if (!text?.trim()) {
+		logger.info(`[fetcher]   → ${input.server}/${input.tool} empty result`);
 		return {
 			type: "tool_result",
 			tool_use_id: toolUse.id,
@@ -526,6 +600,7 @@ async function runMcpExec(
 		};
 	}
 
+	logger.info(`[fetcher]   → ${input.server}/${input.tool} ok (${text.length} chars)`);
 	captured.set(toolUse.id, { server: input.server, tool: input.tool, args, content: text, mimeType: "text/markdown" });
 	const preview =
 		text.length > PREVIEW_CHARS
