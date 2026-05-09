@@ -15,7 +15,14 @@ if (ortWasm) {
 	};
 }
 
+// Pool keyed by `${model}#${slot}`. Each entry holds one fully-loaded pipeline;
+// callers pass a `slot` (worker id) so concurrent ingest workers each get
+// their own ONNX session and don't serialize on a shared extractor.
 const pipelinePromises = new Map<string, Promise<FeatureExtractionPipeline>>();
+
+function poolKey(model: string, slot: number): string {
+	return `${model}#${slot}`;
+}
 
 /** Configure where transformers caches downloaded model weights. */
 export function setEmbeddingCacheDir(dir: string): void {
@@ -28,9 +35,12 @@ function isModelCached(model: string): boolean {
 }
 
 /**
- * Lazily load (and cache) the feature-extraction pipeline for a model. Loading
- * is expensive (downloads weights on first run, ~100s of ms to instantiate
- * ONNX), so we hold one promise per model name for the life of the process.
+ * Lazily load (and cache) one feature-extraction pipeline per (model, slot).
+ * Loading is expensive (downloads weights on first run, ~100s of ms to
+ * instantiate ONNX), so we hold one promise per pool key for the life of the
+ * process. Bulk ingest passes a per-worker `slot` so each worker has its own
+ * ONNX session — concurrent embed calls then run on independent extractors
+ * instead of contending for one shared pipeline.
  *
  * Try `wasm` first, fall back to `cpu` on "Unsupported device". The transformers
  * patch (applied for `bun build --compile` and via `bun run prebuild` for local
@@ -41,13 +51,16 @@ function isModelCached(model: string): boolean {
  * device, which uses the onnxruntime-node native bindings that ship with the
  * unpatched package.
  */
-async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
-	let p = pipelinePromises.get(model);
+async function getPipeline(model: string, slot: number): Promise<FeatureExtractionPipeline> {
+	const key = poolKey(model, slot);
+	let p = pipelinePromises.get(key);
 	if (!p) {
 		if (isModelCached(model)) {
-			logger.debug(`embedder: loading cached model ${model}`);
-		} else {
+			logger.debug(`embedder: loading cached model ${model} (slot ${slot})`);
+		} else if (slot === 0) {
 			logger.info(`embedder: loading model ${model} (first run, downloading weights)`);
+		} else {
+			logger.debug(`embedder: loading additional pipeline for slot ${slot}`);
 		}
 		p = (async () => {
 			try {
@@ -58,7 +71,7 @@ async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
 				return (await pipeline("feature-extraction", model, { device: "cpu" })) as FeatureExtractionPipeline;
 			}
 		})();
-		pipelinePromises.set(model, p);
+		pipelinePromises.set(key, p);
 	}
 	return p;
 }
@@ -68,9 +81,15 @@ async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
  * with `(done, total)` chunk counts so callers can drive a spinner / progress
  * bar — ONNX WASM holds the JS thread for hundreds of ms per batch and would
  * otherwise leave nanospinner's setInterval starved between updates.
+ *
+ * `slot` selects which entry in the per-worker pipeline pool to use. Bulk
+ * ingest passes the worker id so each ingest worker has its own extractor.
+ * Callers that don't care (single-shot query embeds, refresh runner) omit
+ * `slot` and share slot 0.
  */
 export interface EmbedOptions {
 	onProgress?: (done: number, total: number) => void;
+	slot?: number;
 }
 
 /**
@@ -92,7 +111,7 @@ export async function embed(
 	opts: EmbedOptions = {},
 ): Promise<number[][]> {
 	if (texts.length === 0) return [];
-	const extractor = await getPipeline(model);
+	const extractor = await getPipeline(model, opts.slot ?? 0);
 	const out: number[][] = [];
 	for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
 		const slice = texts.slice(i, i + EMBEDDING_BATCH_SIZE);

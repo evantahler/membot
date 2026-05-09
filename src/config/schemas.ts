@@ -1,5 +1,17 @@
+import { availableParallelism } from "node:os";
 import { z } from "zod";
 import { DEFAULTS, defaultMembotHome, EMBEDDING_DIMENSION, EMBEDDING_MODEL } from "../constants.ts";
+
+/**
+ * Compute the default ingest worker count: one fewer than the available CPUs
+ * (so the orchestrator and any background work still has a core), clamped to
+ * `[1, MAX_WORKERS]` to avoid hammering Anthropic with too many concurrent
+ * describe calls on machines with very high core counts.
+ */
+function defaultWorkerConcurrency(): number {
+	const cpus = availableParallelism();
+	return Math.min(DEFAULTS.MAX_WORKERS, Math.max(1, cpus - 1));
+}
 
 export const ChunkerConfigSchema = z.object({
 	mode: z.enum(["deterministic", "llm"]).default(DEFAULTS.CHUNKER_MODE),
@@ -21,7 +33,7 @@ export const LlmConfigSchema = z.object({
 });
 
 export const IngestConfigSchema = z.object({
-	describer_concurrency: z.number().int().positive().default(DEFAULTS.DESCRIBER_CONCURRENCY),
+	worker_concurrency: z.number().int().positive().default(defaultWorkerConcurrency),
 });
 
 export const DaemonConfigSchema = z.object({

@@ -3,10 +3,11 @@ import { upsertBlob } from "../db/blobs.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { type FetcherKind, getCurrent, insertVersion, millisIso, type SourceType } from "../db/files.ts";
 import { asHelpful, HelpfulError } from "../errors.ts";
-import { type Chunk, chunkDeterministic } from "./chunker.ts";
-import { pMap } from "./concurrency.ts";
+import { chunkDeterministic } from "./chunker.ts";
+import { AsyncMutex, pMap } from "./concurrency.ts";
 import { convert } from "./converter/index.ts";
 import { describe } from "./describer.ts";
+import { EmbedPool } from "./embed-pool.ts";
 import { embed } from "./embedder.ts";
 import { fetchRemote } from "./fetcher.ts";
 import { readLocalFile, sha256Hex } from "./local-reader.ts";
@@ -283,144 +284,144 @@ async function ingestLocalFiles(
 	}
 
 	const isMulti = resolved.entries.length > 1;
-	const concurrency = ctx.config.ingest.describer_concurrency;
+	// Cap worker count by the actual file count so tiny batches don't pay
+	// the cost of spawning N threads (each loads ~130MB of model weights);
+	// also clamp by config and the global MAX_WORKERS ceiling.
+	const configured = Math.min(8, Math.max(1, ctx.config.ingest.worker_concurrency));
+	const workerCount = Math.max(1, Math.min(configured, resolved.entries.length));
+	const persistMutex = new AsyncMutex();
+	let anyOk = false;
 
-	type Prep =
-		| { kind: "ok"; result: IngestEntryResult; ready: PreparedEntry }
-		| { kind: "skip"; result: IngestEntryResult }
-		| { kind: "fail"; result: IngestEntryResult };
+	// Spin up a Bun.Worker pool so embed() runs on real OS threads — each
+	// worker hosts its own transformers pipeline (one ONNX session per
+	// thread) and N embed jobs run truly in parallel instead of serializing
+	// on the main JS event loop. Pool is torn down in `finally` so a thrown
+	// error inside the pMap doesn't leak threads.
+	const embedPool = new EmbedPool(workerCount);
+	await embedPool.init();
 
-	// Phase A — concurrent prep. For each entry: read bytes, short-circuit on
-	// unchanged-source, otherwise convert + describe + chunk. No DB writes
-	// happen here (only the unchanged check, which is a read). The describer
-	// is the slowest step per file and runs in parallel here, which is the
-	// main throughput win for bulk ingest.
-	const prepResults = await pMap(resolved.entries, concurrency, async (entry): Promise<Prep> => {
-		const logicalPath = pickLogicalPath(input.logical_path, entry, isMulti);
-		const result: IngestEntryResult = {
-			source_path: entry.absPath,
-			logical_path: logicalPath,
+	type PMapResult = Array<{ ok: true; value: IngestEntryResult } | { ok: false; error: unknown }>;
+	let outcomes: PMapResult;
+	try {
+		// Each pMap worker pulls a file from the shared queue and runs the
+		// entire pipeline end-to-end (read → unchanged check → convert →
+		// describe → chunk → embed → persist). The persist phase is gated by
+		// a single mutex because all workers share one DuckDB connection and
+		// DuckDB rejects nested BEGINs. The embed step is offloaded to the
+		// EmbedPool above so it actually parallelizes across cores.
+		outcomes = await pMap(resolved.entries, workerCount, async (entry, _index, _workerId) => {
+			const logicalPath = pickLogicalPath(input.logical_path, entry, isMulti);
+			const result: IngestEntryResult = {
+				source_path: entry.absPath,
+				logical_path: logicalPath,
+				version_id: null,
+				status: "ok",
+				mime_type: null,
+				size_bytes: 0,
+				fetcher: "local",
+				source_sha256: "",
+			};
+			callbacks?.onEntryStart?.(entry.relPathFromBase);
+			const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(entry.relPathFromBase, sublabel);
+			try {
+				onPhase("reading");
+				const local = await readLocalFile(entry.absPath);
+				result.mime_type = local.mimeType;
+				result.size_bytes = local.sizeBytes;
+				result.source_sha256 = local.sha256;
+
+				if (!force) {
+					const cur = await getCurrent(ctx.db, logicalPath);
+					if (cur && cur.source_sha256 === local.sha256) {
+						result.status = "unchanged";
+						result.version_id = cur.version_id;
+						callbacks?.onEntryComplete?.(result);
+						return result;
+					}
+				}
+
+				onPhase("converting");
+				const conversion = await convert(
+					local.bytes,
+					local.mimeType,
+					entry.absPath,
+					ctx.config.llm,
+					ctx.config.converters,
+				);
+				const markdown = conversion.markdown;
+
+				onPhase("describing");
+				const description = await describe(logicalPath, local.mimeType, markdown, ctx.config.llm);
+
+				onPhase("chunking");
+				const chunks = chunkDeterministic(markdown, ctx.config.chunker);
+				const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content));
+
+				let embeddings: number[][];
+				try {
+					embeddings = await embedPool.embed(searchTexts, ctx.config.embedding_model, (done, total) =>
+						onPhase(`embedding ${done}/${total}`),
+					);
+				} catch (err) {
+					throw asHelpful(
+						err,
+						`while embedding chunks for ${logicalPath}`,
+						"Run `bun run prebuild` to apply the transformers WASM patch, or set a different config.embedding_model.",
+					);
+				}
+
+				const versionId = await persistMutex.lock(async () => {
+					onPhase("persisting");
+					return persistOne(ctx, {
+						logicalPath,
+						sourceType: "local",
+						sourcePath: entry.absPath,
+						sourceMtimeMs: local.mtimeMs,
+						sourceSha: local.sha256,
+						blobSha: local.sha256,
+						mime: local.mimeType,
+						bytes: local.bytes,
+						markdown,
+						description,
+						chunks,
+						searchTexts,
+						embeddings,
+						fetcher: "local",
+						downloader: null,
+						downloaderArgs: null,
+						refreshSec,
+						changeNote: input.change_note ?? null,
+					});
+				});
+				result.version_id = versionId;
+				anyOk = true;
+			} catch (err) {
+				result.status = "failed";
+				result.error = errorMessage(err);
+			}
+			callbacks?.onEntryComplete?.(result);
+			return result;
+		});
+	} finally {
+		await embedPool.shutdown();
+	}
+
+	const results: IngestEntryResult[] = outcomes.map((o) => {
+		if (o.ok) return o.value;
+		// pMap caught a worker rejection — shouldn't happen since the worker
+		// catches its own errors, but surface defensively.
+		return {
+			source_path: "",
+			logical_path: "",
 			version_id: null,
-			status: "ok",
+			status: "failed",
+			error: errorMessage(o.error),
 			mime_type: null,
 			size_bytes: 0,
 			fetcher: "local",
 			source_sha256: "",
 		};
-		callbacks?.onEntryStart?.(entry.relPathFromBase);
-		const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(entry.relPathFromBase, sublabel);
-		try {
-			onPhase("reading");
-			const local = await readLocalFile(entry.absPath);
-			result.mime_type = local.mimeType;
-			result.size_bytes = local.sizeBytes;
-			result.source_sha256 = local.sha256;
-
-			if (!force) {
-				const cur = await getCurrent(ctx.db, logicalPath);
-				if (cur && cur.source_sha256 === local.sha256) {
-					result.status = "unchanged";
-					result.version_id = cur.version_id;
-					return { kind: "skip", result };
-				}
-			}
-
-			onPhase("converting");
-			const conversion = await convert(
-				local.bytes,
-				local.mimeType,
-				entry.absPath,
-				ctx.config.llm,
-				ctx.config.converters,
-			);
-			const markdown = conversion.markdown;
-
-			onPhase("describing");
-			const description = await describe(logicalPath, local.mimeType, markdown, ctx.config.llm);
-
-			onPhase("chunking");
-			const chunks = chunkDeterministic(markdown, ctx.config.chunker);
-			const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content));
-
-			return {
-				kind: "ok",
-				result,
-				ready: {
-					logicalPath,
-					sourceType: "local",
-					sourcePath: entry.absPath,
-					sourceMtimeMs: local.mtimeMs,
-					sourceSha: local.sha256,
-					blobSha: local.sha256,
-					mime: local.mimeType,
-					bytes: local.bytes,
-					markdown,
-					description,
-					chunks,
-					searchTexts,
-					fetcher: "local",
-					downloader: null,
-					downloaderArgs: null,
-					refreshSec,
-					changeNote: input.change_note ?? null,
-					relPathFromBase: entry.relPathFromBase,
-				},
-			};
-		} catch (err) {
-			result.status = "failed";
-			result.error = errorMessage(err);
-			return { kind: "fail", result };
-		}
 	});
-
-	// Phase B — serial persist. Embed (single-WASM-instance) and DB writes
-	// run in input order so concurrent ingests against the same DB don't
-	// fight over the file lock. A single rebuildFts after the loop replaces
-	// the previous per-entry FTS rebuild.
-	const results: IngestEntryResult[] = [];
-	let anyOk = false;
-	for (const outcome of prepResults) {
-		if (!outcome.ok) {
-			// pMap caught a worker rejection; surface it as a failed entry
-			// without an associated source path (shouldn't happen since the
-			// worker catches its own errors, but defensive).
-			results.push({
-				source_path: "",
-				logical_path: "",
-				version_id: null,
-				status: "failed",
-				error: errorMessage(outcome.error),
-				mime_type: null,
-				size_bytes: 0,
-				fetcher: "local",
-				source_sha256: "",
-			});
-			continue;
-		}
-		const prep = outcome.value;
-		if (prep.kind !== "ok") {
-			results.push(prep.result);
-			callbacks?.onEntryComplete?.(prep.result);
-			continue;
-		}
-		const { ready } = prep;
-		try {
-			const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(ready.relPathFromBase, sublabel);
-			const versionId = await persistPrepared(ctx, ready, onPhase);
-			prep.result.version_id = versionId;
-			anyOk = true;
-		} catch (err) {
-			prep.result.status = "failed";
-			prep.result.error = errorMessage(err);
-		} finally {
-			// Release the DB lock between files in a directory/glob walk so
-			// concurrent processes can wedge in mid-batch. The next entry's
-			// first DB call reopens (cheap — same-process reopen).
-			await ctx.db.release();
-		}
-		results.push(prep.result);
-		callbacks?.onEntryComplete?.(prep.result);
-	}
 
 	// Single FTS rebuild for the whole batch — replaces N per-entry rebuilds
 	// in the prior implementation. Skip when nothing was newly persisted.
@@ -432,10 +433,10 @@ async function ingestLocalFiles(
 }
 
 /**
- * Output of Phase A prep: everything needed to persist a new version
- * (embedding + DB writes) with no further LLM or filesystem work.
+ * Per-file persist payload. All inputs are precomputed by the worker; this
+ * helper just executes the transactional DB writes.
  */
-interface PreparedEntry {
+interface PersistOneParams {
 	logicalPath: string;
 	sourceType: SourceType;
 	sourcePath: string | null;
@@ -446,45 +447,22 @@ interface PreparedEntry {
 	bytes: Uint8Array | null;
 	markdown: string;
 	description: string;
-	chunks: Chunk[];
+	chunks: { index: number; content: string }[];
 	searchTexts: string[];
+	embeddings: number[][];
 	fetcher: FetcherKind;
 	downloader: string | null;
 	downloaderArgs: Record<string, unknown> | null;
 	refreshSec: number | null;
 	changeNote: string | null;
-	relPathFromBase: string;
 }
 
 /**
- * Phase B: embed the pre-built search_texts, write the blob (if any),
- * insert the new (logical_path, version_id) row, and write its chunks.
- * Returns the version_id. The caller is responsible for one rebuildFts
- * after all entries have been persisted.
- *
- * The blob+version+chunks writes are wrapped in a single DuckDB transaction
- * so a typical 30-chunk file does one COMMIT instead of ~32 autocommitted
- * round-trips. ROLLBACK on failure keeps the row+chunk pair atomic.
+ * Write blob + new (logical_path, version_id) row + its chunks under a
+ * single DuckDB transaction. ROLLBACK on failure keeps the row+chunks pair
+ * atomic; one COMMIT replaces ~N+2 autocommitted round-trips.
  */
-async function persistPrepared(
-	ctx: AppContext,
-	p: PreparedEntry,
-	onPhase: (sublabel: string) => void,
-): Promise<string> {
-	let embeddings: number[][];
-	try {
-		embeddings = await embed(p.searchTexts, ctx.config.embedding_model, {
-			onProgress: (done, total) => onPhase(`embedding ${done}/${total}`),
-		});
-	} catch (err) {
-		throw asHelpful(
-			err,
-			`while embedding chunks for ${p.logicalPath}`,
-			"Run `bun run prebuild` to apply the transformers WASM patch, or set a different config.embedding_model.",
-		);
-	}
-
-	onPhase("persisting");
+async function persistOne(ctx: AppContext, p: PersistOneParams): Promise<string> {
 	const versionId = millisIso(Date.now());
 	const contentSha = sha256Hex(new TextEncoder().encode(p.markdown));
 	await ctx.db.exec("BEGIN TRANSACTION");
@@ -497,7 +475,6 @@ async function persistPrepared(
 				bytes: p.bytes,
 			});
 		}
-
 		await insertVersion(ctx.db, {
 			logical_path: p.logicalPath,
 			version_id: versionId,
@@ -519,7 +496,6 @@ async function persistPrepared(
 			last_refresh_status: "ok",
 			change_note: p.changeNote,
 		});
-
 		await insertChunksForVersion(
 			ctx.db,
 			p.logicalPath,
@@ -528,7 +504,7 @@ async function persistPrepared(
 				chunk_index: c.index,
 				chunk_content: c.content,
 				search_text: p.searchTexts[i] ?? buildSearchText(p.logicalPath, p.description, c.content),
-				embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
+				embedding: p.embeddings[i] ?? new Array(p.embeddings[0]?.length ?? 0).fill(0),
 			})),
 		);
 		await ctx.db.exec("COMMIT");

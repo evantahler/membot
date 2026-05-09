@@ -248,7 +248,7 @@ or when `CI=true`.
   "embedding_dimension": 384,
   "chunker": { "mode": "deterministic", "target_chars": 4000, "max_chars": 15000 },
   "converters": { "max_inline_image_captions": 20 },         // per-doc cap on vision captions for embedded images
-  "ingest": { "describer_concurrency": 5 },                  // max concurrent describe/convert workers per add
+  "ingest": { "worker_concurrency": null },                  // ingest worker pool size (Bun.Worker per slot, each with its own ONNX embedder); default = cpus - 1, capped at 8
   "llm": {
     "anthropic_api_key": "",                                  // env: ANTHROPIC_API_KEY
     "converter_model": "claude-haiku-4-5-20251001",
