@@ -10,11 +10,22 @@ import { registerReindexCommand } from "./commands/reindex.ts";
 import { registerServeCommand } from "./commands/serve.ts";
 import { registerSkillCommand } from "./commands/skill.ts";
 import { registerUpgradeCommand } from "./commands/upgrade.ts";
+import { EMBED_WORKER_SENTINEL } from "./constants.ts";
 import type { BuildContextOptions } from "./context.ts";
+import { runEmbedWorker } from "./ingest/embed-worker.ts";
 import { mountAsCommanderCommand } from "./mount/commander.ts";
 import { OPERATIONS } from "./operations/index.ts";
 import { logger } from "./output/logger.ts";
 import { maybeCheckForUpdate } from "./update/background.ts";
+
+// Hidden worker mode: the EmbedderPool re-execs this binary with the sentinel
+// as argv[2] (or argv[1] when `bun run src/cli.ts <sentinel>` is invoked
+// directly during tests). We bypass commander entirely and run the worker
+// stdin/stdout protocol loop instead.
+if (process.argv.includes(EMBED_WORKER_SENTINEL)) {
+	await runEmbedWorker();
+	process.exit(0);
+}
 
 program
 	.name("membot")

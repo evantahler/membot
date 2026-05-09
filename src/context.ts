@@ -1,3 +1,4 @@
+import { cpus } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./config/loader.ts";
 import type { MembotConfig } from "./config/schemas.ts";
@@ -26,10 +27,24 @@ export interface BuildContextOptions {
 }
 
 /**
+ * Resolve `config.embedding.workers` to a concrete worker count. `null`
+ * (the schema default) means "auto" → `max(1, cpus()-1)`. The minus-one
+ * leaves a core for the parent process (DB writes, IO, the spinner).
+ */
+export function resolveEmbeddingWorkers(configured: number | null | undefined): number {
+	if (typeof configured === "number" && configured >= 1) return configured;
+	return Math.max(1, cpus().length - 1);
+}
+
+/**
  * Build the AppContext used by every operation handler. Initializes:
  *  - output mode (TTY/JSON/color detection — frozen for the rest of the run)
  *  - config (~/.membot/config.json with env overrides)
  *  - DuckDB connection (~/.membot/index.duckdb), running migrations on first open
+ *
+ * The embedder worker pool is NOT created here — it's per-command,
+ * spawned by `withEmbedderPool()` at the top of bulk-embedding handlers
+ * (`add`, `refresh`, `write`) and disposed before they return.
  */
 export async function buildContext(options: BuildContextOptions = {}): Promise<AppContext> {
 	setMode(detectMode({ json: options.json, verbose: options.verbose, noColor: options.noColor }));

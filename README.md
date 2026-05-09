@@ -136,10 +136,13 @@ Add `--watch` (and optional `--tick <sec>`) to also run the refresh daemon, whic
   membot config list                                            # show every value (secrets masked)
   membot config set llm.anthropic_api_key sk-ant-...            # enable LLM-fallback paths
   membot config set chunker.target_chars 800                    # tweak any nested value
+  membot config set embedding.workers 4                         # cap parallel embed workers
   membot config get llm.anthropic_api_key --show-secrets        # reveal the masked key
   membot config unset chunker.target_chars                      # back to schema default
   membot config path                                            # print the absolute config path
   ```
+
+  **Parallel embedding:** `embedding.workers` (default `null` → `cpus()-1`) controls how many subprocess workers fan out the WASM embedding work. The pool is **per-command** — spawned at the start of `add` / `refresh` / `write` and killed before the command returns, so membot doesn't keep idle workers around between invocations. Each worker loads its own ~50MB copy of the model, so on RAM-constrained machines drop it to a small fixed number (e.g. `4`); set `1` to disable the pool entirely and embed inline.
 
   Values are written with file mode `0600`. `ANTHROPIC_API_KEY` set in the environment still wins on read, so existing env-var setups keep working.
 - **Browser session:** `~/.membot/auth/browser-profile/` (Playwright persistent profile — cookies, localStorage, IndexedDB). Captured by `membot login`; cookie-based downloaders (Google) reuse it on every fetch. Delete the directory to force a fresh login.

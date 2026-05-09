@@ -19,6 +19,18 @@ export const DaemonConfigSchema = z.object({
 	tick_interval_sec: z.number().int().positive().default(DEFAULTS.DAEMON_TICK_SEC),
 });
 
+/**
+ * Embedding parallelism. `workers = null` (the default) resolves to
+ * `max(1, cpus()-1)` at context-build time so the pool grows with the host
+ * machine. Setting `workers = 1` disables the subprocess pool entirely
+ * and runs embedding inline in the parent (the original single-thread
+ * behaviour). Each worker loads its own copy of the WASM model
+ * (~50MB resident), so cap this on RAM-constrained machines.
+ */
+export const EmbeddingConfigSchema = z.object({
+	workers: z.number().int().min(1).nullable().default(null),
+});
+
 export const LinearDownloaderConfigSchema = z.object({
 	api_key: z.string().meta({ secret: true }).default(""),
 });
@@ -43,6 +55,7 @@ export const MembotConfigSchema = z.object({
 	embedding_model: z.string().default(EMBEDDING_MODEL),
 	embedding_dimension: z.number().int().positive().default(EMBEDDING_DIMENSION),
 	chunker: ChunkerConfigSchema.default(() => ChunkerConfigSchema.parse({})),
+	embedding: EmbeddingConfigSchema.default(() => EmbeddingConfigSchema.parse({})),
 	llm: LlmConfigSchema.default(() => LlmConfigSchema.parse({})),
 	downloaders: DownloadersConfigSchema.default(() => DownloadersConfigSchema.parse({})),
 	daemon: DaemonConfigSchema.default(() => DaemonConfigSchema.parse({})),
@@ -52,6 +65,7 @@ export const MembotConfigSchema = z.object({
 
 export type MembotConfig = z.infer<typeof MembotConfigSchema>;
 export type ChunkerConfig = z.infer<typeof ChunkerConfigSchema>;
+export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
 export type LlmConfig = z.infer<typeof LlmConfigSchema>;
 export type DownloadersConfig = z.infer<typeof DownloadersConfigSchema>;
 export type LinearDownloaderConfig = z.infer<typeof LinearDownloaderConfigSchema>;
