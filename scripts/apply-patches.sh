@@ -38,11 +38,13 @@ apply_patch \
 	"node_modules/@huggingface/transformers" \
 	".membot-transformers-patch-applied"
 
-# @evantahler/mcpx — stub `src/search/onnx-wasm-paths.ts` whose static
-# `with { type: "file" }` imports use a relative path that only resolves in
-# mcpx's own repo layout. When mcpx is consumed as an npm dep those paths are
-# unreachable and `bun build --compile` fails at build time. membot never
-# invokes mcpx's semantic search, so the stubbed exports are safe.
+# @evantahler/mcpx — rewrite `src/search/onnx-wasm-paths.ts` so its static
+# `with { type: "file" }` imports of onnxruntime-web's WASM resolve from the
+# consumer's hoisted node_modules layout (../../../../onnxruntime-web/...)
+# instead of mcpx's own repo layout (../../node_modules/...). With this
+# patch in place, mcpx's semantic search runs end-to-end inside membot
+# (the agent fetcher's `mcp_search` exercises it) and `bun build --compile`
+# can bundle the WASM assets into the standalone binary.
 apply_patch \
 	"patches/@evantahler%2Fmcpx@0.21.4.patch" \
 	"node_modules/@evantahler/mcpx" \
