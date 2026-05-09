@@ -28,6 +28,14 @@ export const EMBEDDING_DIMENSION = 384;
  */
 export const EMBEDDING_BATCH_SIZE = 16;
 
+/**
+ * Hidden first-arg sentinel that re-execs the membot binary as an embed
+ * worker. The pool spawns `process.execPath <sentinel>` so the same compiled
+ * binary serves both the user-facing CLI and the worker subprocess; cli.ts
+ * checks this argv slot before commander sees it.
+ */
+export const EMBED_WORKER_SENTINEL = "__embed_worker";
+
 export const DEFAULTS = {
 	CHUNKER_MODE: "deterministic" as const,
 	CHUNKER_TARGET_CHARS: 4_000,

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { resolveEmbeddingWorkers } from "../context.ts";
+import { withEmbedderPool } from "../ingest/embedder-pool.ts";
 import {
 	countResolvedEntries,
 	type IngestCallbacks,
@@ -109,121 +111,129 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 		return `${lines.join("\n")}\n${summary}`;
 	},
 	handler: async (input, ctx) => {
-		const { sources, ...rest } = input;
-		const followSymlinks = rest.follow_symlinks ?? true;
+		// Spin up an ephemeral embedder pool for the whole `add` command —
+		// `withEmbedderPool` handles the workers=1 short-circuit and disposes
+		// the children when the closure returns (see embedder-pool.ts). Inside
+		// the closure, every embed() call from the ingest pipeline transparently
+		// fans out to the subprocess pool.
+		const workers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
+		return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
+			const { sources, ...rest } = input;
+			const followSymlinks = rest.follow_symlinks ?? true;
 
-		// Phase 1: resolve every source upfront so the shared progress bar
-		// knows its total. A resolve failure (bad path, glob with no base) is
-		// captured per-source so one bad arg doesn't abort the whole batch.
-		type ResolveOutcome = { source: string; resolved: ResolvedSource } | { source: string; error: Error };
-		const outcomes: ResolveOutcome[] = [];
-		for (const source of sources) {
-			try {
-				const resolved = await resolveSource(source, {
-					include: rest.include,
-					exclude: rest.exclude,
-					followSymlinks,
-				});
-				outcomes.push({ source, resolved });
-			} catch (err) {
-				outcomes.push({ source, error: err instanceof Error ? err : new Error(String(err)) });
-			}
-		}
-
-		const total = outcomes.reduce((n, o) => ("error" in o ? n + 1 : n + countResolvedEntries(o.resolved)), 0);
-
-		const aggregated: IngestResult = {
-			ingested: [],
-			total: 0,
-			ok: 0,
-			unchanged: 0,
-			failed: 0,
-		};
-
-		ctx.progress.start(total, "ingest");
-		const callbacks: IngestCallbacks = {
-			// Counter advances on COMPLETION so concurrent prep doesn't race the
-			// bar to 100% before any file is fully persisted. The per-worker
-			// status section (one line per active worker) shows file + step in
-			// real time, prefixed with a pie glyph that fills as the per-file
-			// pipeline progresses. `setWorkers(n)` resizes the section whenever
-			// a new ingest source kicks off with its own pool size.
-			onWorkerCount: (n) => ctx.progress.setWorkers(n),
-			onEntryStart: (label, workerId) => {
-				if (workerId !== undefined) ctx.progress.workerSet(workerId, `${pieFor(undefined)} ${label}`);
-				ctx.progress.setLabel(label);
-			},
-			onEntryComplete: (entry, workerId) => {
-				if (workerId !== undefined) ctx.progress.workerSet(workerId, "");
-				ctx.progress.tick(entry.logical_path);
-				ctx.progress.entry(formatEntryLine(entry));
-			},
-			onEntryProgress: (label, sublabel, workerId) => {
-				if (workerId !== undefined) ctx.progress.workerSet(workerId, `${pieFor(sublabel)} ${label} — ${sublabel}`);
-				ctx.progress.update(sublabel);
-			},
-			onChunks: (n) => ctx.progress.addChunks(n),
-		};
-
-		for (const outcome of outcomes) {
-			if ("error" in outcome) {
-				const failed: IngestEntryResult = {
-					source_path: outcome.source,
-					logical_path: outcome.source,
-					version_id: null,
-					status: "failed",
-					error: outcome.error.message,
-					mime_type: null,
-					size_bytes: 0,
-					chunk_count: null,
-					fetcher: "local",
-					source_sha256: "",
-				};
-				callbacks.onEntryStart?.(outcome.source);
-				callbacks.onEntryComplete?.(failed);
-				aggregated.ingested.push(failed);
-				aggregated.total += 1;
-				aggregated.failed += 1;
-				continue;
+			// Phase 1: resolve every source upfront so the shared progress bar
+			// knows its total. A resolve failure (bad path, glob with no base) is
+			// captured per-source so one bad arg doesn't abort the whole batch.
+			type ResolveOutcome = { source: string; resolved: ResolvedSource } | { source: string; error: Error };
+			const outcomes: ResolveOutcome[] = [];
+			for (const source of sources) {
+				try {
+					const resolved = await resolveSource(source, {
+						include: rest.include,
+						exclude: rest.exclude,
+						followSymlinks,
+					});
+					outcomes.push({ source, resolved });
+				} catch (err) {
+					outcomes.push({ source, error: err instanceof Error ? err : new Error(String(err)) });
+				}
 			}
 
-			try {
-				const r = await ingestResolved(outcome.resolved, { ...rest, source: outcome.source }, ctx, callbacks);
-				aggregated.ingested.push(...r.ingested);
-				aggregated.total += r.total;
-				aggregated.ok += r.ok;
-				aggregated.unchanged += r.unchanged;
-				aggregated.failed += r.failed;
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				const failed: IngestEntryResult = {
-					source_path: outcome.source,
-					logical_path: outcome.source,
-					version_id: null,
-					status: "failed",
-					error: message,
-					mime_type: null,
-					size_bytes: 0,
-					chunk_count: null,
-					fetcher: "local",
-					source_sha256: "",
-				};
-				callbacks.onEntryStart?.(outcome.source);
-				callbacks.onEntryComplete?.(failed);
-				aggregated.ingested.push(failed);
-				aggregated.total += 1;
-				aggregated.failed += 1;
-			} finally {
-				// Release the DB lock between sources so other consumers (a
-				// concurrent CLI call, the daemon, or a separate MCP server)
-				// can wedge in. The next source's first DB call reopens.
-				await ctx.db.release();
-			}
-		}
+			const total = outcomes.reduce((n, o) => ("error" in o ? n + 1 : n + countResolvedEntries(o.resolved)), 0);
 
-		const summary = formatSummary(aggregated);
-		ctx.progress.done(summary);
-		return aggregated;
+			const aggregated: IngestResult = {
+				ingested: [],
+				total: 0,
+				ok: 0,
+				unchanged: 0,
+				failed: 0,
+			};
+
+			ctx.progress.start(total, "ingest");
+			const callbacks: IngestCallbacks = {
+				// Counter advances on COMPLETION so concurrent prep doesn't race the
+				// bar to 100% before any file is fully persisted. The per-worker
+				// status section (one line per active worker) shows file + step in
+				// real time, prefixed with a pie glyph that fills as the per-file
+				// pipeline progresses. `setWorkers(n)` resizes the section whenever
+				// a new ingest source kicks off with its own pool size.
+				onWorkerCount: (n) => ctx.progress.setWorkers(n),
+				onEntryStart: (label, workerId) => {
+					if (workerId !== undefined) ctx.progress.workerSet(workerId, `${pieFor(undefined)} ${label}`);
+					ctx.progress.setLabel(label);
+				},
+				onEntryComplete: (entry, workerId) => {
+					if (workerId !== undefined) ctx.progress.workerSet(workerId, "");
+					ctx.progress.tick(entry.logical_path);
+					ctx.progress.entry(formatEntryLine(entry));
+				},
+				onEntryProgress: (label, sublabel, workerId) => {
+					if (workerId !== undefined) ctx.progress.workerSet(workerId, `${pieFor(sublabel)} ${label} — ${sublabel}`);
+					ctx.progress.update(sublabel);
+				},
+				onChunks: (n) => ctx.progress.addChunks(n),
+			};
+
+			for (const outcome of outcomes) {
+				if ("error" in outcome) {
+					const failed: IngestEntryResult = {
+						source_path: outcome.source,
+						logical_path: outcome.source,
+						version_id: null,
+						status: "failed",
+						error: outcome.error.message,
+						mime_type: null,
+						size_bytes: 0,
+						chunk_count: null,
+						fetcher: "local",
+						source_sha256: "",
+					};
+					callbacks.onEntryStart?.(outcome.source);
+					callbacks.onEntryComplete?.(failed);
+					aggregated.ingested.push(failed);
+					aggregated.total += 1;
+					aggregated.failed += 1;
+					continue;
+				}
+
+				try {
+					const r = await ingestResolved(outcome.resolved, { ...rest, source: outcome.source }, ctx, callbacks);
+					aggregated.ingested.push(...r.ingested);
+					aggregated.total += r.total;
+					aggregated.ok += r.ok;
+					aggregated.unchanged += r.unchanged;
+					aggregated.failed += r.failed;
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					const failed: IngestEntryResult = {
+						source_path: outcome.source,
+						logical_path: outcome.source,
+						version_id: null,
+						status: "failed",
+						error: message,
+						mime_type: null,
+						size_bytes: 0,
+						chunk_count: null,
+						fetcher: "local",
+						source_sha256: "",
+					};
+					callbacks.onEntryStart?.(outcome.source);
+					callbacks.onEntryComplete?.(failed);
+					aggregated.ingested.push(failed);
+					aggregated.total += 1;
+					aggregated.failed += 1;
+				} finally {
+					// Release the DB lock between sources so other consumers (a
+					// concurrent CLI call, the daemon, or a separate MCP server)
+					// can wedge in. The next source's first DB call reopens.
+					await ctx.db.release();
+				}
+			}
+
+			const summary = formatSummary(aggregated);
+			ctx.progress.done(summary);
+			return aggregated;
+		});
 	},
 });
 

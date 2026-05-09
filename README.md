@@ -84,6 +84,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot read <path>`            | Read the markdown surrogate (or `--bytes` for original bytes, base64)             |
 | `membot search <query>`         | Hybrid search (semantic + BM25); `--include-history` searches older versions      |
 | `membot info <path>`            | Inspect metadata (source, fetcher, schedule, digests) without content             |
+| `membot stats [prefix]`         | Summarize the index (file/version/chunk/blob counts, on-disk size, refresh health, mime/source/downloader breakdowns); optional prefix scopes the aggregates |
 | `membot versions <path>`        | List every version newest-first                                                   |
 | `membot diff <path> <a> [b]`    | Unified diff between two versions                                                 |
 | `membot write <path>`           | Write inline agent-authored markdown as a new version                             |
@@ -137,6 +138,7 @@ Add `--watch` (and optional `--tick <sec>`) to also run the refresh daemon, whic
   membot config list                                            # show every value (secrets masked)
   membot config set llm.anthropic_api_key sk-ant-...            # enable LLM-fallback paths
   membot config set chunker.target_chars 800                    # tweak any nested value
+  membot config set embedding.workers 4                         # cap parallel embed workers
   membot config set converters.max_inline_image_captions 50     # raise per-doc cap on vision captions for embedded images
   membot config set ingest.worker_concurrency 4                 # cap parallel ingest workers (default: cpus-1, max 8)
   membot config set llm.describer_skip_when_titled false        # always LLM-describe (default true skips when markdown has a clear H1)
@@ -144,6 +146,8 @@ Add `--watch` (and optional `--tick <sec>`) to also run the refresh daemon, whic
   membot config unset chunker.target_chars                      # back to schema default
   membot config path                                            # print the absolute config path
   ```
+
+  **Parallel embedding:** `embedding.workers` (default `null` → `cpus()-1`) controls how many subprocess workers fan out the WASM embedding work. The pool is **per-command** — spawned at the start of `add` / `refresh` / `write` and killed before the command returns, so membot doesn't keep idle workers around between invocations. Each worker loads its own ~50MB copy of the model, so on RAM-constrained machines drop it to a small fixed number (e.g. `4`); set `1` to disable the pool entirely and embed inline.
 
   Values are written with file mode `0600`. `ANTHROPIC_API_KEY` set in the environment still wins on read, so existing env-var setups keep working.
 - **Browser session:** `~/.membot/auth/browser-profile/` (Playwright persistent profile — cookies, localStorage, IndexedDB). Captured by `membot login`; cookie-based downloaders (Google) reuse it on every fetch. Delete the directory to force a fresh login.

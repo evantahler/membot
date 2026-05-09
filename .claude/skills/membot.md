@@ -64,6 +64,7 @@ membot read <logical_path>                       # current markdown surrogate
 membot read <logical_path> --bytes               # original bytes (base64) — PDF/DOCX/image as ingested
 membot read <logical_path> --version <ts>        # historical snapshot
 membot info <logical_path>                       # metadata only (no content)
+membot stats [prefix]                            # whole-index summary; optional prefix scopes the aggregates
 membot versions <logical_path>                   # every version, newest first
 membot diff <logical_path> --a <ts> [--b <ts>]   # unified diff between versions
 ```
@@ -129,6 +130,7 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 | `membot write <path> --content <txt>` | Write inline agent-authored markdown as a new version                          |
 | `membot search <query>`               | Hybrid search (semantic + BM25); add `--include-history` to search older versions |
 | `membot info <path>`                  | Inspect metadata (source, downloader, refresh schedule, digests) without content |
+| `membot stats [prefix]`               | Summarize the index (file/version/chunk/blob counts, on-disk size, refresh health, mime/source/downloader breakdowns); optional prefix scopes |
 | `membot versions <path>`              | List every version newest-first with version_id and change notes               |
 | `membot diff <path> --a <ts>`         | Unified diff between two versions                                              |
 | `membot mv <old> <new>`               | Rename a logical_path (history preserved)                                      |
@@ -161,4 +163,5 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 
 - Data lives in `~/.membot/index.duckdb` (override via `MEMBOT_HOME`).
 - Optional `ANTHROPIC_API_KEY` enables LLM fallback for messy/binary input. Without it, conversion degrades to deterministic native output.
+- `embedding.workers` (config key) caps the per-command embed-worker subprocess pool spawned at the top of `add` / `refresh` / `write`. Default `null` resolves to `cpus()-1`; set `1` to disable the pool.
 - Config file: `~/.membot/config.json` (see `membot --help` for the global flags).

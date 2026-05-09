@@ -9,7 +9,6 @@ import { chunkDeterministic } from "./chunker.ts";
 import { AsyncMutex, pMap } from "./concurrency.ts";
 import { convert } from "./converter/index.ts";
 import { describe } from "./describer.ts";
-import { EmbedPool } from "./embed-pool.ts";
 import { embed } from "./embedder.ts";
 import { fetchRemote } from "./fetcher.ts";
 import { readLocalFile, sha256Hex } from "./local-reader.ts";
@@ -329,122 +328,113 @@ async function ingestLocalFiles(
 	const persistMutex = new AsyncMutex();
 	let anyOk = false;
 
-	// Spin up a Bun.Worker pool so embed() runs on real OS threads — each
-	// worker hosts its own transformers pipeline (one ONNX session per
-	// thread) and N embed jobs run truly in parallel instead of serializing
-	// on the main JS event loop. Pool is torn down in `finally` so a thrown
-	// error inside the pMap doesn't leak threads.
-	const embedPool = new EmbedPool(workerCount);
-	await embedPool.init();
+	// Each pMap worker pulls a file from the shared queue and runs the
+	// entire pipeline end-to-end (read → unchanged check → convert →
+	// describe → chunk → embed → persist). The persist phase is gated by a
+	// single mutex because all workers share one DuckDB connection and
+	// DuckDB rejects nested BEGINs. The embed step itself fans out across
+	// the per-command embedder subprocess pool that `add` / `refresh`
+	// register via `withEmbedderPool()` — so the WASM call truly
+	// parallelizes across cores instead of serializing on the main JS
+	// event loop. When that pool isn't registered (single-shot SDK call,
+	// `embedding.workers = 1`), embed() runs inline against the in-process
+	// extractor with no IPC overhead.
+	const outcomes = await pMap(resolved.entries, workerCount, async (entry, _index, workerId) => {
+		const logicalPath = pickLogicalPath(input.logical_path, entry, isMulti);
+		const result: IngestEntryResult = {
+			source_path: entry.absPath,
+			logical_path: logicalPath,
+			version_id: null,
+			status: "ok",
+			mime_type: null,
+			size_bytes: 0,
+			chunk_count: null,
+			fetcher: "local",
+			source_sha256: "",
+		};
+		callbacks?.onEntryStart?.(entry.relPathFromBase, workerId);
+		const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(entry.relPathFromBase, sublabel, workerId);
+		try {
+			onPhase("reading");
+			const local = await readLocalFile(entry.absPath);
+			result.mime_type = local.mimeType;
+			result.size_bytes = local.sizeBytes;
+			result.source_sha256 = local.sha256;
 
-	type PMapResult = Array<{ ok: true; value: IngestEntryResult } | { ok: false; error: unknown }>;
-	let outcomes: PMapResult;
-	try {
-		// Each pMap worker pulls a file from the shared queue and runs the
-		// entire pipeline end-to-end (read → unchanged check → convert →
-		// describe → chunk → embed → persist). The persist phase is gated by
-		// a single mutex because all workers share one DuckDB connection and
-		// DuckDB rejects nested BEGINs. The embed step is offloaded to the
-		// EmbedPool above so it actually parallelizes across cores.
-		outcomes = await pMap(resolved.entries, workerCount, async (entry, _index, workerId) => {
-			const logicalPath = pickLogicalPath(input.logical_path, entry, isMulti);
-			const result: IngestEntryResult = {
-				source_path: entry.absPath,
-				logical_path: logicalPath,
-				version_id: null,
-				status: "ok",
-				mime_type: null,
-				size_bytes: 0,
-				chunk_count: null,
-				fetcher: "local",
-				source_sha256: "",
-			};
-			callbacks?.onEntryStart?.(entry.relPathFromBase, workerId);
-			const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(entry.relPathFromBase, sublabel, workerId);
-			try {
-				onPhase("reading");
-				const local = await readLocalFile(entry.absPath);
-				result.mime_type = local.mimeType;
-				result.size_bytes = local.sizeBytes;
-				result.source_sha256 = local.sha256;
-
-				if (!force) {
-					const cur = await getCurrent(ctx.db, logicalPath);
-					if (cur && cur.source_sha256 === local.sha256) {
-						result.status = "unchanged";
-						result.version_id = cur.version_id;
-						callbacks?.onEntryComplete?.(result, workerId);
-						return result;
-					}
+			if (!force) {
+				const cur = await getCurrent(ctx.db, logicalPath);
+				if (cur && cur.source_sha256 === local.sha256) {
+					result.status = "unchanged";
+					result.version_id = cur.version_id;
+					callbacks?.onEntryComplete?.(result, workerId);
+					return result;
 				}
-
-				onPhase("converting");
-				const conversion = await convert(
-					local.bytes,
-					local.mimeType,
-					entry.absPath,
-					ctx.config.llm,
-					ctx.config.converters,
-				);
-				const markdown = conversion.markdown;
-
-				onPhase("describing");
-				const description = await describe(logicalPath, local.mimeType, markdown, ctx.config.llm);
-
-				onPhase("chunking");
-				const chunks = chunkDeterministic(markdown, ctx.config.chunker);
-				const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content));
-
-				let embeddings: number[][];
-				try {
-					embeddings = await embedPool.embed(searchTexts, ctx.config.embedding_model, (done, total) =>
-						onPhase(`embedding ${done}/${total}`),
-					);
-				} catch (err) {
-					throw asHelpful(
-						err,
-						`while embedding chunks for ${logicalPath}`,
-						"Run `bun run prebuild` to apply the transformers WASM patch, or set a different config.embedding_model.",
-					);
-				}
-
-				const versionId = await persistMutex.lock(async () => {
-					onPhase("persisting");
-					return persistOne(ctx, {
-						logicalPath,
-						sourceType: "local",
-						sourcePath: entry.absPath,
-						sourceMtimeMs: local.mtimeMs,
-						sourceSha: local.sha256,
-						blobSha: local.sha256,
-						mime: local.mimeType,
-						bytes: local.bytes,
-						markdown,
-						description,
-						chunks,
-						searchTexts,
-						embeddings,
-						fetcher: "local",
-						downloader: null,
-						downloaderArgs: null,
-						refreshSec,
-						changeNote: input.change_note ?? null,
-					});
-				});
-				result.version_id = versionId;
-				result.chunk_count = chunks.length;
-				anyOk = true;
-				callbacks?.onChunks?.(chunks.length);
-			} catch (err) {
-				result.status = "failed";
-				result.error = errorMessage(err);
 			}
-			callbacks?.onEntryComplete?.(result, workerId);
-			return result;
-		});
-	} finally {
-		await embedPool.shutdown();
-	}
+
+			onPhase("converting");
+			const conversion = await convert(
+				local.bytes,
+				local.mimeType,
+				entry.absPath,
+				ctx.config.llm,
+				ctx.config.converters,
+			);
+			const markdown = conversion.markdown;
+
+			onPhase("describing");
+			const description = await describe(logicalPath, local.mimeType, markdown, ctx.config.llm);
+
+			onPhase("chunking");
+			const chunks = chunkDeterministic(markdown, ctx.config.chunker);
+			const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content));
+
+			let embeddings: number[][];
+			try {
+				embeddings = await embed(searchTexts, ctx.config.embedding_model, {
+					onProgress: (done, total) => onPhase(`embedding ${done}/${total}`),
+				});
+			} catch (err) {
+				throw asHelpful(
+					err,
+					`while embedding chunks for ${logicalPath}`,
+					"Run `bun run prebuild` to apply the transformers WASM patch, or set a different config.embedding_model.",
+				);
+			}
+
+			const versionId = await persistMutex.lock(async () => {
+				onPhase("persisting");
+				return persistOne(ctx, {
+					logicalPath,
+					sourceType: "local",
+					sourcePath: entry.absPath,
+					sourceMtimeMs: local.mtimeMs,
+					sourceSha: local.sha256,
+					blobSha: local.sha256,
+					mime: local.mimeType,
+					bytes: local.bytes,
+					markdown,
+					description,
+					chunks,
+					searchTexts,
+					embeddings,
+					fetcher: "local",
+					downloader: null,
+					downloaderArgs: null,
+					refreshSec,
+					changeNote: input.change_note ?? null,
+				});
+			});
+			result.version_id = versionId;
+			result.chunk_count = chunks.length;
+			anyOk = true;
+			callbacks?.onChunks?.(chunks.length);
+		} catch (err) {
+			result.status = "failed";
+			result.error = errorMessage(err);
+		}
+		callbacks?.onEntryComplete?.(result, workerId);
+		return result;
+	});
 
 	const results: IngestEntryResult[] = outcomes.map((o) => {
 		if (o.ok) return o.value;

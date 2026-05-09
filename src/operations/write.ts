@@ -1,9 +1,11 @@
 import { z } from "zod";
+import { resolveEmbeddingWorkers } from "../context.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { insertVersion, millisIso } from "../db/files.ts";
 import { chunkDeterministic } from "../ingest/chunker.ts";
 import { describe } from "../ingest/describer.ts";
 import { embed } from "../ingest/embedder.ts";
+import { withEmbedderPool } from "../ingest/embedder-pool.ts";
 import { parseDuration } from "../ingest/ingest.ts";
 import { sha256Hex } from "../ingest/local-reader.ts";
 import { buildSearchText } from "../ingest/search-text.ts";
@@ -30,48 +32,54 @@ export const writeOperation = defineOperation({
 	console_formatter: (result) =>
 		`${colors.green("✓")} ${colors.cyan(result.logical_path)} ${colors.dim(`@ ${result.version_id}`)} ${colors.dim(`(${result.size_bytes}B)`)}`,
 	handler: async (input, ctx) => {
-		const refreshSec = parseDuration(input.refresh_frequency);
-		const bytes = new TextEncoder().encode(input.content);
-		const description = await describe(input.logical_path, "text/markdown", input.content, ctx.config.llm);
-		const chunks = chunkDeterministic(input.content, ctx.config.chunker);
-		const searchTexts = chunks.map((c) => buildSearchText(input.logical_path, description, c.content));
-		const embeddings = await embed(searchTexts, ctx.config.embedding_model);
+		// Per-command embedder pool: spawn workers, embed this version's
+		// chunks in parallel, kill workers before returning. Short-circuits
+		// to single-process when `embedding.workers` is 1.
+		const workers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
+		return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
+			const refreshSec = parseDuration(input.refresh_frequency);
+			const bytes = new TextEncoder().encode(input.content);
+			const description = await describe(input.logical_path, "text/markdown", input.content, ctx.config.llm);
+			const chunks = chunkDeterministic(input.content, ctx.config.chunker);
+			const searchTexts = chunks.map((c) => buildSearchText(input.logical_path, description, c.content));
+			const embeddings = await embed(searchTexts, ctx.config.embedding_model);
 
-		const versionId = millisIso(Date.now());
-		const contentSha = sha256Hex(bytes);
-		await insertVersion(ctx.db, {
-			logical_path: input.logical_path,
-			version_id: versionId,
-			source_type: "inline",
-			source_path: null,
-			source_mtime_ms: null,
-			source_sha256: contentSha,
-			blob_sha256: null,
-			content_sha256: contentSha,
-			content: input.content,
-			description,
-			mime_type: "text/markdown",
-			size_bytes: bytes.byteLength,
-			fetcher: "inline",
-			refresh_frequency_sec: refreshSec,
-			refreshed_at: new Date().toISOString(),
-			last_refresh_status: "ok",
-			change_note: input.change_note ?? null,
+			const versionId = millisIso(Date.now());
+			const contentSha = sha256Hex(bytes);
+			await insertVersion(ctx.db, {
+				logical_path: input.logical_path,
+				version_id: versionId,
+				source_type: "inline",
+				source_path: null,
+				source_mtime_ms: null,
+				source_sha256: contentSha,
+				blob_sha256: null,
+				content_sha256: contentSha,
+				content: input.content,
+				description,
+				mime_type: "text/markdown",
+				size_bytes: bytes.byteLength,
+				fetcher: "inline",
+				refresh_frequency_sec: refreshSec,
+				refreshed_at: new Date().toISOString(),
+				last_refresh_status: "ok",
+				change_note: input.change_note ?? null,
+			});
+
+			await insertChunksForVersion(
+				ctx.db,
+				input.logical_path,
+				versionId,
+				chunks.map((c, i) => ({
+					chunk_index: c.index,
+					chunk_content: c.content,
+					search_text: searchTexts[i] ?? buildSearchText(input.logical_path, description, c.content),
+					embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
+				})),
+			);
+			await rebuildFts(ctx.db);
+
+			return { logical_path: input.logical_path, version_id: versionId, size_bytes: bytes.byteLength };
 		});
-
-		await insertChunksForVersion(
-			ctx.db,
-			input.logical_path,
-			versionId,
-			chunks.map((c, i) => ({
-				chunk_index: c.index,
-				chunk_content: c.content,
-				search_text: searchTexts[i] ?? buildSearchText(input.logical_path, description, c.content),
-				embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
-			})),
-		);
-		await rebuildFts(ctx.db);
-
-		return { logical_path: input.logical_path, version_id: versionId, size_bytes: bytes.byteLength };
 	},
 });

@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { resolveEmbeddingWorkers } from "../context.ts";
 import { listDueRefreshes } from "../db/files.ts";
+import { withEmbedderPool } from "../ingest/embedder-pool.ts";
 import { colors } from "../output/formatter.ts";
 import { isInteractive } from "../output/tty.ts";
 import { refreshOne } from "../refresh/runner.ts";
@@ -68,24 +70,30 @@ export const refreshOperation = defineOperation({
 		return `${lines.join("\n")}\n${summary}`;
 	},
 	handler: async (input, ctx) => {
-		const targets = input.logical_path
-			? [input.logical_path]
-			: (await listDueRefreshes(ctx.db)).map((r) => r.logical_path);
-		const out: RefreshEntry[] = [];
-		ctx.progress.start(targets.length, "refresh");
-		for (const path of targets) {
-			ctx.progress.setLabel(path);
-			let entry: RefreshEntry;
-			try {
-				entry = await refreshOne(ctx, path, input.force, (sublabel) => ctx.progress.update(sublabel));
-			} catch (err) {
-				entry = { logical_path: path, status: "failed", error: err instanceof Error ? err.message : String(err) };
+		// Per-command embedder pool: workers come up at the start of the
+		// refresh sweep and are killed before we return, so a manual
+		// `membot refresh` doesn't leave subprocesses around.
+		const workers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
+		return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
+			const targets = input.logical_path
+				? [input.logical_path]
+				: (await listDueRefreshes(ctx.db)).map((r) => r.logical_path);
+			const out: RefreshEntry[] = [];
+			ctx.progress.start(targets.length, "refresh");
+			for (const path of targets) {
+				ctx.progress.setLabel(path);
+				let entry: RefreshEntry;
+				try {
+					entry = await refreshOne(ctx, path, input.force, (sublabel) => ctx.progress.update(sublabel));
+				} catch (err) {
+					entry = { logical_path: path, status: "failed", error: err instanceof Error ? err.message : String(err) };
+				}
+				out.push(entry);
+				ctx.progress.tick(path);
+				ctx.progress.entry(formatEntryLine(entry));
 			}
-			out.push(entry);
-			ctx.progress.tick(path);
-			ctx.progress.entry(formatEntryLine(entry));
-		}
-		ctx.progress.done(`refresh: ${out.filter((r) => r.status === "ok").length}/${out.length} updated`);
-		return { processed: out, count: out.length };
+			ctx.progress.done(`refresh: ${out.filter((r) => r.status === "ok").length}/${out.length} updated`);
+			return { processed: out, count: out.length };
+		});
 	},
 });

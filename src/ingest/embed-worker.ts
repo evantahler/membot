@@ -1,64 +1,74 @@
+import { createInterface } from "node:readline";
+import { asHelpful, isHelpfulError } from "../errors.ts";
+import { embed } from "./embedder.ts";
+
 /**
- * Bun Worker entry: hosts a single transformers feature-extraction pipeline
- * (lazily loaded on the first embed job) and answers embed jobs from the
- * main thread. Each worker in the EmbedPool runs in its own OS thread, so
- * concurrent embed() calls truly parallelize on multi-core CPUs instead of
- * serializing on the main JS event loop.
- *
- * Wire protocol (all messages tagged with `id` and `type`):
- *   in  → { type: "init",  cacheDir?: string }              | one-time setup
- *   out ← { type: "init-ok" }
- *   in  → { type: "embed", id, texts, model }               | per-job
- *   out ← { type: "progress", id, done, total } (repeat)
- *   out ← { type: "result",   id, embeddings }
- *   out ← { type: "error",    id, message }
+ * Wire-format message exchanged between the parent EmbedderPool and a worker
+ * subprocess over the worker's stdin/stdout. Each message is a single JSON
+ * object terminated by `\n` — a robust, language-agnostic encoding that
+ * survives partial reads on either end. There is no init/ready handshake;
+ * the worker lazy-loads the WASM pipeline on its first `embed` request.
  */
-
-import { embed, setEmbeddingCacheDir } from "./embedder.ts";
-
-// Local type for the Worker scope's `self`. Bun's typings don't expose a
-// dedicated worker-global type, so we just describe the bits we use here.
-declare const self: {
-	onmessage: (ev: MessageEvent) => void;
-	postMessage(message: unknown): void;
-};
-
-interface InitMsg {
-	type: "init";
-	cacheDir?: string;
-}
-
-interface EmbedMsg {
+interface EmbedRequest {
 	type: "embed";
 	id: number;
-	texts: string[];
 	model: string;
+	texts: string[];
 }
 
-type InMsg = InitMsg | EmbedMsg;
+interface EmbedResponse {
+	type: "embed-response";
+	id: number;
+	vectors?: number[][];
+	error?: { kind: string; message: string; hint: string };
+}
 
-let initialized = false;
+/** Atomic JSON-line write to stdout — the protocol channel back to the parent. */
+function send(msg: EmbedResponse): void {
+	process.stdout.write(`${JSON.stringify(msg)}\n`);
+}
 
-self.onmessage = async (ev: MessageEvent) => {
-	const msg = ev.data as InMsg;
-	if (msg.type === "init") {
-		if (msg.cacheDir) setEmbeddingCacheDir(msg.cacheDir);
-		initialized = true;
-		self.postMessage({ type: "init-ok" });
-		return;
-	}
-	if (msg.type === "embed") {
-		if (!initialized) {
-			self.postMessage({ type: "error", id: msg.id, message: "embed worker received job before init" });
-			return;
-		}
+/**
+ * Drive the embed-worker subprocess: read newline-delimited JSON requests
+ * from stdin, dispatch them to the local `embed()` (which uses the WASM
+ * pipeline), and write JSON responses to stdout. Diagnostics (logger output)
+ * go to stderr, so the protocol channel on stdout stays clean.
+ *
+ * The worker exits naturally when stdin closes (parent died or sent EOF).
+ */
+export async function runEmbedWorker(): Promise<void> {
+	const rl = createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY });
+	for await (const line of rl) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		let req: EmbedRequest;
 		try {
-			const embeddings = await embed(msg.texts, msg.model, {
-				onProgress: (done, total) => self.postMessage({ type: "progress", id: msg.id, done, total }),
-			});
-			self.postMessage({ type: "result", id: msg.id, embeddings });
-		} catch (err) {
-			self.postMessage({ type: "error", id: msg.id, message: err instanceof Error ? err.message : String(err) });
+			req = JSON.parse(trimmed) as EmbedRequest;
+		} catch {
+			// A malformed line on stdin is almost certainly a bug in the parent —
+			// log to stderr and keep the worker alive so the parent's other
+			// requests still get served.
+			process.stderr.write(`embed-worker: ignoring malformed stdin line: ${trimmed.slice(0, 200)}\n`);
+			continue;
 		}
+		if (req.type !== "embed") continue;
+		await handleEmbed(req);
 	}
-};
+}
+
+/** Run one embed request and reply with vectors or a serialisable error. */
+async function handleEmbed(req: EmbedRequest): Promise<void> {
+	try {
+		const vectors = await embed(req.texts, req.model);
+		send({ type: "embed-response", id: req.id, vectors });
+	} catch (err) {
+		const helpful = isHelpfulError(err)
+			? err
+			: asHelpful(err, "in embed worker", "Inspect the parent process stderr for the full stack trace.");
+		send({
+			type: "embed-response",
+			id: req.id,
+			error: { kind: helpful.kind, message: helpful.message, hint: helpful.hint },
+		});
+	}
+}

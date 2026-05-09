@@ -15,14 +15,7 @@ if (ortWasm) {
 	};
 }
 
-// Pool keyed by `${model}#${slot}`. Each entry holds one fully-loaded pipeline;
-// callers pass a `slot` (worker id) so concurrent ingest workers each get
-// their own ONNX session and don't serialize on a shared extractor.
 const pipelinePromises = new Map<string, Promise<FeatureExtractionPipeline>>();
-
-function poolKey(model: string, slot: number): string {
-	return `${model}#${slot}`;
-}
 
 /** Configure where transformers caches downloaded model weights. */
 export function setEmbeddingCacheDir(dir: string): void {
@@ -35,12 +28,9 @@ function isModelCached(model: string): boolean {
 }
 
 /**
- * Lazily load (and cache) one feature-extraction pipeline per (model, slot).
- * Loading is expensive (downloads weights on first run, ~100s of ms to
- * instantiate ONNX), so we hold one promise per pool key for the life of the
- * process. Bulk ingest passes a per-worker `slot` so each worker has its own
- * ONNX session — concurrent embed calls then run on independent extractors
- * instead of contending for one shared pipeline.
+ * Lazily load (and cache) the feature-extraction pipeline for a model. Loading
+ * is expensive (downloads weights on first run, ~100s of ms to instantiate
+ * ONNX), so we hold one promise per model name for the life of the process.
  *
  * Try `wasm` first, fall back to `cpu` on "Unsupported device". The transformers
  * patch (applied for `bun build --compile` and via `bun run prebuild` for local
@@ -51,16 +41,13 @@ function isModelCached(model: string): boolean {
  * device, which uses the onnxruntime-node native bindings that ship with the
  * unpatched package.
  */
-async function getPipeline(model: string, slot: number): Promise<FeatureExtractionPipeline> {
-	const key = poolKey(model, slot);
-	let p = pipelinePromises.get(key);
+async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
+	let p = pipelinePromises.get(model);
 	if (!p) {
 		if (isModelCached(model)) {
-			logger.debug(`embedder: loading cached model ${model} (slot ${slot})`);
-		} else if (slot === 0) {
-			logger.info(`embedder: loading model ${model} (first run, downloading weights)`);
+			logger.debug(`embedder: loading cached model ${model}`);
 		} else {
-			logger.debug(`embedder: loading additional pipeline for slot ${slot}`);
+			logger.info(`embedder: loading model ${model} (first run, downloading weights)`);
 		}
 		p = (async () => {
 			try {
@@ -71,7 +58,7 @@ async function getPipeline(model: string, slot: number): Promise<FeatureExtracti
 				return (await pipeline("feature-extraction", model, { device: "cpu" })) as FeatureExtractionPipeline;
 			}
 		})();
-		pipelinePromises.set(key, p);
+		pipelinePromises.set(model, p);
 	}
 	return p;
 }
@@ -82,14 +69,39 @@ async function getPipeline(model: string, slot: number): Promise<FeatureExtracti
  * bar — ONNX WASM holds the JS thread for hundreds of ms per batch and would
  * otherwise leave nanospinner's setInterval starved between updates.
  *
- * `slot` selects which entry in the per-worker pipeline pool to use. Bulk
- * ingest passes the worker id so each ingest worker has its own extractor.
- * Callers that don't care (single-shot query embeds, refresh runner) omit
- * `slot` and share slot 0.
+ * `directOnly` bypasses any registered EmbedderPool and runs the embed call
+ * inline in the current process. Use it for query-time single-text embedding
+ * where IPC overhead would dominate.
  */
 export interface EmbedOptions {
 	onProgress?: (done: number, total: number) => void;
-	slot?: number;
+	directOnly?: boolean;
+}
+
+/**
+ * The minimal surface the embedder needs from a worker pool. Defined as an
+ * interface (not an `import type`) so we don't take a hard dependency on
+ * `embedder-pool.ts` from this hot path — the pool is plugged in via
+ * `setEmbedderPool()` from outside.
+ */
+export interface PooledEmbedder {
+	embed(texts: string[], model?: string, opts?: EmbedOptions): Promise<number[][]>;
+}
+
+let pool: PooledEmbedder | null = null;
+
+/**
+ * Register a worker pool to handle bulk embed calls. After this is set, every
+ * `embed()` call (without `directOnly`) is dispatched through the pool.
+ * Called once during `buildContext()` when `config.embedding.workers > 1`.
+ */
+export function setEmbedderPool(p: PooledEmbedder | null): void {
+	pool = p;
+}
+
+/** Read the currently registered pool, or `null` when running single-process. */
+export function getEmbedderPool(): PooledEmbedder | null {
+	return pool;
 }
 
 /**
@@ -111,7 +123,10 @@ export async function embed(
 	opts: EmbedOptions = {},
 ): Promise<number[][]> {
 	if (texts.length === 0) return [];
-	const extractor = await getPipeline(model, opts.slot ?? 0);
+	if (pool && !opts.directOnly) {
+		return pool.embed(texts, model, opts);
+	}
+	const extractor = await getPipeline(model);
 	const out: number[][] = [];
 	for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
 		const slice = texts.slice(i, i + EMBEDDING_BATCH_SIZE);
@@ -133,9 +148,13 @@ export async function embed(
 	return out;
 }
 
-/** Embed a single text — convenience wrapper for query-time embedding. */
+/**
+ * Embed a single text — convenience wrapper for query-time embedding. Always
+ * runs in-process (`directOnly: true`) so search latency isn't paying the IPC
+ * round-trip through the worker pool for one vector.
+ */
 export async function embedSingle(text: string, model: string = EMBEDDING_MODEL): Promise<number[]> {
-	const all = await embed([text], model);
+	const all = await embed([text], model, { directOnly: true });
 	const vec = all[0];
 	if (!vec) {
 		throw new HelpfulError({
