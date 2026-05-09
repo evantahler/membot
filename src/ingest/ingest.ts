@@ -36,6 +36,7 @@ export interface IngestEntryResult {
 	error?: string;
 	mime_type: string | null;
 	size_bytes: number;
+	chunk_count: number | null;
 	fetcher: FetcherKind;
 	source_sha256: string;
 }
@@ -181,11 +182,12 @@ async function ingestInline(
 		status: "ok",
 		mime_type: "text/markdown",
 		size_bytes: bytes.byteLength,
+		chunk_count: null,
 		fetcher: "inline",
 		source_sha256: sha,
 	};
 	try {
-		const versionId = await persistVersion(
+		const persisted = await persistVersion(
 			ctx,
 			{
 				logicalPath,
@@ -205,7 +207,8 @@ async function ingestInline(
 			},
 			(sublabel) => callbacks?.onEntryProgress?.(logicalPath, sublabel),
 		);
-		result.version_id = versionId;
+		result.version_id = persisted.versionId;
+		result.chunk_count = persisted.chunkCount;
 	} catch (err) {
 		result.status = "failed";
 		result.error = errorMessage(err);
@@ -232,6 +235,7 @@ async function ingestUrl(
 		status: "ok",
 		mime_type: null,
 		size_bytes: 0,
+		chunk_count: null,
 		fetcher: "downloader",
 		source_sha256: "",
 	};
@@ -262,7 +266,7 @@ async function ingestUrl(
 			}
 		}
 
-		const versionId = await pipelineForBytes(
+		const persisted = await pipelineForBytes(
 			ctx,
 			{
 				logicalPath,
@@ -281,7 +285,8 @@ async function ingestUrl(
 			},
 			(sublabel) => callbacks?.onEntryProgress?.(url, sublabel),
 		);
-		result.version_id = versionId;
+		result.version_id = persisted.versionId;
+		result.chunk_count = persisted.chunkCount;
 	} catch (err) {
 		result.status = "failed";
 		result.error = errorMessage(err);
@@ -350,6 +355,7 @@ async function ingestLocalFiles(
 				status: "ok",
 				mime_type: null,
 				size_bytes: 0,
+				chunk_count: null,
 				fetcher: "local",
 				source_sha256: "",
 			};
@@ -426,6 +432,7 @@ async function ingestLocalFiles(
 					});
 				});
 				result.version_id = versionId;
+				result.chunk_count = chunks.length;
 				anyOk = true;
 				callbacks?.onChunks?.(chunks.length);
 			} catch (err) {
@@ -451,6 +458,7 @@ async function ingestLocalFiles(
 			error: errorMessage(o.error),
 			mime_type: null,
 			size_bytes: 0,
+			chunk_count: null,
 			fetcher: "local",
 			source_sha256: "",
 		};
@@ -578,7 +586,7 @@ async function pipelineForBytes(
 	ctx: AppContext,
 	p: PipelineParams,
 	onPhase?: (sublabel: string) => void,
-): Promise<string> {
+): Promise<{ versionId: string; chunkCount: number }> {
 	onPhase?.("storing blob");
 	await upsertBlob(ctx.db, {
 		sha256: p.sourceSha,
@@ -643,7 +651,7 @@ async function persistVersion(
 	ctx: AppContext,
 	p: PersistParams,
 	onPhase?: (sublabel: string) => void,
-): Promise<string> {
+): Promise<{ versionId: string; chunkCount: number }> {
 	onPhase?.("describing");
 	const description = await describe(p.logicalPath, p.mime, p.markdown, ctx.config.llm);
 	onPhase?.("chunking");
@@ -707,7 +715,7 @@ async function persistVersion(
 	}
 	onPhase?.("indexing");
 	await rebuildFts(ctx.db);
-	return versionId;
+	return { versionId, chunkCount: chunks.length };
 }
 
 /**

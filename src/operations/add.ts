@@ -7,7 +7,7 @@ import {
 	ingestResolved,
 } from "../ingest/ingest.ts";
 import { type ResolvedSource, resolveSource } from "../ingest/source-resolver.ts";
-import { colors } from "../output/formatter.ts";
+import { colors, formatBytes } from "../output/formatter.ts";
 import { pieFor } from "../output/progress.ts";
 import { isInteractive } from "../output/tty.ts";
 import { defineOperation } from "./types.ts";
@@ -78,6 +78,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 				error: z.string().optional(),
 				mime_type: z.string().nullable(),
 				size_bytes: z.number(),
+				chunk_count: z.number().nullable(),
 				fetcher: FetcherKindEnum,
 				source_sha256: z.string(),
 			}),
@@ -104,15 +105,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 		// get the full per-entry list as the operation's stdout payload.
 		if (isInteractive()) return summary;
 
-		const lines = result.ingested.map((e) => {
-			if (e.status === "ok") {
-				return `${colors.green("✓")} ${colors.cyan(e.logical_path)} ${colors.dim(`(${e.fetcher}, ${e.size_bytes}B)`)}`;
-			}
-			if (e.status === "unchanged") {
-				return `${colors.dim("≡")} ${colors.cyan(e.logical_path)} ${colors.dim("(unchanged)")}`;
-			}
-			return `${colors.red("✗")} ${e.source_path} ${colors.dim(e.error ?? "")}`;
-		});
+		const lines = result.ingested.map(formatEntryLine);
 		return `${lines.join("\n")}\n${summary}`;
 	},
 	handler: async (input, ctx) => {
@@ -182,6 +175,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 					error: outcome.error.message,
 					mime_type: null,
 					size_bytes: 0,
+					chunk_count: null,
 					fetcher: "local",
 					source_sha256: "",
 				};
@@ -210,6 +204,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 					error: message,
 					mime_type: null,
 					size_bytes: 0,
+					chunk_count: null,
 					fetcher: "local",
 					source_sha256: "",
 				};
@@ -236,11 +231,17 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
  * Render the persistent stderr line shown for one completed entry. Mirrors
  * the glyphs used by the final `console_formatter` so users see the same
  * status indicators twice (once during ingest on stderr, once in the final
- * stdout summary).
+ * stdout summary). Successful entries show source kind, humanized byte
+ * size, and chunk count so the user can spot oddly small / oddly large
+ * files at a glance.
  */
 function formatEntryLine(entry: IngestEntryResult): string {
 	if (entry.status === "ok") {
-		return `${colors.green("✓")} ${colors.cyan(entry.logical_path)} ${colors.dim(`(${entry.fetcher}, ${entry.size_bytes}B)`)}`;
+		const parts: string[] = [entry.fetcher, formatBytes(entry.size_bytes)];
+		if (entry.chunk_count !== null) {
+			parts.push(`${entry.chunk_count} chunk${entry.chunk_count === 1 ? "" : "s"}`);
+		}
+		return `${colors.green("✓")} ${colors.cyan(entry.logical_path)} ${colors.dim(`(${parts.join(", ")})`)}`;
 	}
 	if (entry.status === "unchanged") {
 		return `${colors.dim("≡")} ${colors.cyan(entry.logical_path)} ${colors.dim("(unchanged)")}`;
