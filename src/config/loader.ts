@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { defaultMembotHome, ENV, FILES } from "../constants.ts";
 import { asHelpful, HelpfulError } from "../errors.ts";
@@ -74,17 +74,19 @@ function resolveDataDir(flag?: string): string {
 }
 
 /**
- * Persist config to disk, with the Anthropic API key blanked out — the env
- * var (`ANTHROPIC_API_KEY`) is the source of truth, never the file. Writing
- * the key to disk would land it in shell history, dotfile syncs, and
- * accidental commits.
+ * Persist config to disk and chmod 0600 so the file is owner-read-only —
+ * `llm.anthropic_api_key` may be present, and we don't want it world-readable.
+ * `loadConfig` still lets `ANTHROPIC_API_KEY` (env) override the file at read
+ * time, so an env-var-only setup keeps working unchanged.
  */
 export async function saveConfig(configPath: string, config: MembotConfig): Promise<void> {
-	const safe: MembotConfig = {
-		...config,
-		llm: { ...config.llm, anthropic_api_key: "" },
-	};
-	await Bun.write(configPath, `${JSON.stringify(safe, null, 2)}\n`);
+	await Bun.write(configPath, `${JSON.stringify(config, null, 2)}\n`);
+	try {
+		await chmod(configPath, 0o600);
+	} catch {
+		// chmod is best-effort: filesystems without unix permissions (e.g. some
+		// Windows scenarios) silently fail, and that's acceptable.
+	}
 }
 
 /**

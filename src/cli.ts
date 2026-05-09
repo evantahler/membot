@@ -4,6 +4,7 @@ import { bold, cyan, dim, green, yellow } from "ansis";
 import { program } from "commander";
 import pkg from "../package.json" with { type: "json" };
 import { registerCheckUpdateCommand } from "./commands/check-update.ts";
+import { registerConfigCommand } from "./commands/config.ts";
 import { registerMcpxCommand } from "./commands/mcpx.ts";
 import { registerReindexCommand } from "./commands/reindex.ts";
 import { registerServeCommand } from "./commands/serve.ts";
@@ -57,6 +58,7 @@ for (const op of OPERATIONS) {
 
 registerServeCommand(program);
 registerReindexCommand(program);
+registerConfigCommand(program);
 registerMcpxCommand(program);
 registerSkillCommand(program);
 registerCheckUpdateCommand(program);
