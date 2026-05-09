@@ -83,6 +83,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot read <path>`            | Read the markdown surrogate (or `--bytes` for original bytes, base64)             |
 | `membot search <query>`         | Hybrid search (semantic + BM25); `--include-history` searches older versions      |
 | `membot info <path>`            | Inspect metadata (source, fetcher, schedule, digests) without content             |
+| `membot stats [prefix]`         | Summarize the index (file/version/chunk/blob counts, on-disk size, refresh health, mime/source/downloader breakdowns); optional prefix scopes the aggregates |
 | `membot versions <path>`        | List every version newest-first                                                   |
 | `membot diff <path> <a> [b]`    | Unified diff between two versions                                                 |
 | `membot write <path>`           | Write inline agent-authored markdown as a new version                             |
