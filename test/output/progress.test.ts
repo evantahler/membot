@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { logger, type Spinner } from "../../src/output/logger.ts";
 import { createProgress, renderBar } from "../../src/output/progress.ts";
 import { getMode, type OutputMode, setMode } from "../../src/output/tty.ts";
 
@@ -126,33 +125,58 @@ describe("createProgress", () => {
 		}
 	});
 
-	test("update re-renders the spinner with the last tick label and a suffix", () => {
+	test("update re-renders the live area with the last tick label and a suffix", () => {
 		setMode({ interactive: true, color: false, json: false, verbose: false, silent: false });
-		const updates: string[] = [];
-		const fakeSpinner: Spinner = {
-			update: (t) => updates.push(t),
-			success: () => {},
-			error: () => {},
-			stop: () => {},
-		};
-		const original = logger.startSpinner.bind(logger);
-		logger.startSpinner = ((text: string) => {
-			updates.push(text);
-			return fakeSpinner;
-		}) as typeof logger.startSpinner;
+		const cap = captureStderr();
 		try {
 			const p = createProgress();
 			p.start(3, "ingest");
 			p.tick("path/to/file.md");
-			updates.length = 0;
+			cap.chunks.length = 0;
 			p.update("embedding 32/168");
-			expect(updates.length).toBe(1);
-			const text = updates[0] ?? "";
-			expect(text).toContain("path/to/file.md");
-			expect(text).toContain("embedding 32/168");
-			expect(text).toContain("1/3");
+			p.done();
+			const out = cap.chunks.join("");
+			expect(out).toContain("path/to/file.md");
+			expect(out).toContain("embedding 32/168");
+			expect(out).toContain("1/3");
 		} finally {
-			logger.startSpinner = original;
+			cap.restore();
+		}
+	});
+
+	test("setWorkers + workerSet renders one line per worker slot", () => {
+		setMode({ interactive: true, color: false, json: false, verbose: false, silent: false });
+		const cap = captureStderr();
+		try {
+			const p = createProgress();
+			p.start(4, "ingest");
+			p.setWorkers(2);
+			p.workerSet(0, "alpha.md — describing");
+			p.workerSet(1, "beta.md — embedding 5/30");
+			p.done();
+			const out = cap.chunks.join("");
+			expect(out).toContain("alpha.md — describing");
+			expect(out).toContain("beta.md — embedding 5/30");
+		} finally {
+			cap.restore();
+		}
+	});
+
+	test("addChunks surfaces a running chunk total on the main line", () => {
+		setMode({ interactive: true, color: false, json: false, verbose: false, silent: false });
+		const cap = captureStderr();
+		try {
+			const p = createProgress();
+			p.start(2, "ingest");
+			p.tick("a");
+			p.addChunks(12);
+			p.tick("b");
+			p.addChunks(7);
+			p.done();
+			const out = cap.chunks.join("");
+			expect(out).toContain("19 chunks");
+		} finally {
+			cap.restore();
 		}
 	});
 });

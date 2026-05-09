@@ -46,6 +46,9 @@ function recordingProgress(): RecordedProgress {
 		update(suffix) {
 			updates.push(suffix);
 		},
+		setWorkers() {},
+		workerSet() {},
+		addChunks() {},
 		entry(line) {
 			entries.push(line);
 		},

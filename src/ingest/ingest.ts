@@ -1,5 +1,5 @@
-import type { AppContext } from "../context.ts";
 import { DEFAULTS } from "../constants.ts";
+import type { AppContext } from "../context.ts";
 import { upsertBlob } from "../db/blobs.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { type FetcherKind, getCurrent, insertVersion, millisIso, type SourceType } from "../db/files.ts";
@@ -53,17 +53,32 @@ export interface IngestResult {
  * without re-resolving anything. `onEntryStart` fires before the pipeline
  * touches an entry; `onEntryComplete` fires after the result (ok / unchanged
  * / failed) is known. Both are optional.
+ *
+ * The optional `workerId` arg threads the slot index through so the UI can
+ * show one status line per in-flight worker; callers that don't want that
+ * detail simply ignore it.
  */
 export interface IngestCallbacks {
-	onEntryStart?: (label: string) => void;
-	onEntryComplete?: (entry: IngestEntryResult) => void;
+	onEntryStart?: (label: string, workerId?: number) => void;
+	onEntryComplete?: (entry: IngestEntryResult, workerId?: number) => void;
 	/**
 	 * Fires for sub-step progress within a single entry (e.g. "embedding
 	 * 32/168"). The callback runs many times per entry and is intended for
 	 * driving an interactive spinner — non-interactive callers should ignore
 	 * it to avoid log spam.
 	 */
-	onEntryProgress?: (label: string, sublabel: string) => void;
+	onEntryProgress?: (label: string, sublabel: string, workerId?: number) => void;
+	/**
+	 * Fires once after the worker pool size has been determined, before the
+	 * first entry begins. Lets the progress reporter size its per-worker
+	 * status section.
+	 */
+	onWorkerCount?: (n: number) => void;
+	/**
+	 * Fires after each successful persist with the number of new chunks
+	 * written, so the progress reporter can track a running total.
+	 */
+	onChunks?: (n: number) => void;
 }
 
 /**
@@ -96,10 +111,23 @@ export async function ingest(input: IngestInput, ctx: AppContext): Promise<Inges
 	const callbacks: IngestCallbacks = {
 		// Tick on completion so the bar reflects done-and-persisted entries,
 		// not concurrently-in-flight ones. setLabel shows the in-flight file
-		// without advancing the count; sub-step suffix flows via update.
-		onEntryStart: (label) => ctx.progress.setLabel(label),
-		onEntryComplete: (entry) => ctx.progress.tick(entry.logical_path),
-		onEntryProgress: (_label, sublabel) => ctx.progress.update(sublabel),
+		// without advancing the count; sub-step suffix flows via update; per-
+		// worker status lines + chunk total light up if the reporter supports
+		// them (multi-line UI in TTY, no-op otherwise).
+		onWorkerCount: (n) => ctx.progress.setWorkers(n),
+		onEntryStart: (label, workerId) => {
+			if (workerId !== undefined) ctx.progress.workerSet(workerId, label);
+			ctx.progress.setLabel(label);
+		},
+		onEntryComplete: (entry, workerId) => {
+			if (workerId !== undefined) ctx.progress.workerSet(workerId, "");
+			ctx.progress.tick(entry.logical_path);
+		},
+		onEntryProgress: (label, sublabel, workerId) => {
+			if (workerId !== undefined) ctx.progress.workerSet(workerId, `${label} — ${sublabel}`);
+			ctx.progress.update(sublabel);
+		},
+		onChunks: (n) => ctx.progress.addChunks(n),
 	};
 	const result = await ingestResolved(resolved, input, ctx, callbacks);
 	const okCount = result.ok;
@@ -290,6 +318,7 @@ async function ingestLocalFiles(
 	// also clamp by config and the global MAX_WORKERS ceiling.
 	const configured = Math.min(DEFAULTS.MAX_WORKERS, Math.max(1, ctx.config.ingest.worker_concurrency));
 	const workerCount = Math.max(1, Math.min(configured, resolved.entries.length));
+	callbacks?.onWorkerCount?.(workerCount);
 	const persistMutex = new AsyncMutex();
 	let anyOk = false;
 
@@ -310,7 +339,7 @@ async function ingestLocalFiles(
 		// a single mutex because all workers share one DuckDB connection and
 		// DuckDB rejects nested BEGINs. The embed step is offloaded to the
 		// EmbedPool above so it actually parallelizes across cores.
-		outcomes = await pMap(resolved.entries, workerCount, async (entry, _index, _workerId) => {
+		outcomes = await pMap(resolved.entries, workerCount, async (entry, _index, workerId) => {
 			const logicalPath = pickLogicalPath(input.logical_path, entry, isMulti);
 			const result: IngestEntryResult = {
 				source_path: entry.absPath,
@@ -322,8 +351,8 @@ async function ingestLocalFiles(
 				fetcher: "local",
 				source_sha256: "",
 			};
-			callbacks?.onEntryStart?.(entry.relPathFromBase);
-			const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(entry.relPathFromBase, sublabel);
+			callbacks?.onEntryStart?.(entry.relPathFromBase, workerId);
+			const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(entry.relPathFromBase, sublabel, workerId);
 			try {
 				onPhase("reading");
 				const local = await readLocalFile(entry.absPath);
@@ -336,7 +365,7 @@ async function ingestLocalFiles(
 					if (cur && cur.source_sha256 === local.sha256) {
 						result.status = "unchanged";
 						result.version_id = cur.version_id;
-						callbacks?.onEntryComplete?.(result);
+						callbacks?.onEntryComplete?.(result, workerId);
 						return result;
 					}
 				}
@@ -396,11 +425,12 @@ async function ingestLocalFiles(
 				});
 				result.version_id = versionId;
 				anyOk = true;
+				callbacks?.onChunks?.(chunks.length);
 			} catch (err) {
 				result.status = "failed";
 				result.error = errorMessage(err);
 			}
-			callbacks?.onEntryComplete?.(result);
+			callbacks?.onEntryComplete?.(result, workerId);
 			return result;
 		});
 	} finally {

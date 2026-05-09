@@ -139,17 +139,25 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 		ctx.progress.start(total, "ingest");
 		const callbacks: IngestCallbacks = {
 			// Counter advances on COMPLETION so concurrent prep doesn't race the
-			// bar to 100% before any file is fully persisted. The main label
-			// shows the in-flight file (via setLabel); the suffix shows the
-			// current sub-step (via update). With concurrency, both slots reflect
-			// whichever entry's callback fired most recently — accepted noise for
-			// a single-line spinner.
-			onEntryStart: (label) => ctx.progress.setLabel(label),
-			onEntryComplete: (entry) => {
+			// bar to 100% before any file is fully persisted. The per-worker
+			// status section (one line per active worker) shows file + step in
+			// real time; `setWorkers(n)` resizes it whenever a new ingest source
+			// kicks off with its own pool size.
+			onWorkerCount: (n) => ctx.progress.setWorkers(n),
+			onEntryStart: (label, workerId) => {
+				if (workerId !== undefined) ctx.progress.workerSet(workerId, label);
+				ctx.progress.setLabel(label);
+			},
+			onEntryComplete: (entry, workerId) => {
+				if (workerId !== undefined) ctx.progress.workerSet(workerId, "");
 				ctx.progress.tick(entry.logical_path);
 				ctx.progress.entry(formatEntryLine(entry));
 			},
-			onEntryProgress: (_label, sublabel) => ctx.progress.update(sublabel),
+			onEntryProgress: (label, sublabel, workerId) => {
+				if (workerId !== undefined) ctx.progress.workerSet(workerId, `${label} — ${sublabel}`);
+				ctx.progress.update(sublabel);
+			},
+			onChunks: (n) => ctx.progress.addChunks(n),
 		};
 
 		for (const outcome of outcomes) {

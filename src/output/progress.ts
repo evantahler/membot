@@ -1,5 +1,6 @@
-import { logger } from "./logger.ts";
-import { isSilent, useSpinner } from "./tty.ts";
+import { dim } from "ansis";
+import { type LiveArea, logger } from "./logger.ts";
+import { isSilent, useColor, useSpinner } from "./tty.ts";
 
 /**
  * Progress reporter for multi-entry operations (directory/glob ingest, batch
@@ -8,9 +9,13 @@ import { isSilent, useSpinner } from "./tty.ts";
  * `entry(line)` (writes a persistent stderr line that survives the spinner),
  * then `done(summary)`.
  *
- * Interactive: replaces a single spinner line as work happens, with an ASCII
- * bar like `[████░░░░░░] 4/15 (26%) — relative/path.md`.
- * Non-interactive: emits `info` lines per `tick` and per `entry`.
+ * Interactive: a multi-line live area on stderr — top is the bar with
+ * counts, ETA, and chunk total; below it, one line per active worker showing
+ * which file and which step it's currently on. Updates redraw in place via
+ * ANSI escapes.
+ *
+ * Non-interactive: emits `info` lines per `tick` and per `entry` and
+ * silently ignores worker / chunk updates so CI logs don't get spammed.
  */
 export interface Progress {
 	start(total: number, label?: string): void;
@@ -28,6 +33,23 @@ export interface Progress {
 	 * deliberately TTY-only so CI logs don't get one line per inner batch.
 	 */
 	update(suffix: string): void;
+	/**
+	 * Resize the worker section of the multi-line display to `n` slots. Each
+	 * slot is then addressable via `workerSet(workerId, line)`. Pass 0 to
+	 * collapse the worker section (single-line bar only). No-op in
+	 * non-interactive modes.
+	 */
+	setWorkers(n: number): void;
+	/**
+	 * Set worker `workerId`'s status line (e.g. "doc.md — embedding 12/30").
+	 * Empty string marks the slot idle. No-op in non-interactive modes.
+	 */
+	workerSet(workerId: number, line: string): void;
+	/**
+	 * Increment the cumulative chunk count rendered on the top line. Called
+	 * by ingest workers after persisting each file. No-op in non-interactive.
+	 */
+	addChunks(n: number): void;
 	entry(line: string): void;
 	done(summary?: string): void;
 	fail(summary?: string): void;
@@ -36,6 +58,8 @@ export interface Progress {
 
 const BAR_WIDTH = 20;
 const LABEL_MAX = 60;
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const FRAME_INTERVAL_MS = 80;
 
 /**
  * Render a fixed-width ASCII progress bar. Uses block-drawing characters in
@@ -58,84 +82,267 @@ function truncateLabel(label: string, max = LABEL_MAX): string {
 }
 
 /**
+ * Format a millisecond duration as a short human string: `47s`, `2m13s`,
+ * `1h12m`. Used for the ETA on the top line.
+ */
+function formatDuration(ms: number): string {
+	if (!Number.isFinite(ms) || ms < 0) return "?";
+	const sec = Math.round(ms / 1000);
+	if (sec < 60) return `${sec}s`;
+	const min = Math.floor(sec / 60);
+	const remSec = sec % 60;
+	if (min < 60) return remSec === 0 ? `${min}m` : `${min}m${remSec}s`;
+	const hr = Math.floor(min / 60);
+	const remMin = min % 60;
+	return remMin === 0 ? `${hr}h` : `${hr}h${remMin}m`;
+}
+
+/**
+ * Multi-line live area on stderr. One main line (spinner glyph + bar +
+ * counts + ETA + chunk total + label + sub-step suffix), then `workerCount`
+ * worker status lines below it. Re-renders on every state change and on a
+ * recurring interval so the spinner glyph keeps animating during long
+ * operations. Implements `LiveArea` so the logger can clear/redraw the
+ * block around stray info/warn lines.
+ */
+class MultiLineLiveArea implements LiveArea {
+	private mainLabel = "";
+	private mainSuffix = "";
+	private workerLines: string[] = [];
+	private total = 0;
+	private count = 0;
+	private chunks = 0;
+	private startedAt = 0;
+	private linesWritten = 0;
+	private frame = 0;
+	private interval: ReturnType<typeof setInterval> | null = null;
+	private active = false;
+	private color: boolean;
+
+	constructor(color: boolean) {
+		this.color = color;
+	}
+
+	start(total: number, label: string): void {
+		this.total = total;
+		this.count = 0;
+		this.chunks = 0;
+		this.startedAt = Date.now();
+		this.mainLabel = label;
+		this.mainSuffix = "";
+		this.workerLines = [];
+		this.linesWritten = 0;
+		this.frame = 0;
+		this.active = true;
+		logger.setActiveLiveArea(this);
+		this.render();
+		this.interval = setInterval(() => {
+			this.frame = (this.frame + 1) % SPINNER_FRAMES.length;
+			this.render();
+		}, FRAME_INTERVAL_MS);
+	}
+
+	tick(label: string): void {
+		this.count += 1;
+		this.mainLabel = label;
+		this.mainSuffix = "";
+		this.render();
+	}
+
+	setLabel(label: string): void {
+		this.mainLabel = label;
+		this.render();
+	}
+
+	setSuffix(suffix: string): void {
+		this.mainSuffix = suffix;
+		this.render();
+	}
+
+	setWorkerCount(n: number): void {
+		this.workerLines = new Array(Math.max(0, n)).fill("");
+		this.render();
+	}
+
+	setWorker(id: number, line: string): void {
+		while (this.workerLines.length <= id) this.workerLines.push("");
+		this.workerLines[id] = line;
+		this.render();
+	}
+
+	addChunks(n: number): void {
+		this.chunks += n;
+		this.render();
+	}
+
+	stop(finalLine: string | undefined, glyphPrefix: string): void {
+		if (!this.active) return;
+		this.active = false;
+		if (this.interval) clearInterval(this.interval);
+		this.interval = null;
+		this.clear();
+		logger.setActiveLiveArea(null);
+		if (finalLine) {
+			process.stderr.write(`${glyphPrefix}${finalLine}\n`);
+		}
+	}
+
+	clear(): void {
+		if (this.linesWritten === 0) return;
+		// Cursor sits at the end of the last rendered line. Walk up, clearing
+		// each row, ending at column 0 of the original top line.
+		process.stderr.write("\r");
+		for (let i = 0; i < this.linesWritten; i++) {
+			process.stderr.write("\x1b[2K");
+			if (i < this.linesWritten - 1) process.stderr.write("\x1b[1A");
+		}
+		this.linesWritten = 0;
+	}
+
+	render(): void {
+		if (!this.active) return;
+		this.clear();
+		const lines = this.composeLines();
+		for (let i = 0; i < lines.length; i++) {
+			if (i > 0) process.stderr.write("\n");
+			process.stderr.write(lines[i] ?? "");
+		}
+		this.linesWritten = lines.length;
+	}
+
+	private composeLines(): string[] {
+		const lines: string[] = [this.composeMainLine()];
+		for (const w of this.workerLines) {
+			lines.push(w ? `  ${truncateLabel(w, LABEL_MAX + 20)}` : "");
+		}
+		return lines;
+	}
+
+	private composeMainLine(): string {
+		const glyph = SPINNER_FRAMES[this.frame] ?? "·";
+		const bar = renderBar(this.count, this.total);
+		const pct = this.total > 0 ? Math.floor((this.count / this.total) * 100) : 0;
+		const eta = this.computeEta();
+		const stats: string[] = [`${this.count}/${this.total} (${pct}%)`];
+		if (this.chunks > 0) stats.push(`${this.chunks} chunks`);
+		if (eta) stats.push(`ETA ${eta}`);
+		const statsStr = this.dim(stats.join(" · "));
+		const labelTail = this.mainLabel ? ` ${truncateLabel(this.mainLabel)}` : "";
+		const suffixTail = this.mainSuffix ? ` ${this.dim(`— ${this.mainSuffix}`)}` : "";
+		return `${glyph} ${bar} ${statsStr}${labelTail}${suffixTail}`;
+	}
+
+	private computeEta(): string | null {
+		if (this.count <= 0 || this.total <= 0) return null;
+		if (this.count >= this.total) return null;
+		const elapsed = Date.now() - this.startedAt;
+		const remainingMs = (elapsed * (this.total - this.count)) / this.count;
+		return formatDuration(remainingMs);
+	}
+
+	private dim(text: string): string {
+		return this.color ? dim(text) : text;
+	}
+}
+
+/**
  * Build a `Progress` reporter whose mode is decided once, at call time, from
  * the current TTY state. Use one per multi-entry operation.
  */
 export function createProgress(): Progress {
-	let total = 0;
-	let count = 0;
-	let lastLabel = "";
-	let spinner: ReturnType<typeof logger.startSpinner> | null = null;
-
 	const interactive = useSpinner();
 	const silent = isSilent();
 
-	const renderSpinnerText = (label: string, suffix?: string): string => {
-		const bar = renderBar(count, total);
-		const pct = total > 0 ? Math.floor((count / total) * 100) : 0;
-		const labelTail = label ? ` — ${truncateLabel(label)}` : "";
-		const suffixTail = suffix ? ` — ${suffix}` : "";
-		return `${bar} ${count}/${total} (${pct}%)${labelTail}${suffixTail}`;
-	};
+	if (!interactive || silent) {
+		return createNonInteractiveProgress(silent);
+	}
+
+	const live = new MultiLineLiveArea(useColor());
+	let lastSummary: string | undefined;
+	let total = 0;
+	let count = 0;
 
 	return {
 		start(t: number, label?: string) {
 			total = t;
 			count = 0;
-			lastLabel = label ?? "";
-			if (silent) return;
-			if (interactive) {
-				const initial = renderSpinnerText(lastLabel);
-				spinner = logger.startSpinner(initial);
-			} else if (label) {
-				logger.info(`${label}: 0/${total}`);
-			}
+			live.start(t, label ?? "");
 		},
 		tick(label: string) {
 			count += 1;
-			lastLabel = label;
-			if (silent) return;
-			if (interactive && spinner) {
-				spinner.update(renderSpinnerText(label));
-			} else {
-				logger.info(`[${count}/${total}] ${label}`);
-			}
+			live.tick(label);
 		},
 		setLabel(label: string) {
-			lastLabel = label;
-			if (silent) return;
-			if (!interactive || !spinner) return;
-			spinner.update(renderSpinnerText(label));
+			live.setLabel(label);
 		},
 		update(suffix: string) {
-			if (silent) return;
-			if (!interactive || !spinner) return;
-			spinner.update(renderSpinnerText(lastLabel, suffix));
+			live.setSuffix(suffix);
 		},
+		setWorkers(n: number) {
+			live.setWorkerCount(n);
+		},
+		workerSet(workerId: number, line: string) {
+			live.setWorker(workerId, line);
+		},
+		addChunks(n: number) {
+			live.addChunks(n);
+		},
+		entry(line: string) {
+			logger.info(line);
+		},
+		done(summary?: string) {
+			lastSummary = summary ?? `${count}/${total} done`;
+			live.stop(lastSummary, useColor() ? `${SPINNER_FRAMES[0]} ` : "✓ ");
+		},
+		fail(summary?: string) {
+			lastSummary = summary ?? `failed at ${count}/${total}`;
+			live.stop(lastSummary, "✗ ");
+		},
+		info(msg: string) {
+			logger.info(msg);
+		},
+	};
+}
+
+/**
+ * Stripped-down progress reporter for non-TTY / silent contexts: emits one
+ * line per tick + entry, drops every sub-step / worker / chunk update so CI
+ * logs don't blow up.
+ */
+function createNonInteractiveProgress(silent: boolean): Progress {
+	let total = 0;
+	let count = 0;
+	return {
+		start(t: number, label?: string) {
+			total = t;
+			count = 0;
+			if (silent) return;
+			if (label) logger.info(`${label}: 0/${total}`);
+		},
+		tick(label: string) {
+			count += 1;
+			if (silent) return;
+			logger.info(`[${count}/${total}] ${label}`);
+		},
+		setLabel() {},
+		update() {},
+		setWorkers() {},
+		workerSet() {},
+		addChunks() {},
 		entry(line: string) {
 			if (silent) return;
 			logger.info(line);
 		},
 		done(summary?: string) {
 			if (silent) return;
-			if (interactive && spinner) {
-				spinner.success(summary ?? `${count}/${total} done`);
-				spinner = null;
-			} else if (summary) {
-				logger.info(summary);
-			}
+			if (summary) logger.info(summary);
 		},
 		fail(summary?: string) {
 			if (silent) {
 				if (summary) logger.warn(summary);
 				return;
 			}
-			if (interactive && spinner) {
-				spinner.error(summary ?? `failed at ${count}/${total}`);
-				spinner = null;
-			} else if (summary) {
-				logger.warn(summary);
-			}
+			if (summary) logger.warn(summary);
 		},
 		info(msg: string) {
 			if (silent) return;
