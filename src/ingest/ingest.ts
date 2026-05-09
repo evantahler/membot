@@ -4,6 +4,7 @@ import { upsertBlob } from "../db/blobs.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { type FetcherKind, getCurrent, insertVersion, millisIso, type SourceType } from "../db/files.ts";
 import { asHelpful, HelpfulError } from "../errors.ts";
+import { pieFor } from "../output/progress.ts";
 import { chunkDeterministic } from "./chunker.ts";
 import { AsyncMutex, pMap } from "./concurrency.ts";
 import { convert } from "./converter/index.ts";
@@ -113,10 +114,11 @@ export async function ingest(input: IngestInput, ctx: AppContext): Promise<Inges
 		// not concurrently-in-flight ones. setLabel shows the in-flight file
 		// without advancing the count; sub-step suffix flows via update; per-
 		// worker status lines + chunk total light up if the reporter supports
-		// them (multi-line UI in TTY, no-op otherwise).
+		// them (multi-line UI in TTY, no-op otherwise). The pie glyph fills
+		// in as the per-file pipeline marches read → … → persist.
 		onWorkerCount: (n) => ctx.progress.setWorkers(n),
 		onEntryStart: (label, workerId) => {
-			if (workerId !== undefined) ctx.progress.workerSet(workerId, label);
+			if (workerId !== undefined) ctx.progress.workerSet(workerId, `${pieFor(undefined)} ${label}`);
 			ctx.progress.setLabel(label);
 		},
 		onEntryComplete: (entry, workerId) => {
@@ -124,7 +126,7 @@ export async function ingest(input: IngestInput, ctx: AppContext): Promise<Inges
 			ctx.progress.tick(entry.logical_path);
 		},
 		onEntryProgress: (label, sublabel, workerId) => {
-			if (workerId !== undefined) ctx.progress.workerSet(workerId, `${label} — ${sublabel}`);
+			if (workerId !== undefined) ctx.progress.workerSet(workerId, `${pieFor(sublabel)} ${label} — ${sublabel}`);
 			ctx.progress.update(sublabel);
 		},
 		onChunks: (n) => ctx.progress.addChunks(n),

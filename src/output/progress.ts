@@ -60,6 +60,47 @@ const BAR_WIDTH = 20;
 const LABEL_MAX = 60;
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const FRAME_INTERVAL_MS = 80;
+const PIE_FRAMES = ["◯", "◔", "◐", "◕", "●"] as const;
+
+/**
+ * Map a pipeline step name to a single-character "pie" indicator showing
+ * roughly how far along the per-file pipeline is. The full path is
+ * read → unchanged check → convert → describe → chunk → embed → persist;
+ * each step lights up another quarter. Embed is the slow one and reports
+ * its own `embedding X/Y` sub-progress, which we render with a finer-
+ * grained pie based on the X/Y ratio.
+ */
+export function pieFor(step: string | undefined): string {
+	if (!step) return PIE_FRAMES[0];
+	const m = step.match(/^embedding\s+(\d+)\s*\/\s*(\d+)/);
+	if (m) {
+		const done = Number(m[1]);
+		const total = Number(m[2]);
+		if (total > 0) return pieFromRatio(done / total);
+	}
+	switch (step) {
+		case "reading":
+			return PIE_FRAMES[0];
+		case "converting":
+			return PIE_FRAMES[1];
+		case "describing":
+			return PIE_FRAMES[2];
+		case "chunking":
+			return PIE_FRAMES[3];
+		case "persisting":
+			return PIE_FRAMES[4];
+		default:
+			return PIE_FRAMES[0];
+	}
+}
+
+function pieFromRatio(r: number): string {
+	if (r < 0.125) return PIE_FRAMES[0];
+	if (r < 0.375) return PIE_FRAMES[1];
+	if (r < 0.625) return PIE_FRAMES[2];
+	if (r < 0.875) return PIE_FRAMES[3];
+	return PIE_FRAMES[4];
+}
 
 /**
  * Render a fixed-width ASCII progress bar. Uses block-drawing characters in
@@ -278,6 +319,8 @@ class MultiLineLiveArea implements LiveArea {
 		const eta = this.computeEta();
 		const stats: string[] = [`${this.count}/${this.total} (${pct}%)`];
 		if (this.chunks > 0) stats.push(`${this.chunks} chunks`);
+		const elapsedMs = Date.now() - this.startedAt;
+		if (elapsedMs > 0) stats.push(`elapsed ${formatDuration(elapsedMs)}`);
 		if (eta) stats.push(`ETA ${eta}`);
 		const statsStr = this.dim(stats.join(" · "));
 		// When per-worker lines are active, the in-flight file/step lives in
@@ -288,6 +331,20 @@ class MultiLineLiveArea implements LiveArea {
 		const labelTail = showTail && this.mainLabel ? ` ${truncateLabel(this.mainLabel)}` : "";
 		const suffixTail = showTail && this.mainSuffix ? ` ${this.dim(`— ${this.mainSuffix}`)}` : "";
 		return `${glyph} ${bar} ${statsStr}${labelTail}${suffixTail}`;
+	}
+
+	/**
+	 * Compose the final summary tail appended on `done()` — the per-batch
+	 * totals the user asked for: file count, chunk count, elapsed time.
+	 * Emitted only when there's something interesting to show (count > 0).
+	 */
+	totalsSummary(): string {
+		if (this.count <= 0) return "";
+		const parts = [`${this.count} files`];
+		if (this.chunks > 0) parts.push(`${this.chunks} chunks`);
+		const elapsedMs = Date.now() - this.startedAt;
+		parts.push(`${formatDuration(elapsedMs)} elapsed`);
+		return parts.join(" · ");
 	}
 
 	private computeEta(): string | null {
@@ -349,11 +406,15 @@ export function createProgress(): Progress {
 			logger.info(line);
 		},
 		done(summary?: string) {
-			lastSummary = summary ?? `${count}/${total} done`;
+			const base = summary ?? `${count}/${total} done`;
+			const totals = live.totalsSummary();
+			lastSummary = totals ? `${base} · ${totals}` : base;
 			live.stop(lastSummary, useColor() ? `${SPINNER_FRAMES[0]} ` : "✓ ");
 		},
 		fail(summary?: string) {
-			lastSummary = summary ?? `failed at ${count}/${total}`;
+			const base = summary ?? `failed at ${count}/${total}`;
+			const totals = live.totalsSummary();
+			lastSummary = totals ? `${base} · ${totals}` : base;
 			live.stop(lastSummary, "✗ ");
 		},
 		info(msg: string) {
@@ -370,10 +431,21 @@ export function createProgress(): Progress {
 function createNonInteractiveProgress(silent: boolean): Progress {
 	let total = 0;
 	let count = 0;
+	let chunks = 0;
+	let startedAt = 0;
+	const totalsTail = (): string => {
+		if (count <= 0) return "";
+		const parts = [`${count} files`];
+		if (chunks > 0) parts.push(`${chunks} chunks`);
+		parts.push(`${formatDuration(Date.now() - startedAt)} elapsed`);
+		return parts.join(" · ");
+	};
 	return {
 		start(t: number, label?: string) {
 			total = t;
 			count = 0;
+			chunks = 0;
+			startedAt = Date.now();
 			if (silent) return;
 			if (label) logger.info(`${label}: 0/${total}`);
 		},
@@ -386,21 +458,27 @@ function createNonInteractiveProgress(silent: boolean): Progress {
 		update() {},
 		setWorkers() {},
 		workerSet() {},
-		addChunks() {},
+		addChunks(n: number) {
+			chunks += n;
+		},
 		entry(line: string) {
 			if (silent) return;
 			logger.info(line);
 		},
 		done(summary?: string) {
 			if (silent) return;
-			if (summary) logger.info(summary);
+			const tail = totalsTail();
+			const line = summary ? (tail ? `${summary} · ${tail}` : summary) : tail;
+			if (line) logger.info(line);
 		},
 		fail(summary?: string) {
+			const tail = totalsTail();
+			const line = summary ? (tail ? `${summary} · ${tail}` : summary) : tail;
 			if (silent) {
-				if (summary) logger.warn(summary);
+				if (line) logger.warn(line);
 				return;
 			}
-			if (summary) logger.warn(summary);
+			if (line) logger.warn(line);
 		},
 		info(msg: string) {
 			if (silent) return;

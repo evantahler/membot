@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { clipToWidth, createProgress, renderBar } from "../../src/output/progress.ts";
+import { clipToWidth, createProgress, pieFor, renderBar } from "../../src/output/progress.ts";
 import { getMode, type OutputMode, setMode } from "../../src/output/tty.ts";
 
 interface WritableStream {
@@ -77,6 +77,30 @@ describe("clipToWidth", () => {
 	test("zero or negative width yields just a reset", () => {
 		expect(clipToWidth("anything", 0)).toBe("\x1b[0m");
 		expect(clipToWidth("anything", -3)).toBe("\x1b[0m");
+	});
+});
+
+describe("pieFor", () => {
+	test("known pipeline steps map to monotonically-fuller pie chars", () => {
+		// Empty → ◯, then steps fill in roughly quarter by quarter.
+		expect(pieFor("reading")).toBe("◯");
+		expect(pieFor("converting")).toBe("◔");
+		expect(pieFor("describing")).toBe("◐");
+		expect(pieFor("chunking")).toBe("◕");
+		expect(pieFor("persisting")).toBe("●");
+	});
+
+	test("embedding ratio drives a finer-grained pie", () => {
+		expect(pieFor("embedding 0/30")).toBe("◯");
+		expect(pieFor("embedding 6/30")).toBe("◔"); // 20%
+		expect(pieFor("embedding 15/30")).toBe("◐"); // 50%
+		expect(pieFor("embedding 24/30")).toBe("◕"); // 80%
+		expect(pieFor("embedding 30/30")).toBe("●");
+	});
+
+	test("undefined / unknown step falls back to the empty pie", () => {
+		expect(pieFor(undefined)).toBe("◯");
+		expect(pieFor("garbling tokens")).toBe("◯");
 	});
 });
 

@@ -8,6 +8,7 @@ import {
 } from "../ingest/ingest.ts";
 import { type ResolvedSource, resolveSource } from "../ingest/source-resolver.ts";
 import { colors } from "../output/formatter.ts";
+import { pieFor } from "../output/progress.ts";
 import { defineOperation } from "./types.ts";
 
 const FetcherKindEnum = z.enum(["downloader", "local", "inline"]);
@@ -141,11 +142,12 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 			// Counter advances on COMPLETION so concurrent prep doesn't race the
 			// bar to 100% before any file is fully persisted. The per-worker
 			// status section (one line per active worker) shows file + step in
-			// real time; `setWorkers(n)` resizes it whenever a new ingest source
-			// kicks off with its own pool size.
+			// real time, prefixed with a pie glyph that fills as the per-file
+			// pipeline progresses. `setWorkers(n)` resizes the section whenever
+			// a new ingest source kicks off with its own pool size.
 			onWorkerCount: (n) => ctx.progress.setWorkers(n),
 			onEntryStart: (label, workerId) => {
-				if (workerId !== undefined) ctx.progress.workerSet(workerId, label);
+				if (workerId !== undefined) ctx.progress.workerSet(workerId, `${pieFor(undefined)} ${label}`);
 				ctx.progress.setLabel(label);
 			},
 			onEntryComplete: (entry, workerId) => {
@@ -154,7 +156,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 				ctx.progress.entry(formatEntryLine(entry));
 			},
 			onEntryProgress: (label, sublabel, workerId) => {
-				if (workerId !== undefined) ctx.progress.workerSet(workerId, `${label} — ${sublabel}`);
+				if (workerId !== undefined) ctx.progress.workerSet(workerId, `${pieFor(sublabel)} ${label} — ${sublabel}`);
 				ctx.progress.update(sublabel);
 			},
 			onChunks: (n) => ctx.progress.addChunks(n),
