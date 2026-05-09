@@ -13,7 +13,6 @@ export const ENV = {
 	CONFIG: "MEMBOT_CONFIG",
 	DEBUG: "MEMBOT_DEBUG",
 	ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
-	MCPX_CONFIG_PATH: "MCP_CONFIG_PATH",
 	NO_UPDATE_CHECK: "MEMBOT_NO_UPDATE_CHECK",
 } as const;
 
@@ -48,4 +47,6 @@ export const FILES = {
 	INDEX_DUCKDB: "index.duckdb",
 	MODELS_DIR: "models",
 	LOGS_DIR: "logs",
+	AUTH_DIR: "auth",
+	BROWSER_STATE: "auth/browser.json",
 } as const;

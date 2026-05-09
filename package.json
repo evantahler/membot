@@ -1,6 +1,6 @@
 {
 	"name": "membot",
-	"version": "0.5.1",
+	"version": "0.6.0",
 	"description": "Versioned context store with hybrid search for AI agents. Stdio + HTTP MCP server and CLI.",
 	"type": "module",
 	"exports": {
@@ -27,7 +27,7 @@
 		"lint": "biome ci . && tsc --noEmit",
 		"format": "biome check --write .",
 		"prebuild": "bash scripts/apply-patches.sh",
-		"build": "bun build --compile --minify --sourcemap --external '@duckdb/*' ./src/cli.ts --outfile dist/membot"
+		"build": "bun build --compile --minify --sourcemap --external '@duckdb/*' --external 'playwright*' ./src/cli.ts --outfile dist/membot"
 	},
 	"keywords": [
 		"mcp",
@@ -56,9 +56,10 @@
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.32.0",
 		"@duckdb/node-api": "1.5.2-r.1",
-		"@evantahler/mcpx": "^0.21.4",
 		"@huggingface/transformers": "^4.2.0",
 		"@modelcontextprotocol/sdk": "^1.29.0",
+		"@types/picomatch": "^4.0.3",
+		"@types/turndown": "^5.0.5",
 		"ansis": "^4.2.0",
 		"commander": "^14.0.3",
 		"gray-matter": "^4.0.3",
@@ -66,10 +67,9 @@
 		"nanospinner": "^1.2.2",
 		"onnxruntime-web": "1.26.0-dev.20260416-b7804b056c",
 		"picomatch": "^4.0.4",
-		"@types/picomatch": "^4.0.3",
+		"playwright": "^1.59.1",
 		"tesseract.js": "^5.1.0",
 		"turndown": "^7.2.0",
-		"@types/turndown": "^5.0.5",
 		"unpdf": "^0.12.0",
 		"zod": "^4.0.0",
 		"zod-to-json-schema": "^3.23.0"

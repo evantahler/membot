@@ -10,7 +10,7 @@ import { type ResolvedSource, resolveSource } from "../ingest/source-resolver.ts
 import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
-const FetcherKindEnum = z.enum(["http", "mcpx", "local", "inline"]);
+const FetcherKindEnum = z.enum(["downloader", "local", "inline"]);
 
 export const addOperation = defineOperation({
 	name: "membot_add",
@@ -19,7 +19,7 @@ export const addOperation = defineOperation({
   - a local file path
   - a local directory (recursive walk, symlinks followed)
   - a glob pattern (e.g. "docs/**/*.md")
-  - a URL (fetched via mcpx if configured, otherwise plain HTTP)
+  - a URL (fetched via the per-service downloader registry — Google Docs/Sheets/Slides via export endpoints, GitHub + Linear as rendered HTML, anything else through a generic browser print-to-PDF fallback. All fetches authenticate via the user's logged-in browser session — run \`membot login\` once to sign in.)
   - "inline:<text>" literal
 Pass any number of args; each is resolved independently and the matched entries are concatenated into one response. PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, vision/OCR for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. By default, re-ingesting an unchanged source (same source_sha256 as the current version) is a no-op and reports \`status: "unchanged"\`; pass \`force=true\` to always create a new version. Each newly-ingested file becomes a new version under its own logical_path; existing versions stay queryable via membot_versions. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status.
 
@@ -54,10 +54,12 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 			.default(true)
 			.describe("Follow symlinks during directory walks (cycles broken via realpath)"),
 		refresh_frequency: z.string().optional().describe("Auto-refresh cadence: 5m | 1h | 24h | 7d. Omit to disable."),
-		fetcher_hint: z
+		downloader: z
 			.string()
 			.optional()
-			.describe("Free-form hint passed to mcpx tool search (e.g. 'firecrawl', 'github', 'google docs', 'http')"),
+			.describe(
+				"Force a specific downloader by name (e.g. 'google-docs', 'github', 'generic-web'). Skips URL-based matching.",
+			),
 		change_note: z.string().optional().describe("Free-text note attached to the new version"),
 		force: z
 			.boolean()

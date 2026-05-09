@@ -33,7 +33,6 @@ describe("docs pipeline e2e (real docs/plan.md)", () => {
 			db,
 			logger,
 			progress: createProgress(),
-			mcpx: null,
 		};
 	}, 120_000);
 

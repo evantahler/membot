@@ -39,7 +39,7 @@ export interface Operation<I extends z.ZodObject = z.ZodObject, O extends z.ZodT
 	 * falls back to pretty-printed JSON.
 	 */
 	console_formatter?: (result: z.infer<O>) => string;
-	/** The work itself. AppContext gives access to db, embedder, mcpx, logger, config. */
+	/** The work itself. AppContext gives access to db, embedder, logger, config. */
 	handler: (input: z.infer<I>, ctx: AppContext) => Promise<z.infer<O>>;
 }
 

@@ -15,10 +15,6 @@ export const LlmConfigSchema = z.object({
 	vision_model: z.string().default(DEFAULTS.VISION_MODEL),
 });
 
-export const McpxConfigSchema = z.object({
-	config_path: z.string().default(""),
-});
-
 export const DaemonConfigSchema = z.object({
 	tick_interval_sec: z.number().int().positive().default(DEFAULTS.DAEMON_TICK_SEC),
 });
@@ -35,7 +31,6 @@ export const MembotConfigSchema = z.object({
 	embedding_dimension: z.number().int().positive().default(EMBEDDING_DIMENSION),
 	chunker: ChunkerConfigSchema.default(() => ChunkerConfigSchema.parse({})),
 	llm: LlmConfigSchema.default(() => LlmConfigSchema.parse({})),
-	mcpx: McpxConfigSchema.default(() => McpxConfigSchema.parse({})),
 	daemon: DaemonConfigSchema.default(() => DaemonConfigSchema.parse({})),
 	db_lock_retry: DbLockRetryConfigSchema.default(() => DbLockRetryConfigSchema.parse({})),
 	default_refresh_frequency_sec: z.number().int().positive().nullable().default(null),

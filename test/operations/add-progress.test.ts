@@ -76,7 +76,6 @@ describe("add progress reporting", () => {
 			db,
 			logger,
 			progress: recorder,
-			mcpx: null,
 		};
 	}, 120_000);
 

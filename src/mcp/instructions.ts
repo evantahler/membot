@@ -11,8 +11,10 @@ indexed with BM25 — so prefer membot_search to membot_read+grep for discovery.
 Workflow:
   1. membot_tree or membot_search to find what already exists before adding new content.
   2. membot_add to ingest a local file, a URL, or a remote document. URLs are
-     fetched via mcpx (the chosen invocation is stored so refresh is fast and
-     deterministic).
+     fetched via per-service downloaders (Google Docs, Sheets, Slides, GitHub,
+     Linear, with a generic browser print-to-PDF fallback). Authentication
+     comes from the user's logged-in browser cookies (saved via \`membot login\`).
+     Each row stores which downloader was used so refresh is deterministic.
   3. membot_read or membot_search hits to consume content.
   4. membot_write to record agent-authored notes (source_type='inline').
 

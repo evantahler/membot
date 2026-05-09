@@ -25,9 +25,8 @@ export const infoOperation = defineOperation({
 		size_bytes: z.number().nullable(),
 		description: z.string().nullable(),
 		fetcher: z.string().nullable(),
-		fetcher_server: z.string().nullable(),
-		fetcher_tool: z.string().nullable(),
-		fetcher_args: z.record(z.string(), z.unknown()).nullable(),
+		downloader: z.string().nullable(),
+		downloader_args: z.record(z.string(), z.unknown()).nullable(),
 		refresh_frequency_sec: z.number().nullable(),
 		refreshed_at: z.string().nullable(),
 		last_refresh_status: z.string().nullable(),
@@ -53,9 +52,8 @@ export const infoOperation = defineOperation({
 		lines.push(fmt("blob_sha256", orDash(result.blob_sha256)));
 		lines.push(fmt("source_sha256", orDash(result.source_sha256)));
 		if (result.fetcher) lines.push(fmt("fetcher", result.fetcher));
-		if (result.fetcher_server) lines.push(fmt("fetcher_server", result.fetcher_server));
-		if (result.fetcher_tool) lines.push(fmt("fetcher_tool", result.fetcher_tool));
-		if (result.fetcher_args) lines.push(fmt("fetcher_args", JSON.stringify(result.fetcher_args)));
+		if (result.downloader) lines.push(fmt("downloader", result.downloader));
+		if (result.downloader_args) lines.push(fmt("downloader_args", JSON.stringify(result.downloader_args)));
 		lines.push(
 			fmt(
 				"refresh_frequency",

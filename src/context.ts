@@ -1,8 +1,7 @@
 import { join } from "node:path";
-import { McpxClient } from "@evantahler/mcpx";
 import { loadConfig } from "./config/loader.ts";
 import type { MembotConfig } from "./config/schemas.ts";
-import { ENV, FILES } from "./constants.ts";
+import { FILES } from "./constants.ts";
 import { type DbConnection, openDb } from "./db/connection.ts";
 import { logger } from "./output/logger.ts";
 import type { Progress } from "./output/progress.ts";
@@ -16,7 +15,6 @@ export interface AppContext {
 	db: DbConnection;
 	logger: typeof logger;
 	progress: Progress;
-	mcpx: McpxClient | null;
 }
 
 export interface BuildContextOptions {
@@ -32,7 +30,6 @@ export interface BuildContextOptions {
  *  - output mode (TTY/JSON/color detection — frozen for the rest of the run)
  *  - config (~/.membot/config.json with env overrides)
  *  - DuckDB connection (~/.membot/index.duckdb), running migrations on first open
- *  - mcpx client (lazy — opened on first remote fetch; null when no servers)
  */
 export async function buildContext(options: BuildContextOptions = {}): Promise<AppContext> {
 	setMode(detectMode({ json: options.json, verbose: options.verbose, noColor: options.noColor }));
@@ -45,8 +42,6 @@ export async function buildContext(options: BuildContextOptions = {}): Promise<A
 		maxDelayMs: config.db_lock_retry.max_delay_ms,
 	});
 
-	const mcpx = await maybeMcpx(config);
-
 	return {
 		config,
 		dataDir,
@@ -54,18 +49,7 @@ export async function buildContext(options: BuildContextOptions = {}): Promise<A
 		db,
 		logger,
 		progress: createProgress(),
-		mcpx,
 	};
-}
-
-async function maybeMcpx(config: MembotConfig): Promise<McpxClient | null> {
-	const configDir = config.mcpx.config_path || process.env[ENV.MCPX_CONFIG_PATH];
-	try {
-		const client = new McpxClient(configDir ? { configDir } : {});
-		return client;
-	} catch {
-		return null;
-	}
 }
 
 export async function closeContext(ctx: AppContext): Promise<void> {
@@ -73,12 +57,5 @@ export async function closeContext(ctx: AppContext): Promise<void> {
 		await ctx.db.close();
 	} catch {
 		// best effort
-	}
-	if (ctx.mcpx) {
-		try {
-			await ctx.mcpx.close();
-		} catch {
-			// best effort
-		}
 	}
 }

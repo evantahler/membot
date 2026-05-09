@@ -20,7 +20,7 @@ export interface IngestInput {
 	exclude?: string;
 	follow_symlinks?: boolean;
 	refresh_frequency?: string;
-	fetcher_hint?: string;
+	downloader?: string;
 	change_note?: string;
 	force?: boolean;
 }
@@ -161,9 +161,8 @@ async function ingestInline(
 				bytes: null,
 				markdown: text,
 				fetcher: "inline",
-				fetcherServer: null,
-				fetcherTool: null,
-				fetcherArgs: null,
+				downloader: null,
+				downloaderArgs: null,
 				refreshSec,
 				changeNote: input.change_note ?? null,
 			},
@@ -187,38 +186,6 @@ async function ingestUrl(
 	force: boolean,
 	callbacks?: IngestCallbacks,
 ): Promise<IngestResult> {
-	const mcpxAdapter = ctx.mcpx
-		? {
-				async search(query: string, options?: { keywordOnly?: boolean; semanticOnly?: boolean }) {
-					try {
-						const results = await ctx.mcpx!.search(query, options);
-						return results.map((r) => ({
-							server: r.server,
-							tool: r.tool,
-							description: r.description ?? undefined,
-							score: r.score,
-							matchType: r.matchType ?? undefined,
-						}));
-					} catch (err) {
-						logger.debug(`mcpx.search(${query}) failed: ${err instanceof Error ? err.message : String(err)}`);
-						return [];
-					}
-				},
-				async listTools(server?: string) {
-					const tools = await ctx.mcpx!.listTools(server);
-					return tools.map((t) => ({ server: t.server, tool: { name: t.tool.name, description: t.tool.description } }));
-				},
-				async info(server: string, tool: string) {
-					const t = await ctx.mcpx!.info(server, tool);
-					if (!t) return undefined;
-					return { name: t.name, description: t.description, inputSchema: t.inputSchema };
-				},
-				async exec(server: string, tool: string, args?: Record<string, unknown>) {
-					return ctx.mcpx!.exec(server, tool, args ?? {});
-				},
-			}
-		: null;
-
 	const logicalPath = input.logical_path ?? defaultLogicalForUrl(url);
 	callbacks?.onEntryStart?.(url);
 	const result: IngestEntryResult = {
@@ -228,19 +195,15 @@ async function ingestUrl(
 		status: "ok",
 		mime_type: null,
 		size_bytes: 0,
-		fetcher: "http",
+		fetcher: "downloader",
 		source_sha256: "",
 	};
 
 	try {
-		const fetched = await fetchRemote(url, {
-			hint: input.fetcher_hint,
-			mcpx: mcpxAdapter,
-			llm: ctx.config.llm,
-		});
+		const fetched = await fetchRemote(url, { downloaderName: input.downloader }, ctx.dataDir);
 		result.mime_type = fetched.mimeType;
 		result.size_bytes = fetched.bytes.byteLength;
-		result.fetcher = fetched.fetcher;
+		result.fetcher = "downloader";
 		result.source_sha256 = fetched.sha256;
 
 		if (!force) {
@@ -264,10 +227,9 @@ async function ingestUrl(
 				sourcePath: url,
 				sourceMtimeMs: null,
 				sourceSha: fetched.sha256,
-				fetcher: fetched.fetcher,
-				fetcherServer: fetched.fetcherServer,
-				fetcherTool: fetched.fetcherTool,
-				fetcherArgs: fetched.fetcherArgs,
+				fetcher: "downloader",
+				downloader: fetched.downloader,
+				downloaderArgs: fetched.downloaderArgs,
 				refreshSec,
 				changeNote: input.change_note ?? null,
 			},
@@ -351,9 +313,8 @@ async function ingestLocalFiles(
 					sourceMtimeMs: local.mtimeMs,
 					sourceSha: local.sha256,
 					fetcher: "local",
-					fetcherServer: null,
-					fetcherTool: null,
-					fetcherArgs: null,
+					downloader: null,
+					downloaderArgs: null,
 					refreshSec,
 					changeNote: input.change_note ?? null,
 				},
@@ -386,9 +347,8 @@ interface PipelineParams {
 	sourceMtimeMs: number | null;
 	sourceSha: string;
 	fetcher: FetcherKind;
-	fetcherServer: string | null;
-	fetcherTool: string | null;
-	fetcherArgs: Record<string, unknown> | null;
+	downloader: string | null;
+	downloaderArgs: Record<string, unknown> | null;
 	refreshSec: number | null;
 	changeNote: string | null;
 }
@@ -430,9 +390,8 @@ async function pipelineForBytes(
 			markdown,
 			contentSha,
 			fetcher: p.fetcher,
-			fetcherServer: p.fetcherServer,
-			fetcherTool: p.fetcherTool,
-			fetcherArgs: p.fetcherArgs,
+			downloader: p.downloader,
+			downloaderArgs: p.downloaderArgs,
 			refreshSec: p.refreshSec,
 			changeNote: p.changeNote,
 		},
@@ -452,9 +411,8 @@ interface PersistParams {
 	markdown: string;
 	contentSha?: string;
 	fetcher: FetcherKind;
-	fetcherServer: string | null;
-	fetcherTool: string | null;
-	fetcherArgs: Record<string, unknown> | null;
+	downloader: string | null;
+	downloaderArgs: Record<string, unknown> | null;
 	refreshSec: number | null;
 	changeNote: string | null;
 }
@@ -500,9 +458,8 @@ async function persistVersion(
 		mime_type: p.mime,
 		size_bytes: p.bytes?.byteLength ?? new TextEncoder().encode(p.markdown).byteLength,
 		fetcher: p.fetcher,
-		fetcher_server: p.fetcherServer,
-		fetcher_tool: p.fetcherTool,
-		fetcher_args: p.fetcherArgs,
+		downloader: p.downloader,
+		downloader_args: p.downloaderArgs,
 		refresh_frequency_sec: p.refreshSec,
 		refreshed_at: new Date().toISOString(),
 		last_refresh_status: "ok",

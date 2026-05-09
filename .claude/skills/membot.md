@@ -137,7 +137,7 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 ## Troubleshooting
 
 - **"ingest failed: unsupported mime"** → Add a converter or pass `--bytes` to keep the original; LLM-fallback only runs when `ANTHROPIC_API_KEY` is set.
-- **"refresh failed: auth"** → The original fetch used an authenticated mcpx tool; re-auth via `mcpx auth <server>`.
+- **"refresh failed: auth" / "redirected to a login page"** → The downloader's stored browser cookies expired. Run `membot login` to refresh the browser session, then retry.
 - **Search returns nothing** → Confirm the file ingested with `membot info <path>`; if needed, run `membot reindex` to rebuild the FTS keyword index.
 - **Stale results after manual DB edits** → `membot reindex`.
 - **Two paths point at the same content** → `membot mv` doesn't merge; tombstone one with `membot rm`.

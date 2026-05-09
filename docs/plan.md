@@ -1,5 +1,12 @@
 # `membot` — Standalone AI-Agent Context Store
 
+> **NOTE (v0.6+)**: the fetcher architecture has been replaced. Earlier
+> revisions describe an mcpx-driven multi-turn agent loop; the current
+> implementation is a per-service downloader registry that uses
+> Playwright for browser-session-based auth. See the
+> "Fetcher / downloader architecture" subsection below for the
+> up-to-date design. README.md and CLAUDE.md reflect the new shape.
+
 ## Context
 
 `membot` is a new standalone Bun project — Bun package `membot`, CLI binary `membot` — that extracts and reshapes the context system currently embedded in `botholomew` (paths under `botholomew/src/context/`, `src/tools/`, `src/db/`). Distribution and CLI shape mirror `mcpx`.
@@ -9,7 +16,7 @@ Goals (from user):
 - Files are **stored only in the database** — not on disk as a tree of `.md` files. Logical paths are virtual.
 - Hybrid search (vector + BM25) over chunked content.
 - Tree exploration synthesised from logical paths.
-- `membot add <sources...>` accepts any number of args; each is independently resolved as a local path, directory, glob, URL, or `inline:<text>`. Works for local paths AND remote URLs, with **mcpx-driven mini-agents** fetching remote content (Firecrawl, Google Docs, GitHub, raw HTTP). The exact mcpx invocation (server + tool + args) is stored on the row so refresh can re-invoke it directly — no agent/routing re-run.
+- `membot add <sources...>` accepts any number of args; each is independently resolved as a local path, directory, glob, URL, or `inline:<text>`. Works for local paths AND remote URLs, with **per-service downloaders** (Google Docs/Sheets/Slides via export endpoints, GitHub + Linear via rendered HTML, anything else via headless browser print-to-PDF). All downloaders authenticate via the user's logged-in browser cookies, captured by `membot login`. The downloader name + its args are stored on the row so refresh re-invokes the same downloader against the same URL deterministically — no LLM, no agent loop.
 - Everything is converted to **markdown**: PDF, DOCX, HTML, plain-text, etc. **Native libs first, LLM fallback** for messy/scanned content.
 - Each row tracks `source_path`, `source_sha256`, `refreshed_at`, `refresh_frequency_sec`. `membot refresh <path>` re-reads the original source, re-hashes, and re-converts/re-embeds only if the SHA changed. Local files compared by content hash; remote URLs re-fetched via the same fetcher.
 - Both **on-demand** (`membot refresh`) and **daemon** (`membot serve --watch`) refresh modes.
@@ -193,10 +200,9 @@ CREATE TABLE files (
   description     TEXT,                        -- ALWAYS-PRESENT one-paragraph summary (LLM-generated; covers text and binary alike). Prepended to every chunk's embedded text.
   mime_type       TEXT,
   size_bytes      BIGINT,
-  fetcher         TEXT,                        -- 'http' | 'mcpx' | 'local' | 'inline'
-  fetcher_server  TEXT,                        -- mcpx server name (e.g. 'firecrawl', 'google-docs', 'github') — NULL unless fetcher='mcpx'
-  fetcher_tool    TEXT,                        -- mcpx tool name (e.g. 'scrape', 'get_doc') — NULL unless fetcher='mcpx'
-  fetcher_args    JSON,                        -- full args object passed to the mcpx tool — replayable as-is on refresh
+  fetcher         TEXT,                        -- 'downloader' | 'local' | 'inline'
+  downloader      TEXT,                        -- downloader name (e.g. 'google-docs', 'github', 'generic-web') — NULL unless fetcher='downloader'
+  downloader_args JSON,                        -- args needed to re-invoke the downloader (document_id, owner/repo/number, etc.) — replayable as-is on refresh
   refresh_frequency_sec INTEGER,               -- NULL = never auto-refresh
   refreshed_at    TIMESTAMP,
   last_refresh_status TEXT,                    -- 'ok' | 'unchanged' | 'failed:<reason>'
@@ -521,7 +527,7 @@ db.files.insertVersion + db.chunks.insertForVersion + FTS rebuild
 1. Load `files` row.
 2. If `source_type='local'`: `stat()`; if `mtime_ms == source_mtime_ms`, skip. Otherwise re-read + sha256.
 3. If `source_type='remote'`:
-   - If `fetcher='mcpx'`: directly invoke `mcpx exec <fetcher_server> <fetcher_tool> <fetcher_args>` — no agent re-routing.
+   - If `fetcher='downloader'`: re-invoke the persisted downloader (`<downloader>`) against the row's `source_path` URL — deterministic, no LLM/agent involved.
    - If `fetcher='http'`: plain `fetch(source_path)`.
    - sha256 the resulting bytes.
 4. Compare `new_source_sha256 == files.source_sha256`. If equal → set `refreshed_at=now()`, `last_refresh_status='unchanged'`, done.
@@ -587,7 +593,7 @@ a NEW version; existing versions stay queryable via membot_versions.`,
     sources:           z.array(z.string()).min(1).describe('One or more sources. Each arg is a local path, directory, glob, URL, or `inline:<text>` literal.'),
     logical_path:      z.string().optional().describe('Logical path (single source) or prefix (multi-arg / directory / glob)'),
     refresh_frequency: z.string().optional().describe('Refresh cadence: 5m | 1h | 24h | 7d. Omit for no auto-refresh.'),
-    fetcher_hint:      z.enum(['firecrawl','github','gdocs','http']).optional().describe('Force a specific mcpx fetcher'),
+    downloader:        z.string().optional().describe('Force a specific downloader by name (e.g. "google-docs", "github", "generic-web")'),
     change_note:       z.string().optional().describe('Free-text note attached to the new version'),
   }),
   outputSchema: z.object({
@@ -609,7 +615,7 @@ a NEW version; existing versions stay queryable via membot_versions.`,
 This single definition produces:
 
 - **MCP tool** `membot_add` with the description above, JSON-Schema input derived from zod, and validated output.
-- **CLI command** `membot add <sources...> [-p <path>] [-r <dur>] [--fetcher-hint <name>] [-m <note>]` whose `--help` text is byte-identical to the description above.
+- **CLI command** `membot add <sources...> [-p <path>] [-r <dur>] [--downloader <name>] [-m <note>]` whose `--help` text is byte-identical to the description above.
 
 ### Server-level instructions
 

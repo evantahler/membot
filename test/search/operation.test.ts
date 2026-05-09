@@ -58,7 +58,6 @@ describe("search Operation handler", () => {
 			db,
 			logger,
 			progress: createProgress(),
-			mcpx: null,
 		};
 
 		// Ingest with real embeddings so the semantic path is exercised end-to-end.
@@ -184,7 +183,6 @@ describe("search Operation handler — empty-query handling", () => {
 			db,
 			logger,
 			progress: createProgress(),
-			mcpx: null,
 		};
 		// Insert a single chunk with a dummy embedding — no embedder weights needed
 		// because empty-query tests never invoke the model.
