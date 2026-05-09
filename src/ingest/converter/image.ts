@@ -31,9 +31,7 @@ export async function convertImage(bytes: Uint8Array, mimeType: string, llm: Llm
 			? withTimeout(describeImage(bytes, mimeType, llm), SUBTASK_TIMEOUT_MS, "vision")
 			: Promise.resolve("");
 	const ocrPromise =
-		bytes.byteLength <= OCR_MAX_BYTES
-			? withTimeout(ocrImage(bytes), SUBTASK_TIMEOUT_MS, "ocr")
-			: Promise.resolve("");
+		bytes.byteLength <= OCR_MAX_BYTES ? withTimeout(ocrImage(bytes), SUBTASK_TIMEOUT_MS, "ocr") : Promise.resolve("");
 	const [caption, ocrText] = await Promise.all([captionPromise, ocrPromise]);
 
 	const sections: string[] = [];
