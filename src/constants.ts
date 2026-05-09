@@ -48,5 +48,16 @@ export const FILES = {
 	MODELS_DIR: "models",
 	LOGS_DIR: "logs",
 	AUTH_DIR: "auth",
-	BROWSER_STATE: "auth/browser.json",
+	/**
+	 * Persistent Chromium profile directory. We use
+	 * `chromium.launchPersistentContext(userDataDir)` rather than the
+	 * lighter `storageState` JSON snapshot because Linear (and other
+	 * SPA-heavy services) stash critical session state in IndexedDB —
+	 * which `storageState` doesn't capture. A persistent profile
+	 * survives the full set: cookies, localStorage, IndexedDB, service
+	 * workers, etc. Trade-off: directory-sized state instead of a tiny
+	 * JSON file, and only one process can have the profile open at a
+	 * time (chromium's single-instance lock).
+	 */
+	BROWSER_PROFILE: "auth/browser-profile",
 } as const;

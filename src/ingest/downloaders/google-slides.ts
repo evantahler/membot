@@ -1,6 +1,6 @@
 import { HelpfulError } from "../../errors.ts";
 import { sha256Hex } from "../local-reader.ts";
-import { safeResolveUrl } from "./browser.ts";
+import { fetchWithBrowserCookies } from "./google-shared.ts";
 import type { DownloadedRemote, Downloader } from "./index.ts";
 
 const SLIDE_PATH = /^\/presentation\/d\/([a-zA-Z0-9_-]+)/;
@@ -14,23 +14,21 @@ const SLIDE_PATH = /^\/presentation\/d\/([a-zA-Z0-9_-]+)/;
 export const googleSlidesDownloader: Downloader = {
 	name: "google-slides",
 	description: "Google Slides (docs.google.com/presentation/d/<id>) — exports as PDF for layout-faithful conversion.",
+	logins: [
+		{
+			kind: "browser",
+			name: "Google",
+			url: "https://accounts.google.com/signin",
+			description: "covers Docs, Sheets, and Slides",
+		},
+	],
 	matches(url) {
 		return url.hostname === "docs.google.com" && SLIDE_PATH.test(url.pathname);
 	},
 	async download(url, ctx): Promise<DownloadedRemote> {
 		const slidesId = extractSlidesId(url);
 		const exportUrl = `https://docs.google.com/presentation/d/${slidesId}/export/pdf`;
-		const request = await ctx.pool.request();
-		const response = await request.get(exportUrl);
-		const finalUrl = safeResolveUrl(response.url(), exportUrl);
-		if (!response.ok() || (finalUrl !== null && finalUrl.hostname === "accounts.google.com")) {
-			throw new HelpfulError({
-				kind: "auth_error",
-				message: `Google Slides export returned ${response.status()} for ${url.toString()}`,
-				hint: "Run `membot login` and sign into Google in the browser that opens, then re-run.",
-			});
-		}
-		const body = Buffer.from(await response.body());
+		const body = await fetchWithBrowserCookies(exportUrl, ctx, "Google Slides", url);
 		return {
 			bytes: new Uint8Array(body),
 			sha256: sha256Hex(body),

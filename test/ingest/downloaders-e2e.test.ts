@@ -2,11 +2,14 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MembotConfigSchema } from "../../src/config/schemas.ts";
 import { convertPdf } from "../../src/ingest/converter/pdf.ts";
 import { BrowserPool } from "../../src/ingest/downloaders/browser.ts";
 import { genericWebDownloader } from "../../src/ingest/downloaders/generic-web.ts";
 import { githubDownloader } from "../../src/ingest/downloaders/github.ts";
 import { logger } from "../../src/output/logger.ts";
+
+const config = MembotConfigSchema.parse({});
 
 /**
  * Live network tests against two stable public URLs:
@@ -45,7 +48,7 @@ describe.if(SHOULD_RUN)("downloaders end-to-end (live network, chromium)", () =>
 
 	beforeAll(() => {
 		tmp = mkdtempSync(join(tmpdir(), "membot-e2e-"));
-		pool = new BrowserPool({ storageStatePath: join(tmp, "auth", "browser.json") });
+		pool = new BrowserPool({ userDataDir: join(tmp, "auth", "browser-profile") });
 	});
 
 	afterAll(async () => {
@@ -55,7 +58,7 @@ describe.if(SHOULD_RUN)("downloaders end-to-end (live network, chromium)", () =>
 
 	test("generic-web downloads www.evantahler.com as a PDF and convertPdf extracts readable text", async () => {
 		const url = new URL("https://www.evantahler.com");
-		const result = await genericWebDownloader.download(url, { pool, logger });
+		const result = await genericWebDownloader.download(url, { pool, logger, config });
 		expect(result.mimeType).toBe("application/pdf");
 		expect(result.bytes.byteLength).toBeGreaterThan(10_000);
 		expect(result.downloader).toBe("generic-web");
@@ -75,9 +78,8 @@ describe.if(SHOULD_RUN)("downloaders end-to-end (live network, chromium)", () =>
 
 	test("github downloader pulls the issue body + comments from a public repo", async () => {
 		const url = new URL("https://github.com/evantahler/membot/issues/36");
-		const result = await githubDownloader.download(url, { pool, logger });
-		expect(result.mimeType).toBe("text/html");
-		expect(result.bytes.byteLength).toBeGreaterThan(10_000);
+		const result = await githubDownloader.download(url, { pool, logger, config });
+		expect(result.mimeType).toBe("text/markdown");
 		expect(result.downloader).toBe("github");
 		expect(result.downloaderArgs).toMatchObject({
 			owner: "evantahler",
@@ -85,12 +87,12 @@ describe.if(SHOULD_RUN)("downloaders end-to-end (live network, chromium)", () =>
 			kind: "issues",
 			number: 36,
 		});
-		const html = new TextDecoder().decode(result.bytes);
-		// Issue body and comment that are checked in on issue #36.
-		// The page embeds the issue body once in markup and once in a
-		// JSON island; either occurrence is fine.
-		expect(html).toContain("This is a test issue for the downloader CI");
-		expect(html).toContain("I've got a comment too");
+		const md = new TextDecoder().decode(result.bytes);
+		// The rendered markdown should include the issue title, body,
+		// and the seeded comment text (these are checked in on #36).
+		expect(md).toContain("# Issue #36: A test issue for downloder");
+		expect(md).toContain("This is a test issue for the downloader CI");
+		expect(md).toContain("I've got a comment too");
 	}, 120_000);
 });
 

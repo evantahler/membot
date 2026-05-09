@@ -19,6 +19,19 @@ export const DaemonConfigSchema = z.object({
 	tick_interval_sec: z.number().int().positive().default(DEFAULTS.DAEMON_TICK_SEC),
 });
 
+export const LinearDownloaderConfigSchema = z.object({
+	api_key: z.string().meta({ secret: true }).default(""),
+});
+
+export const GithubDownloaderConfigSchema = z.object({
+	api_key: z.string().meta({ secret: true }).default(""),
+});
+
+export const DownloadersConfigSchema = z.object({
+	linear: LinearDownloaderConfigSchema.default(() => LinearDownloaderConfigSchema.parse({})),
+	github: GithubDownloaderConfigSchema.default(() => GithubDownloaderConfigSchema.parse({})),
+});
+
 export const DbLockRetryConfigSchema = z.object({
 	max_attempts: z.number().int().positive().default(30),
 	base_delay_ms: z.number().int().positive().default(100),
@@ -31,6 +44,7 @@ export const MembotConfigSchema = z.object({
 	embedding_dimension: z.number().int().positive().default(EMBEDDING_DIMENSION),
 	chunker: ChunkerConfigSchema.default(() => ChunkerConfigSchema.parse({})),
 	llm: LlmConfigSchema.default(() => LlmConfigSchema.parse({})),
+	downloaders: DownloadersConfigSchema.default(() => DownloadersConfigSchema.parse({})),
 	daemon: DaemonConfigSchema.default(() => DaemonConfigSchema.parse({})),
 	db_lock_retry: DbLockRetryConfigSchema.default(() => DbLockRetryConfigSchema.parse({})),
 	default_refresh_frequency_sec: z.number().int().positive().nullable().default(null),
@@ -39,3 +53,6 @@ export const MembotConfigSchema = z.object({
 export type MembotConfig = z.infer<typeof MembotConfigSchema>;
 export type ChunkerConfig = z.infer<typeof ChunkerConfigSchema>;
 export type LlmConfig = z.infer<typeof LlmConfigSchema>;
+export type DownloadersConfig = z.infer<typeof DownloadersConfigSchema>;
+export type LinearDownloaderConfig = z.infer<typeof LinearDownloaderConfigSchema>;
+export type GithubDownloaderConfig = z.infer<typeof GithubDownloaderConfigSchema>;

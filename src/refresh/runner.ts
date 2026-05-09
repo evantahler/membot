@@ -148,11 +148,11 @@ async function refreshRemote(
 			hint: "Inspect with `membot info` and consider re-ingesting.",
 		});
 	}
-	const storageStatePath = join(ctx.dataDir, FILES.BROWSER_STATE);
-	const pool = new BrowserPool({ storageStatePath });
+	const userDataDir = join(ctx.dataDir, FILES.BROWSER_PROFILE);
+	const pool = new BrowserPool({ userDataDir });
 	let fetched: Awaited<ReturnType<typeof fetchRemoteByDownloader>>;
 	try {
-		fetched = await fetchRemoteByDownloader(cur.downloader, cur.source_path, pool);
+		fetched = await fetchRemoteByDownloader(cur.downloader, cur.source_path, pool, ctx.config);
 	} finally {
 		await pool.dispose();
 	}

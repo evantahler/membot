@@ -21,13 +21,28 @@ bunx playwright install chromium    # one-time browser binary download (~150 MB)
 
 This pulls in DuckDB's per-platform native bindings and Playwright's Chromium binary alongside membot. The build externalizes `@duckdb/*` (those `.node` bindings can't be embedded by `bun build --compile`) and `playwright*` (the browser binary lives in `~/.cache/ms-playwright`), so a global Bun install is the supported path.
 
-After installing, sign into the services you want to ingest from:
+After installing, set up the services you want to ingest from:
 
 ```bash
 membot login
 ```
 
-A real Chromium window opens — sign into Google, GitHub, Linear, or anything else; close the window when done. Cookies are persisted to `~/.membot/auth/browser.json` and reused by every downloader. Re-run `membot login` to refresh expired sessions.
+A real Chromium window opens with two sections:
+
+- **Browser sign-in** — Google Docs / Sheets / Slides. Click the Google link in the window, sign in, close the window. Cookies + IndexedDB persist to `~/.membot/auth/browser-profile/` and reused by every browser-based downloader.
+- **API-key services** — GitHub and Linear. The window shows the settings URL where you create a token and the `membot config set …` command to run in your terminal:
+
+```bash
+# GitHub: settings/tokens → fine-grained, repo:read
+membot config set downloaders.github.api_key <PAT>
+# or read from environment
+export GITHUB_TOKEN=<PAT>
+
+# Linear: linear.app/settings/api → personal API key
+membot config set downloaders.linear.api_key <KEY>
+```
+
+Public GitHub repos work without a token (rate-limited at 60 req/hr). Linear always needs a key.
 
 ## Quick start
 
@@ -127,7 +142,8 @@ Add `--watch` (and optional `--tick <sec>`) to also run the refresh daemon, whic
   ```
 
   Values are written with file mode `0600`. `ANTHROPIC_API_KEY` set in the environment still wins on read, so existing env-var setups keep working.
-- **Browser session:** `~/.membot/auth/browser.json` (Playwright `storageState`). Captured by `membot login`; downloaders reuse it on every fetch. Delete the file to force a fresh login.
+- **Browser session:** `~/.membot/auth/browser-profile/` (Playwright persistent profile — cookies, localStorage, IndexedDB). Captured by `membot login`; cookie-based downloaders (Google) reuse it on every fetch. Delete the directory to force a fresh login.
+- **API keys:** stored under `downloaders.<service>.api_key` in `~/.membot/config.json`. Read by API-based downloaders (GitHub, Linear).
 - **Environment variables:**
   - `ANTHROPIC_API_KEY` — optional. Enables LLM fallback for messy / scanned input (vision captions for images, last-resort markdown conversion). Without it, the pipeline degrades to deterministic native conversion. Equivalent to `membot config set llm.anthropic_api_key ...`; the env var takes precedence on read.
   - `MEMBOT_HOME` — override the data directory.

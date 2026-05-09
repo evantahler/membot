@@ -200,7 +200,7 @@ async function ingestUrl(
 	};
 
 	try {
-		const fetched = await fetchRemote(url, { downloaderName: input.downloader }, ctx.dataDir);
+		const fetched = await fetchRemote(url, ctx.config, { downloaderName: input.downloader }, ctx.dataDir);
 		result.mime_type = fetched.mimeType;
 		result.size_bytes = fetched.bytes.byteLength;
 		result.fetcher = "downloader";
