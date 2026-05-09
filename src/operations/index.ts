@@ -8,6 +8,7 @@ import { readOperation } from "./read.ts";
 import { refreshOperation } from "./refresh.ts";
 import { removeOperation } from "./remove.ts";
 import { searchOperation } from "./search.ts";
+import { statsOperation } from "./stats.ts";
 import { treeOperation } from "./tree.ts";
 import type { Operation } from "./types.ts";
 import { versionsOperation } from "./versions.ts";
@@ -28,6 +29,7 @@ export const OPERATIONS: Operation<any, any>[] = [
 	readOperation,
 	searchOperation,
 	infoOperation,
+	statsOperation,
 	versionsOperation,
 	diffOperation,
 	writeOperation,
