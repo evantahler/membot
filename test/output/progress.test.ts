@@ -193,6 +193,8 @@ describe("createProgress", () => {
 			const out = cap.chunks.join("");
 			expect(out).toContain("alpha.md — describing");
 			expect(out).toContain("beta.md — embedding 5/30");
+			// Separator row under the bar so the worker grid reads as its own block.
+			expect(out).toContain("─");
 		} finally {
 			cap.restore();
 		}

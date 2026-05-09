@@ -257,6 +257,13 @@ class MultiLineLiveArea implements LiveArea {
 		// the screen as files complete.
 		const width = Math.max(20, terminalWidth() - 1);
 		const lines: string[] = [clipToWidth(this.composeMainLine(), width)];
+		if (this.workerLines.length > 0) {
+			// Separator under the bar so the per-worker section reads as a
+			// distinct block — without this, the first worker line snugs up
+			// against the bar and the bar's tail (label/suffix) bleeds into
+			// the worker grid visually.
+			lines.push(this.dim("─".repeat(width)));
+		}
 		for (const w of this.workerLines) {
 			const raw = w ? `  ${truncateLabel(w, LABEL_MAX + 20)}` : "";
 			lines.push(clipToWidth(raw, width));
@@ -273,8 +280,13 @@ class MultiLineLiveArea implements LiveArea {
 		if (this.chunks > 0) stats.push(`${this.chunks} chunks`);
 		if (eta) stats.push(`ETA ${eta}`);
 		const statsStr = this.dim(stats.join(" · "));
-		const labelTail = this.mainLabel ? ` ${truncateLabel(this.mainLabel)}` : "";
-		const suffixTail = this.mainSuffix ? ` ${this.dim(`— ${this.mainSuffix}`)}` : "";
+		// When per-worker lines are active, the in-flight file/step lives in
+		// the worker grid — duplicating it on the bar would just be noise.
+		// In single-line mode (workers = 0) we keep the label/suffix tail so
+		// short ingests still show what's happening.
+		const showTail = this.workerLines.length === 0;
+		const labelTail = showTail && this.mainLabel ? ` ${truncateLabel(this.mainLabel)}` : "";
+		const suffixTail = showTail && this.mainSuffix ? ` ${this.dim(`— ${this.mainSuffix}`)}` : "";
 		return `${glyph} ${bar} ${statsStr}${labelTail}${suffixTail}`;
 	}
 
