@@ -48,6 +48,13 @@ export const DEFAULTS = {
 	VISION_MODEL: "claude-haiku-4-5-20251001",
 	UPDATE_CHECK_INTERVAL_MS: 24 * 60 * 60 * 1000,
 	UPDATE_CHECK_TIMEOUT_MS: 5_000,
+	/**
+	 * Per-document cap on Claude vision caption calls when expanding inline
+	 * images during DOCX/HTML conversion. Beyond this, images get a small
+	 * deterministic placeholder so a slide-deck-shaped doc with hundreds of
+	 * embedded images doesn't fan out into hundreds of vision requests.
+	 */
+	MAX_INLINE_IMAGE_CAPTIONS: 20,
 } as const;
 
 export const FILES = {

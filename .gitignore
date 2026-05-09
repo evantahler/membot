@@ -7,3 +7,5 @@ dist/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 ~/.membot/
+# tesseract.js drops this in cwd the first time OCR runs
+eng.traineddata

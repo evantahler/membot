@@ -383,7 +383,7 @@ async function pipelineForBytes(
 	});
 
 	onPhase?.("converting");
-	const conversion = await convert(p.bytes, p.mime, p.source, ctx.config.llm);
+	const conversion = await convert(p.bytes, p.mime, p.source, ctx.config.llm, ctx.config.converters);
 	const markdown = conversion.markdown;
 	const contentSha = sha256Hex(new TextEncoder().encode(markdown));
 
