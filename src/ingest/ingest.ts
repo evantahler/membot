@@ -3,6 +3,7 @@ import { upsertBlob } from "../db/blobs.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { type FetcherKind, getCurrent, insertVersion, millisIso, type SourceType } from "../db/files.ts";
 import { asHelpful, HelpfulError } from "../errors.ts";
+import { logger } from "../output/logger.ts";
 import { chunkDeterministic } from "./chunker.ts";
 import { convert } from "./converter/index.ts";
 import { describe } from "./describer.ts";
@@ -177,12 +178,32 @@ async function ingestUrl(
 ): Promise<IngestResult> {
 	const mcpxAdapter = ctx.mcpx
 		? {
-				async listTools() {
-					const tools = await ctx.mcpx!.listTools();
-					return tools;
+				async search(query: string, options?: { keywordOnly?: boolean; semanticOnly?: boolean }) {
+					try {
+						const results = await ctx.mcpx!.search(query, options);
+						return results.map((r) => ({
+							server: r.server,
+							tool: r.tool,
+							description: r.description ?? undefined,
+							score: r.score,
+							matchType: r.matchType ?? undefined,
+						}));
+					} catch (err) {
+						logger.debug(`mcpx.search(${query}) failed: ${err instanceof Error ? err.message : String(err)}`);
+						return [];
+					}
 				},
-				async exec(server: string, tool: string, args: Record<string, unknown>) {
-					return ctx.mcpx!.exec(server, tool, args);
+				async listTools(server?: string) {
+					const tools = await ctx.mcpx!.listTools(server);
+					return tools.map((t) => ({ server: t.server, tool: { name: t.tool.name, description: t.tool.description } }));
+				},
+				async info(server: string, tool: string) {
+					const t = await ctx.mcpx!.info(server, tool);
+					if (!t) return undefined;
+					return { name: t.name, description: t.description, inputSchema: t.inputSchema };
+				},
+				async exec(server: string, tool: string, args?: Record<string, unknown>) {
+					return ctx.mcpx!.exec(server, tool, args ?? {});
 				},
 			}
 		: null;
@@ -201,7 +222,11 @@ async function ingestUrl(
 	};
 
 	try {
-		const fetched = await fetchRemote(url, { hint: input.fetcher_hint, mcpx: mcpxAdapter });
+		const fetched = await fetchRemote(url, {
+			hint: input.fetcher_hint,
+			mcpx: mcpxAdapter,
+			llm: ctx.config.llm,
+		});
 		result.mime_type = fetched.mimeType;
 		result.size_bytes = fetched.bytes.byteLength;
 		result.fetcher = fetched.fetcher;
@@ -551,6 +576,7 @@ function summarize(entries: IngestEntryResult[]): IngestResult {
 }
 
 function errorMessage(err: unknown): string {
+	if (err instanceof HelpfulError) return `${err.message} — ${err.hint}`;
 	if (err instanceof Error) return err.message;
 	return String(err);
 }

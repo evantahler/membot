@@ -8,7 +8,7 @@ import { chunkDeterministic } from "../ingest/chunker.ts";
 import { convert } from "../ingest/converter/index.ts";
 import { describe } from "../ingest/describer.ts";
 import { embed } from "../ingest/embedder.ts";
-import { fetchRemote } from "../ingest/fetcher.ts";
+import { fetchRemote, isMcpToolError } from "../ingest/fetcher.ts";
 import { mimeFromPath, readLocalFile, sha256Hex } from "../ingest/local-reader.ts";
 import { buildSearchText } from "../ingest/search-text.ts";
 
@@ -167,6 +167,14 @@ async function replayFetch(
 	if (cur.fetcher === "mcpx" && cur.fetcher_server && cur.fetcher_tool && mcpx) {
 		const args = cur.fetcher_args ?? {};
 		const result = await mcpx.exec(cur.fetcher_server, cur.fetcher_tool, args);
+		if (isMcpToolError(result)) {
+			const detail = extractText(result).trim();
+			throw new HelpfulError({
+				kind: "network_error",
+				message: `mcpx tool ${cur.fetcher_server}/${cur.fetcher_tool} returned isError=true${detail ? `: ${detail}` : ""}`,
+				hint: `Re-add with a working fetcher: \`membot remove ${cur.logical_path}\` then \`membot add ${cur.source_path} --fetcher http\` (or another --fetcher hint).`,
+			});
+		}
 		const text = extractText(result);
 		const bytes = new TextEncoder().encode(text);
 		return {
