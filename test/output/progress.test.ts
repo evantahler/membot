@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { createProgress, renderBar } from "../../src/output/progress.ts";
+import { clipToWidth, createProgress, renderBar } from "../../src/output/progress.ts";
 import { getMode, type OutputMode, setMode } from "../../src/output/tty.ts";
 
 interface WritableStream {
@@ -41,6 +41,42 @@ describe("renderBar", () => {
 
 	test("clamps overshoot to width", () => {
 		expect(renderBar(20, 10, 10)).toBe(`[${"█".repeat(10)}]`);
+	});
+});
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escape sequences requires \x1b
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+describe("clipToWidth", () => {
+	const stripAnsi = (s: string) => s.replace(ANSI_RE, "");
+
+	test("returns the string unchanged when shorter than width", () => {
+		expect(stripAnsi(clipToWidth("hello", 10))).toBe("hello");
+	});
+
+	test("truncates plain text to fit width", () => {
+		const out = clipToWidth("abcdefghij", 5);
+		expect(stripAnsi(out)).toBe("abcde");
+	});
+
+	test("ANSI escape sequences don't count toward visible width", () => {
+		// "abc" + green-on + "def" + reset. Clipping to 4 keeps "abcd".
+		const styled = "abc\x1b[32mdef\x1b[0mghi";
+		const out = clipToWidth(styled, 4);
+		expect(stripAnsi(out)).toBe("abcd");
+		// Style escape stays in the output even though it has no visible width.
+		expect(out).toContain("\x1b[32m");
+	});
+
+	test("appends a reset escape so cut-mid-style doesn't leak color", () => {
+		const styled = "\x1b[31mvery long red string here\x1b[0m";
+		const out = clipToWidth(styled, 6);
+		expect(out.endsWith("\x1b[0m")).toBe(true);
+	});
+
+	test("zero or negative width yields just a reset", () => {
+		expect(clipToWidth("anything", 0)).toBe("\x1b[0m");
+		expect(clipToWidth("anything", -3)).toBe("\x1b[0m");
 	});
 });
 

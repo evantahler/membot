@@ -82,6 +82,45 @@ function truncateLabel(label: string, max = LABEL_MAX): string {
 }
 
 /**
+ * Cap a (possibly ANSI-styled) string at `width` *visible* columns. ANSI
+ * escape sequences are passed through verbatim — they don't count toward
+ * width — and a `\x1b[0m` reset is appended so any open formatting closes
+ * cleanly even if we cut mid-styled-substring. Critical for the multi-line
+ * live area: if a line wraps to two terminal rows, our cursor math (one
+ * `\x1b[1A` per logical line) leaves wrap residue behind on every clear,
+ * which is what produces the "double-write / scrolling" artifact.
+ */
+export function clipToWidth(s: string, width: number): string {
+	if (width <= 0) return "\x1b[0m";
+	let visible = 0;
+	let i = 0;
+	let out = "";
+	while (i < s.length) {
+		if (s[i] === "\x1b" && s[i + 1] === "[") {
+			let j = i + 2;
+			while (j < s.length && s[j] !== "m") j++;
+			if (j < s.length) {
+				out += s.slice(i, j + 1);
+				i = j + 1;
+				continue;
+			}
+		}
+		if (visible >= width) break;
+		out += s[i];
+		visible++;
+		i++;
+	}
+	return `${out}\x1b[0m`;
+}
+
+/** Best-effort terminal width; falls back to 80 when stderr is not a TTY. */
+function terminalWidth(): number {
+	const cols = process.stderr.columns;
+	if (typeof cols === "number" && cols > 0) return cols;
+	return 80;
+}
+
+/**
  * Format a millisecond duration as a short human string: `47s`, `2m13s`,
  * `1h12m`. Used for the ETA on the top line.
  */
@@ -211,9 +250,16 @@ class MultiLineLiveArea implements LiveArea {
 	}
 
 	private composeLines(): string[] {
-		const lines: string[] = [this.composeMainLine()];
+		// One column shy of the terminal so the trailing char doesn't trigger
+		// a soft wrap on every render — without this, long bar/worker lines
+		// occupy two visible rows and `clear()`'s one-up-per-line cursor walk
+		// leaves wrap residue, which surfaces as duplicate bars scrolling up
+		// the screen as files complete.
+		const width = Math.max(20, terminalWidth() - 1);
+		const lines: string[] = [clipToWidth(this.composeMainLine(), width)];
 		for (const w of this.workerLines) {
-			lines.push(w ? `  ${truncateLabel(w, LABEL_MAX + 20)}` : "");
+			const raw = w ? `  ${truncateLabel(w, LABEL_MAX + 20)}` : "";
+			lines.push(clipToWidth(raw, width));
 		}
 		return lines;
 	}
