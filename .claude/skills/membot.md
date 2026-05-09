@@ -26,14 +26,25 @@ membot search "<question>"          # hybrid search (semantic + keyword)
 ## 2. Ingest
 
 ```bash
-membot add ./README.md                            # single file
-membot add ./docs                                 # recursive directory walk
-membot add "docs/**/*.md"                         # glob
-membot add a.md b.md "docs/**/*.md"               # any number of args; each resolved independently
-membot add https://example.com/spec.pdf           # URL (auto-converted to markdown)
-membot add "inline:Decision: use X because Y"     # literal text
-membot add ./docs --refresh-frequency 24h         # auto-refresh every day
+membot add ./README.md                                            # single file
+membot add ./docs                                                 # recursive directory walk
+membot add "docs/**/*.md"                                         # glob
+membot add a.md b.md "docs/**/*.md"                               # any number of args; each resolved independently
+membot add https://docs.google.com/document/d/<ID>/edit           # Google Docs/Sheets/Slides via export endpoints
+membot add https://github.com/<owner>/<repo>/issues/<n>           # GitHub issues + PRs (with comments)
+membot add https://linear.app/<workspace>/issue/<KEY>             # Linear issues + projects
+membot add https://example.com/spec.pdf                           # any other URL (browser print-to-PDF fallback)
+membot add "inline:Decision: use X because Y"                     # literal text
+membot add ./docs --refresh-frequency 24h                         # auto-refresh every day
 ```
+
+Remote URLs go through per-service downloaders. Google needs cookies
+captured by `membot login` (one-time browser sign-in); GitHub and
+Linear need API keys set via
+`membot config set downloaders.<svc>.api_key`. If a fetch fails with
+an auth error, the `HelpfulError` will tell you exactly which command
+to run. Fetches are non-interactive — they never open a browser
+during ingest or refresh.
 
 Each entry becomes a new version under its own `logical_path`. PDFs/DOCX/HTML are converted to markdown; images get vision captions; original bytes are kept and reachable via `membot read --bytes`.
 
@@ -116,7 +127,7 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 | `membot read <path>`                  | Read current markdown surrogate (or `--bytes` for original)                    |
 | `membot write <path> --content <txt>` | Write inline agent-authored markdown as a new version                          |
 | `membot search <query>`               | Hybrid search (semantic + BM25); add `--include-history` to search older versions |
-| `membot info <path>`                  | Inspect metadata (source, fetcher, refresh schedule, digests) without content  |
+| `membot info <path>`                  | Inspect metadata (source, downloader, refresh schedule, digests) without content |
 | `membot versions <path>`              | List every version newest-first with version_id and change notes               |
 | `membot diff <path> --a <ts>`         | Unified diff between two versions                                              |
 | `membot mv <old> <new>`               | Rename a logical_path (history preserved)                                      |
@@ -126,6 +137,7 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 | `membot serve`                        | Start MCP server (stdio default, `--http <port>` for HTTP)                     |
 | `membot reindex`                      | Rebuild the FTS keyword index over current chunks                              |
 | `membot config <subcommand>`          | Host-side config management (`get` / `set` / `unset` / `list` / `path`). **Don't run** — this is for the human operator, not for agents |
+| `membot login`                        | Open a browser to sign into Google / GitHub / Linear / etc. (one-time host-side setup). **Don't run** — this is for the human operator |
 
 ## Output formats
 
@@ -137,7 +149,9 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 ## Troubleshooting
 
 - **"ingest failed: unsupported mime"** → Add a converter or pass `--bytes` to keep the original; LLM-fallback only runs when `ANTHROPIC_API_KEY` is set.
-- **"refresh failed: auth" / "redirected to a login page"** → The downloader's stored browser cookies expired. Run `membot login` to refresh the browser session, then retry.
+- **"refresh failed: auth"** for a Google URL → cookies expired. Run `membot login` to refresh the browser session.
+- **"refresh failed: auth"** for a GitHub URL → set the PAT via `membot config set downloaders.github.api_key <PAT>` (or export `GITHUB_TOKEN`).
+- **"refresh failed: auth"** for a Linear URL → set the personal API key via `membot config set downloaders.linear.api_key <KEY>` (create one at `linear.app/settings/api`).
 - **Search returns nothing** → Confirm the file ingested with `membot info <path>`; if needed, run `membot reindex` to rebuild the FTS keyword index.
 - **Stale results after manual DB edits** → `membot reindex`.
 - **Two paths point at the same content** → `membot mv` doesn't merge; tombstone one with `membot rm`.
