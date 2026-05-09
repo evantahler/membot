@@ -93,10 +93,11 @@ export async function ingest(input: IngestInput, ctx: AppContext): Promise<Inges
 	ctx.progress.start(total, "ingest");
 	const callbacks: IngestCallbacks = {
 		// Tick on completion so the bar reflects done-and-persisted entries,
-		// not concurrently-in-flight ones. See the matching comment in
-		// src/operations/add.ts.
-		onEntryStart: (label) => ctx.progress.update(label),
+		// not concurrently-in-flight ones. setLabel shows the in-flight file
+		// without advancing the count; sub-step suffix flows via update.
+		onEntryStart: (label) => ctx.progress.setLabel(label),
 		onEntryComplete: (entry) => ctx.progress.tick(entry.logical_path),
+		onEntryProgress: (_label, sublabel) => ctx.progress.update(sublabel),
 	};
 	const result = await ingestResolved(resolved, input, ctx, callbacks);
 	const okCount = result.ok;

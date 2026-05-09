@@ -16,6 +16,12 @@ export interface Progress {
 	start(total: number, label?: string): void;
 	tick(label: string): void;
 	/**
+	 * Replace the spinner's main label without advancing the counter. Used to
+	 * show which entry is currently being worked on while sub-step progress
+	 * (the suffix) updates independently. No-op in non-interactive modes.
+	 */
+	setLabel(label: string): void;
+	/**
 	 * Re-render the active spinner with the most recent `tick` label plus an
 	 * extra suffix (e.g. "embedding 32/168") without advancing the counter.
 	 * No-op in non-interactive / silent / JSON modes — sub-step progress is
@@ -94,6 +100,12 @@ export function createProgress(): Progress {
 			} else {
 				logger.info(`[${count}/${total}] ${label}`);
 			}
+		},
+		setLabel(label: string) {
+			lastLabel = label;
+			if (silent) return;
+			if (!interactive || !spinner) return;
+			spinner.update(renderSpinnerText(label));
 		},
 		update(suffix: string) {
 			if (silent) return;
