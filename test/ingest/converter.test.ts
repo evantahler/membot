@@ -10,6 +10,7 @@ const NO_LLM = {
 	chunker_model: "",
 	describer_model: "",
 	vision_model: "",
+	describer_skip_when_titled: true,
 };
 
 const CONVERTERS = { max_inline_image_captions: 20 };

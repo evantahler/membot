@@ -47,6 +47,19 @@ export const DEFAULTS = {
 	 * embedded images doesn't fan out into hundreds of vision requests.
 	 */
 	MAX_INLINE_IMAGE_CAPTIONS: 20,
+	/**
+	 * Max concurrent describe/convert prep workers during a multi-entry
+	 * ingest. Caps simultaneous Anthropic API calls (and overlapping PDF/OCR
+	 * conversions) so a 100-file glob doesn't blast 100 requests at once.
+	 */
+	DESCRIBER_CONCURRENCY: 5,
+	/**
+	 * When true, describe() skips the LLM for self-describing markdown/text
+	 * (a clear H1 within the first 40 lines of body) and uses the heading +
+	 * 200-char prefix instead. Avoids paying for an LLM round-trip when the
+	 * file already has a human-written description.
+	 */
+	DESCRIBER_SKIP_WHEN_TITLED: true,
 } as const;
 
 export const FILES = {

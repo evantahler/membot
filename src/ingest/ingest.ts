@@ -3,8 +3,8 @@ import { upsertBlob } from "../db/blobs.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { type FetcherKind, getCurrent, insertVersion, millisIso, type SourceType } from "../db/files.ts";
 import { asHelpful, HelpfulError } from "../errors.ts";
-import { logger } from "../output/logger.ts";
-import { chunkDeterministic } from "./chunker.ts";
+import { type Chunk, chunkDeterministic } from "./chunker.ts";
+import { pMap } from "./concurrency.ts";
 import { convert } from "./converter/index.ts";
 import { describe } from "./describer.ts";
 import { embed } from "./embedder.ts";
@@ -277,11 +277,20 @@ async function ingestLocalFiles(
 		});
 	}
 
-	const results: IngestEntryResult[] = [];
 	const isMulti = resolved.entries.length > 1;
+	const concurrency = ctx.config.ingest.describer_concurrency;
 
-	for (const entry of resolved.entries) {
-		callbacks?.onEntryStart?.(entry.relPathFromBase);
+	type Prep =
+		| { kind: "ok"; result: IngestEntryResult; ready: PreparedEntry }
+		| { kind: "skip"; result: IngestEntryResult }
+		| { kind: "fail"; result: IngestEntryResult };
+
+	// Phase A — concurrent prep. For each entry: read bytes, short-circuit on
+	// unchanged-source, otherwise convert + describe + chunk. No DB writes
+	// happen here (only the unchanged check, which is a read). The describer
+	// is the slowest step per file and runs in parallel here, which is the
+	// main throughput win for bulk ingest.
+	const prepResults = await pMap(resolved.entries, concurrency, async (entry): Promise<Prep> => {
 		const logicalPath = pickLogicalPath(input.logical_path, entry, isMulti);
 		const result: IngestEntryResult = {
 			source_path: entry.absPath,
@@ -293,7 +302,10 @@ async function ingestLocalFiles(
 			fetcher: "local",
 			source_sha256: "",
 		};
+		callbacks?.onEntryStart?.(entry.relPathFromBase);
+		const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(entry.relPathFromBase, sublabel);
 		try {
+			onPhase("reading");
 			const local = await readLocalFile(entry.absPath);
 			result.mime_type = local.mimeType;
 			result.size_bytes = local.sizeBytes;
@@ -304,46 +316,212 @@ async function ingestLocalFiles(
 				if (cur && cur.source_sha256 === local.sha256) {
 					result.status = "unchanged";
 					result.version_id = cur.version_id;
-					results.push(result);
-					callbacks?.onEntryComplete?.(result);
-					continue;
+					return { kind: "skip", result };
 				}
 			}
 
-			const versionId = await pipelineForBytes(
-				ctx,
-				{
+			onPhase("converting");
+			const conversion = await convert(
+				local.bytes,
+				local.mimeType,
+				entry.absPath,
+				ctx.config.llm,
+				ctx.config.converters,
+			);
+			const markdown = conversion.markdown;
+
+			onPhase("describing");
+			const description = await describe(logicalPath, local.mimeType, markdown, ctx.config.llm);
+
+			onPhase("chunking");
+			const chunks = chunkDeterministic(markdown, ctx.config.chunker);
+			const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content));
+
+			return {
+				kind: "ok",
+				result,
+				ready: {
 					logicalPath,
-					bytes: local.bytes,
-					mime: local.mimeType,
-					source: entry.absPath,
 					sourceType: "local",
 					sourcePath: entry.absPath,
 					sourceMtimeMs: local.mtimeMs,
 					sourceSha: local.sha256,
+					blobSha: local.sha256,
+					mime: local.mimeType,
+					bytes: local.bytes,
+					markdown,
+					description,
+					chunks,
+					searchTexts,
 					fetcher: "local",
 					downloader: null,
 					downloaderArgs: null,
 					refreshSec,
 					changeNote: input.change_note ?? null,
+					relPathFromBase: entry.relPathFromBase,
 				},
-				(sublabel) => callbacks?.onEntryProgress?.(entry.relPathFromBase, sublabel),
-			);
-			result.version_id = versionId;
+			};
 		} catch (err) {
 			result.status = "failed";
 			result.error = errorMessage(err);
+			return { kind: "fail", result };
+		}
+	});
+
+	// Phase B — serial persist. Embed (single-WASM-instance) and DB writes
+	// run in input order so concurrent ingests against the same DB don't
+	// fight over the file lock. A single rebuildFts after the loop replaces
+	// the previous per-entry FTS rebuild.
+	const results: IngestEntryResult[] = [];
+	let anyOk = false;
+	for (const outcome of prepResults) {
+		if (!outcome.ok) {
+			// pMap caught a worker rejection; surface it as a failed entry
+			// without an associated source path (shouldn't happen since the
+			// worker catches its own errors, but defensive).
+			results.push({
+				source_path: "",
+				logical_path: "",
+				version_id: null,
+				status: "failed",
+				error: errorMessage(outcome.error),
+				mime_type: null,
+				size_bytes: 0,
+				fetcher: "local",
+				source_sha256: "",
+			});
+			continue;
+		}
+		const prep = outcome.value;
+		if (prep.kind !== "ok") {
+			results.push(prep.result);
+			callbacks?.onEntryComplete?.(prep.result);
+			continue;
+		}
+		const { ready } = prep;
+		try {
+			const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(ready.relPathFromBase, sublabel);
+			const versionId = await persistPrepared(ctx, ready, onPhase);
+			prep.result.version_id = versionId;
+			anyOk = true;
+		} catch (err) {
+			prep.result.status = "failed";
+			prep.result.error = errorMessage(err);
 		} finally {
 			// Release the DB lock between files in a directory/glob walk so
 			// concurrent processes can wedge in mid-batch. The next entry's
 			// first DB call reopens (cheap — same-process reopen).
 			await ctx.db.release();
 		}
-		results.push(result);
-		callbacks?.onEntryComplete?.(result);
+		results.push(prep.result);
+		callbacks?.onEntryComplete?.(prep.result);
+	}
+
+	// Single FTS rebuild for the whole batch — replaces N per-entry rebuilds
+	// in the prior implementation. Skip when nothing was newly persisted.
+	if (anyOk) {
+		await rebuildFts(ctx.db);
 	}
 
 	return summarize(results);
+}
+
+/**
+ * Output of Phase A prep: everything needed to persist a new version
+ * (embedding + DB writes) with no further LLM or filesystem work.
+ */
+interface PreparedEntry {
+	logicalPath: string;
+	sourceType: SourceType;
+	sourcePath: string | null;
+	sourceMtimeMs: number | null;
+	sourceSha: string;
+	blobSha: string | null;
+	mime: string;
+	bytes: Uint8Array | null;
+	markdown: string;
+	description: string;
+	chunks: Chunk[];
+	searchTexts: string[];
+	fetcher: FetcherKind;
+	downloader: string | null;
+	downloaderArgs: Record<string, unknown> | null;
+	refreshSec: number | null;
+	changeNote: string | null;
+	relPathFromBase: string;
+}
+
+/**
+ * Phase B: embed the pre-built search_texts, write the blob (if any),
+ * insert the new (logical_path, version_id) row, and write its chunks.
+ * Returns the version_id. The caller is responsible for one rebuildFts
+ * after all entries have been persisted.
+ */
+async function persistPrepared(
+	ctx: AppContext,
+	p: PreparedEntry,
+	onPhase: (sublabel: string) => void,
+): Promise<string> {
+	if (p.bytes) {
+		onPhase("storing blob");
+		await upsertBlob(ctx.db, {
+			sha256: p.sourceSha,
+			mime_type: p.mime,
+			size_bytes: p.bytes.byteLength,
+			bytes: p.bytes,
+		});
+	}
+
+	let embeddings: number[][];
+	try {
+		embeddings = await embed(p.searchTexts, ctx.config.embedding_model, {
+			onProgress: (done, total) => onPhase(`embedding ${done}/${total}`),
+		});
+	} catch (err) {
+		throw asHelpful(
+			err,
+			`while embedding chunks for ${p.logicalPath}`,
+			"Run `bun run prebuild` to apply the transformers WASM patch, or set a different config.embedding_model.",
+		);
+	}
+
+	onPhase("persisting");
+	const versionId = millisIso(Date.now());
+	const contentSha = sha256Hex(new TextEncoder().encode(p.markdown));
+	await insertVersion(ctx.db, {
+		logical_path: p.logicalPath,
+		version_id: versionId,
+		source_type: p.sourceType,
+		source_path: p.sourcePath,
+		source_mtime_ms: p.sourceMtimeMs,
+		source_sha256: p.sourceSha,
+		blob_sha256: p.blobSha,
+		content_sha256: contentSha,
+		content: p.markdown,
+		description: p.description,
+		mime_type: p.mime,
+		size_bytes: p.bytes?.byteLength ?? new TextEncoder().encode(p.markdown).byteLength,
+		fetcher: p.fetcher,
+		downloader: p.downloader,
+		downloader_args: p.downloaderArgs,
+		refresh_frequency_sec: p.refreshSec,
+		refreshed_at: new Date().toISOString(),
+		last_refresh_status: "ok",
+		change_note: p.changeNote,
+	});
+
+	await insertChunksForVersion(
+		ctx.db,
+		p.logicalPath,
+		versionId,
+		p.chunks.map((c, i) => ({
+			chunk_index: c.index,
+			chunk_content: c.content,
+			search_text: p.searchTexts[i] ?? buildSearchText(p.logicalPath, p.description, c.content),
+			embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
+		})),
+	);
+	return versionId;
 }
 
 interface PipelineParams {

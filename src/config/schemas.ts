@@ -17,6 +17,11 @@ export const LlmConfigSchema = z.object({
 	chunker_model: z.string().default(DEFAULTS.CHUNKER_MODEL),
 	describer_model: z.string().default(DEFAULTS.DESCRIBER_MODEL),
 	vision_model: z.string().default(DEFAULTS.VISION_MODEL),
+	describer_skip_when_titled: z.boolean().default(DEFAULTS.DESCRIBER_SKIP_WHEN_TITLED),
+});
+
+export const IngestConfigSchema = z.object({
+	describer_concurrency: z.number().int().positive().default(DEFAULTS.DESCRIBER_CONCURRENCY),
 });
 
 export const DaemonConfigSchema = z.object({
@@ -48,6 +53,7 @@ export const MembotConfigSchema = z.object({
 	embedding_dimension: z.number().int().positive().default(EMBEDDING_DIMENSION),
 	chunker: ChunkerConfigSchema.default(() => ChunkerConfigSchema.parse({})),
 	converters: ConvertersConfigSchema.default(() => ConvertersConfigSchema.parse({})),
+	ingest: IngestConfigSchema.default(() => IngestConfigSchema.parse({})),
 	llm: LlmConfigSchema.default(() => LlmConfigSchema.parse({})),
 	downloaders: DownloadersConfigSchema.default(() => DownloadersConfigSchema.parse({})),
 	daemon: DaemonConfigSchema.default(() => DaemonConfigSchema.parse({})),
@@ -58,6 +64,7 @@ export const MembotConfigSchema = z.object({
 export type MembotConfig = z.infer<typeof MembotConfigSchema>;
 export type ChunkerConfig = z.infer<typeof ChunkerConfigSchema>;
 export type ConvertersConfig = z.infer<typeof ConvertersConfigSchema>;
+export type IngestConfig = z.infer<typeof IngestConfigSchema>;
 export type LlmConfig = z.infer<typeof LlmConfigSchema>;
 export type DownloadersConfig = z.infer<typeof DownloadersConfigSchema>;
 export type LinearDownloaderConfig = z.infer<typeof LinearDownloaderConfigSchema>;

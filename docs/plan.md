@@ -248,12 +248,14 @@ or when `CI=true`.
   "embedding_dimension": 384,
   "chunker": { "mode": "deterministic", "target_chars": 4000, "max_chars": 15000 },
   "converters": { "max_inline_image_captions": 20 },         // per-doc cap on vision captions for embedded images
+  "ingest": { "describer_concurrency": 5 },                  // max concurrent describe/convert workers per add
   "llm": {
     "anthropic_api_key": "",                                  // env: ANTHROPIC_API_KEY
     "converter_model": "claude-haiku-4-5-20251001",
     "chunker_model":   "claude-haiku-4-5-20251001",
     "describer_model": "claude-haiku-4-5-20251001",
-    "vision_model":    "claude-haiku-4-5-20251001"
+    "vision_model":    "claude-haiku-4-5-20251001",
+    "describer_skip_when_titled": true                        // skip LLM when markdown has a clear H1 in the opening
   },
   "downloaders": {
     "linear": { "api_key": "" },                              // linear.app/settings/api
