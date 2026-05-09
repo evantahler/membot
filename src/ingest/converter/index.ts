@@ -1,4 +1,4 @@
-import type { LlmConfig } from "../../config/schemas.ts";
+import type { ConvertersConfig, LlmConfig } from "../../config/schemas.ts";
 import { convertDocx } from "./docx.ts";
 import { convertHtml } from "./html.ts";
 import { convertImage } from "./image.ts";
@@ -44,6 +44,7 @@ export async function convert(
 	mimeType: string,
 	source: string,
 	llm: LlmConfig,
+	converters: ConvertersConfig,
 ): Promise<ConvertResult> {
 	const mt = mimeType.toLowerCase();
 
@@ -52,11 +53,11 @@ export async function convert(
 	}
 
 	if (HTML_MIMES.has(mt)) {
-		return { markdown: convertHtml(bytes), contentMimeType: "text/markdown" };
+		return { markdown: await convertHtml(bytes, llm, converters), contentMimeType: "text/markdown" };
 	}
 
 	if (DOCX_MIMES.has(mt)) {
-		return { markdown: await convertDocx(bytes), contentMimeType: "text/markdown" };
+		return { markdown: await convertDocx(bytes, llm, converters), contentMimeType: "text/markdown" };
 	}
 
 	if (XLSX_MIMES.has(mt)) {

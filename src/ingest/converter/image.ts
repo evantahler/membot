@@ -12,6 +12,13 @@ Output the caption only, no preamble.`;
 
 const VISION_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
+/** Anthropic vision rejects images > 5MB; stay under that with margin. */
+const VISION_MAX_BYTES = 4 * 1024 * 1024;
+/** Tesseract is roughly linear in pixel count; bail past this byte size to avoid pathological hangs. */
+const OCR_MAX_BYTES = 8 * 1024 * 1024;
+/** Hard wall-clock for either subtask so a stuck network call never freezes ingest. */
+const SUBTASK_TIMEOUT_MS = 60_000;
+
 /**
  * Build the markdown surrogate for an image: an LLM-generated caption
  * (when an API key is available) folded together with any text recovered
@@ -19,15 +26,45 @@ const VISION_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/web
  * when no API key is set.
  */
 export async function convertImage(bytes: Uint8Array, mimeType: string, llm: LlmConfig): Promise<string> {
-	const captionPromise = describeImage(bytes, mimeType, llm);
-	const ocrPromise = ocrImage(bytes);
+	const captionPromise =
+		bytes.byteLength <= VISION_MAX_BYTES
+			? withTimeout(describeImage(bytes, mimeType, llm), SUBTASK_TIMEOUT_MS, "vision")
+			: Promise.resolve("");
+	const ocrPromise =
+		bytes.byteLength <= OCR_MAX_BYTES ? withTimeout(ocrImage(bytes), SUBTASK_TIMEOUT_MS, "ocr") : Promise.resolve("");
 	const [caption, ocrText] = await Promise.all([captionPromise, ocrPromise]);
 
 	const sections: string[] = [];
 	if (caption) sections.push(caption);
 	if (ocrText) sections.push(`## Text detected via OCR\n\n${ocrText}`);
-	if (sections.length === 0) sections.push(`(image, ${mimeType}, no caption available)`);
+	if (sections.length === 0) {
+		const note =
+			bytes.byteLength > VISION_MAX_BYTES
+				? `(image, ${mimeType}, ${bytes.byteLength} bytes — exceeds vision size limit, no caption available)`
+				: `(image, ${mimeType}, no caption available)`;
+		sections.push(note);
+	}
 	return sections.join("\n\n");
+}
+
+/**
+ * Race a promise against a timer so a stuck network call (vision) or a
+ * pathological CPU-bound job (OCR on a multi-megapixel image) never freezes
+ * the whole conversion pipeline. Logs a warning when the timer wins.
+ */
+async function withTimeout<T extends string>(p: Promise<T>, ms: number, label: string): Promise<T | ""> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<"">((resolve) => {
+		timer = setTimeout(() => {
+			logger.warn(`image: ${label} timed out after ${ms}ms`);
+			resolve("");
+		}, ms);
+	});
+	try {
+		return await Promise.race([p, timeout]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
 }
 
 /**

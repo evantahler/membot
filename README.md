@@ -136,6 +136,7 @@ Add `--watch` (and optional `--tick <sec>`) to also run the refresh daemon, whic
   membot config list                                            # show every value (secrets masked)
   membot config set llm.anthropic_api_key sk-ant-...            # enable LLM-fallback paths
   membot config set chunker.target_chars 800                    # tweak any nested value
+  membot config set converters.max_inline_image_captions 50     # raise per-doc cap on vision captions for embedded images
   membot config get llm.anthropic_api_key --show-secrets        # reveal the masked key
   membot config unset chunker.target_chars                      # back to schema default
   membot config path                                            # print the absolute config path
