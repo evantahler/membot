@@ -1,4 +1,4 @@
-import { dim } from "ansis";
+import { bold, dim } from "ansis";
 import { type LiveArea, logger } from "./logger.ts";
 import { isSilent, useColor, useSpinner } from "./tty.ts";
 
@@ -297,7 +297,7 @@ class MultiLineLiveArea implements LiveArea {
 		// leaves wrap residue, which surfaces as duplicate bars scrolling up
 		// the screen as files complete.
 		const width = Math.max(20, terminalWidth() - 1);
-		const lines: string[] = [clipToWidth(this.composeMainLine(), width)];
+		const lines: string[] = [clipToWidth(this.bold(this.composeMainLine()), width)];
 		if (this.workerLines.length > 0) {
 			// Separator under the bar so the per-worker section reads as a
 			// distinct block — without this, the first worker line snugs up
@@ -307,7 +307,10 @@ class MultiLineLiveArea implements LiveArea {
 		}
 		for (const w of this.workerLines) {
 			const raw = w ? `  ${truncateLabel(w, LABEL_MAX + 20)}` : "";
-			lines.push(clipToWidth(raw, width));
+			// Worker rows are de-emphasized so the bold bar stays the focal
+			// point; the pie glyph + filename + step still read clearly in
+			// dim type.
+			lines.push(clipToWidth(this.dim(raw), width));
 		}
 		return lines;
 	}
@@ -357,6 +360,10 @@ class MultiLineLiveArea implements LiveArea {
 
 	private dim(text: string): string {
 		return this.color ? dim(text) : text;
+	}
+
+	private bold(text: string): string {
+		return this.color ? bold(text) : text;
 	}
 }
 

@@ -1,8 +1,28 @@
 import { z } from "zod";
 import { listDueRefreshes } from "../db/files.ts";
 import { colors } from "../output/formatter.ts";
+import { isInteractive } from "../output/tty.ts";
 import { refreshOne } from "../refresh/runner.ts";
 import { defineOperation } from "./types.ts";
+
+interface RefreshEntry {
+	logical_path: string;
+	status: "ok" | "unchanged" | "failed";
+	new_version_id?: string;
+	error?: string;
+}
+
+/** Render one refresh result as a persistent stderr / final-summary line. */
+function formatEntryLine(p: RefreshEntry): string {
+	if (p.status === "ok") {
+		const ver = p.new_version_id ? colors.dim(`→ ${p.new_version_id}`) : "";
+		return `${colors.green("✓")} ${colors.cyan(p.logical_path)} ${ver}`;
+	}
+	if (p.status === "unchanged") {
+		return `${colors.dim("·")} ${colors.dim(p.logical_path)} ${colors.dim("(unchanged)")}`;
+	}
+	return `${colors.red("✗")} ${p.logical_path} ${colors.dim(p.error ?? "")}`;
+}
 
 export const refreshOperation = defineOperation({
 	name: "membot_refresh",
@@ -29,42 +49,41 @@ export const refreshOperation = defineOperation({
 		let updated = 0;
 		let unchanged = 0;
 		let failed = 0;
-		const lines = result.processed.map((p) => {
-			if (p.status === "ok") {
-				updated++;
-				const ver = p.new_version_id ? colors.dim(`→ ${p.new_version_id}`) : "";
-				return `${colors.green("✓")} ${colors.cyan(p.logical_path)} ${ver}`;
-			}
-			if (p.status === "unchanged") {
-				unchanged++;
-				return `${colors.dim("·")} ${colors.dim(p.logical_path)} ${colors.dim("(unchanged)")}`;
-			}
-			failed++;
-			return `${colors.red("✗")} ${p.logical_path} ${colors.dim(p.error ?? "")}`;
-		});
+		for (const p of result.processed) {
+			if (p.status === "ok") updated++;
+			else if (p.status === "unchanged") unchanged++;
+			else failed++;
+		}
 		const parts = [colors.green(`updated ${updated}`), colors.dim(`unchanged ${unchanged}`)];
 		if (failed) parts.push(colors.red(`failed ${failed}`));
-		return `${lines.join("\n")}\n${parts.join(", ")}`;
+		const summary = parts.join(", ");
+
+		// In interactive mode the per-entry results were already streamed to
+		// stderr via progress.entry() during the run; printing the same list
+		// to stdout would just duplicate the scrollback. Non-interactive
+		// callers (JSON, piped, CI) still get the full list.
+		if (isInteractive()) return summary;
+
+		const lines = result.processed.map(formatEntryLine);
+		return `${lines.join("\n")}\n${summary}`;
 	},
 	handler: async (input, ctx) => {
 		const targets = input.logical_path
 			? [input.logical_path]
 			: (await listDueRefreshes(ctx.db)).map((r) => r.logical_path);
-		const out: Array<{
-			logical_path: string;
-			status: "ok" | "unchanged" | "failed";
-			new_version_id?: string;
-			error?: string;
-		}> = [];
+		const out: RefreshEntry[] = [];
 		ctx.progress.start(targets.length, "refresh");
 		for (const path of targets) {
-			ctx.progress.tick(path);
+			ctx.progress.setLabel(path);
+			let entry: RefreshEntry;
 			try {
-				const r = await refreshOne(ctx, path, input.force, (sublabel) => ctx.progress.update(sublabel));
-				out.push(r);
+				entry = await refreshOne(ctx, path, input.force, (sublabel) => ctx.progress.update(sublabel));
 			} catch (err) {
-				out.push({ logical_path: path, status: "failed", error: err instanceof Error ? err.message : String(err) });
+				entry = { logical_path: path, status: "failed", error: err instanceof Error ? err.message : String(err) };
 			}
+			out.push(entry);
+			ctx.progress.tick(path);
+			ctx.progress.entry(formatEntryLine(entry));
 		}
 		ctx.progress.done(`refresh: ${out.filter((r) => r.status === "ok").length}/${out.length} updated`);
 		return { processed: out, count: out.length };

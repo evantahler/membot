@@ -9,6 +9,7 @@ import {
 import { type ResolvedSource, resolveSource } from "../ingest/source-resolver.ts";
 import { colors } from "../output/formatter.ts";
 import { pieFor } from "../output/progress.ts";
+import { isInteractive } from "../output/tty.ts";
 import { defineOperation } from "./types.ts";
 
 const FetcherKindEnum = z.enum(["downloader", "local", "inline"]);
@@ -91,6 +92,18 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 		aliases: { logical_path: "-p", refresh_frequency: "-r", change_note: "-m", force: "-f" },
 	},
 	console_formatter: (result) => {
+		const parts: string[] = [colors.green(`added ${result.ok}`)];
+		if (result.unchanged > 0) parts.push(colors.dim(`unchanged ${result.unchanged}`));
+		if (result.failed > 0) parts.push(colors.red(`failed ${result.failed}`));
+		const summary = parts.join(", ");
+
+		// In interactive mode, every entry was already streamed to stderr via
+		// progress.entry() during ingest; printing the same list to stdout
+		// here would just duplicate the scrollback. Non-interactive callers
+		// (JSON, piped stdout, CI) don't see the live stream, so they still
+		// get the full per-entry list as the operation's stdout payload.
+		if (isInteractive()) return summary;
+
 		const lines = result.ingested.map((e) => {
 			if (e.status === "ok") {
 				return `${colors.green("✓")} ${colors.cyan(e.logical_path)} ${colors.dim(`(${e.fetcher}, ${e.size_bytes}B)`)}`;
@@ -100,10 +113,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 			}
 			return `${colors.red("✗")} ${e.source_path} ${colors.dim(e.error ?? "")}`;
 		});
-		const parts: string[] = [colors.green(`added ${result.ok}`)];
-		if (result.unchanged > 0) parts.push(colors.dim(`unchanged ${result.unchanged}`));
-		if (result.failed > 0) parts.push(colors.red(`failed ${result.failed}`));
-		return `${lines.join("\n")}\n${parts.join(", ")}`;
+		return `${lines.join("\n")}\n${summary}`;
 	},
 	handler: async (input, ctx) => {
 		const { sources, ...rest } = input;
