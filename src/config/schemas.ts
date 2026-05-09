@@ -8,7 +8,7 @@ export const ChunkerConfigSchema = z.object({
 });
 
 export const LlmConfigSchema = z.object({
-	anthropic_api_key: z.string().default(""),
+	anthropic_api_key: z.string().meta({ secret: true }).default(""),
 	converter_model: z.string().default(DEFAULTS.CONVERTER_MODEL),
 	chunker_model: z.string().default(DEFAULTS.CHUNKER_MODEL),
 	describer_model: z.string().default(DEFAULTS.DESCRIBER_MODEL),

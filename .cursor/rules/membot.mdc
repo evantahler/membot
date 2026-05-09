@@ -125,6 +125,7 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 | `membot prune --before <ts>`          | Permanently drop non-current versions older than cutoff (irreversible)         |
 | `membot serve`                        | Start MCP server (stdio default, `--http <port>` for HTTP)                     |
 | `membot reindex`                      | Rebuild the FTS keyword index over current chunks                              |
+| `membot config <subcommand>`          | Host-side config management (`get` / `set` / `unset` / `list` / `path`). **Don't run** — this is for the human operator, not for agents |
 
 ## Output formats
 

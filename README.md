@@ -64,6 +64,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot prune --before <ts>`    | Permanently drop non-current versions older than cutoff (irreversible)            |
 | `membot serve`                  | Run the MCP server (stdio default; `--http <port>` for HTTP)                      |
 | `membot reindex`                | Rebuild the FTS keyword index over current chunks                                 |
+| `membot config <subcommand>`    | Get / set values in `~/.membot/config.json` (`get`, `set`, `unset`, `list`, `path`) |
 | `membot mcpx <subcommand>`      | Forward to the bundled `mcpx` CLI for managing remote MCP servers                 |
 | `membot skill install`          | Install the Claude Code / Cursor agent skill                                      |
 
@@ -101,9 +102,20 @@ Add `--watch` (and optional `--tick <sec>`) to also run the refresh daemon, whic
   - `~/.membot/index.duckdb` — all content, blobs, chunks, embeddings, and metadata.
   - `~/.membot/models/` — cached embedding model weights (`Xenova/bge-small-en-v1.5`, 384-dim).
   - `~/.membot/logs/` — daemon logs when running `serve --watch`.
-- **Config file:** `~/.membot/config.json` (optional; defaults are sane).
+- **Config file:** `~/.membot/config.json` (optional; defaults are sane). Edit it directly or via `membot config`:
+
+  ```bash
+  membot config list                                            # show every value (secrets masked)
+  membot config set llm.anthropic_api_key sk-ant-...            # enable LLM-fallback paths
+  membot config set chunker.target_chars 800                    # tweak any nested value
+  membot config get llm.anthropic_api_key --show-secrets        # reveal the masked key
+  membot config unset chunker.target_chars                      # back to schema default
+  membot config path                                            # print the absolute config path
+  ```
+
+  Values are written with file mode `0600`. `ANTHROPIC_API_KEY` set in the environment still wins on read, so existing env-var setups keep working.
 - **Environment variables:**
-  - `ANTHROPIC_API_KEY` — optional. Enables LLM fallback for messy / scanned input (vision captions for images, last-resort markdown conversion). Without it, the pipeline degrades to deterministic native conversion.
+  - `ANTHROPIC_API_KEY` — optional. Enables LLM fallback for messy / scanned input (vision captions for images, last-resort markdown conversion). Without it, the pipeline degrades to deterministic native conversion. Equivalent to `membot config set llm.anthropic_api_key ...`; the env var takes precedence on read.
   - `MEMBOT_HOME` — override the data directory.
   - `NO_COLOR`, `CI`, `FORCE_COLOR` — standard output controls.
 
