@@ -55,6 +55,21 @@ export const DEFAULTS = {
 	 * embedded images doesn't fan out into hundreds of vision requests.
 	 */
 	MAX_INLINE_IMAGE_CAPTIONS: 20,
+	/**
+	 * Hard cap for `ingest.worker_concurrency`. The runtime default is
+	 * `cpus - 1` so machines with very high core counts can scale, but we
+	 * clamp here to keep concurrent Anthropic describe calls (and per-worker
+	 * WASM embedder allocations — each pipeline holds the model weights) from
+	 * spiraling out of control.
+	 */
+	MAX_WORKERS: 8,
+	/**
+	 * When true, describe() skips the LLM for self-describing markdown/text
+	 * (a clear H1 within the first 40 lines of body) and uses the heading +
+	 * 200-char prefix instead. Avoids paying for an LLM round-trip when the
+	 * file already has a human-written description.
+	 */
+	DESCRIBER_SKIP_WHEN_TITLED: true,
 } as const;
 
 export const FILES = {

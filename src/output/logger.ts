@@ -9,6 +9,17 @@ export interface Spinner {
 	stop(): void;
 }
 
+/**
+ * Anything occupying a fixed area of stderr that needs to be torn down before
+ * the logger writes a stray line, then redrawn afterward. nanospinner's
+ * single-line spinner and progress.ts's multi-line worker view both implement
+ * this so log/info/warn lines don't shred the live display.
+ */
+export interface LiveArea {
+	clear(): void;
+	render(): void;
+}
+
 const NOOP_SPINNER: Spinner = { update() {}, success() {}, error() {}, stop() {} };
 
 /**
@@ -20,6 +31,7 @@ const NOOP_SPINNER: Spinner = { update() {}, success() {}, error() {}, stop() {}
 class Logger {
 	private static instance: Logger;
 	private activeSpinner: ReturnType<typeof createSpinner> | null = null;
+	private activeLiveArea: LiveArea | null = null;
 
 	/** Singleton accessor. Use the exported `logger` const instead in normal code. */
 	static getInstance(): Logger {
@@ -31,7 +43,24 @@ class Logger {
 		return useColor() ? fn(msg) : msg;
 	}
 
+	/**
+	 * Register a multi-line live display. Logger will `clear()` it before any
+	 * stderr write and `render()` it after, so log lines don't punch through
+	 * the live area. Pass null to deregister. Mutually exclusive with the
+	 * nanospinner path (only one live thing on stderr at a time).
+	 */
+	setActiveLiveArea(area: LiveArea | null): void {
+		this.activeLiveArea = area;
+	}
+
 	private writeStderr(msg: string): void {
+		const area = this.activeLiveArea;
+		if (area) {
+			area.clear();
+			process.stderr.write(`${msg}\n`);
+			area.render();
+			return;
+		}
 		if (this.activeSpinner) {
 			this.activeSpinner.clear();
 			process.stderr.write(`${msg}\n`);
@@ -66,6 +95,13 @@ class Logger {
 
 	/** Raw stderr write, no formatting added. Spinner-aware. */
 	writeRaw(msg: string): void {
+		const area = this.activeLiveArea;
+		if (area) {
+			area.clear();
+			process.stderr.write(msg);
+			area.render();
+			return;
+		}
 		if (this.activeSpinner) {
 			this.activeSpinner.clear();
 			process.stderr.write(msg);

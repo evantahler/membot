@@ -19,6 +19,27 @@ export function renderResult<T>(result: T, opts: { console_formatter?: (result: 
 }
 
 /**
+ * Format a byte count as a short human-readable string: 5654 → `5.5 KB`,
+ * 14_859 → `14.5 KB`, 2_345_678 → `2.2 MB`. Uses 1024-based units (binary
+ * prefixes) since file sizes on disk are typically reported that way.
+ * Negative or non-finite inputs render as `0 B`.
+ */
+export function formatBytes(n: number): string {
+	if (!Number.isFinite(n) || n < 0) return "0 B";
+	if (n < 1024) return `${n} B`;
+	const units = ["KB", "MB", "GB", "TB"] as const;
+	let value = n / 1024;
+	let unit: string = units[0];
+	for (let i = 1; i < units.length && value >= 1024; i++) {
+		value /= 1024;
+		unit = units[i] as string;
+	}
+	// One decimal until 100, then round to integer (so the column stays narrow).
+	const formatted = value < 100 ? value.toFixed(1) : `${Math.round(value)}`;
+	return `${formatted} ${unit}`;
+}
+
+/**
  * Pretty-print a 2D array of cells as an aligned table. Column widths are
  * computed from the visible (escape-stripped) length of each cell so coloured
  * cells still align. Optional `columnStyles` are applied AFTER padding so they

@@ -1,5 +1,17 @@
+import { availableParallelism } from "node:os";
 import { z } from "zod";
 import { DEFAULTS, defaultMembotHome, EMBEDDING_DIMENSION, EMBEDDING_MODEL } from "../constants.ts";
+
+/**
+ * Compute the default ingest worker count: one fewer than the available CPUs
+ * (so the orchestrator and any background work still has a core), clamped to
+ * `[1, MAX_WORKERS]` to avoid hammering Anthropic with too many concurrent
+ * describe calls on machines with very high core counts.
+ */
+function defaultWorkerConcurrency(): number {
+	const cpus = availableParallelism();
+	return Math.min(DEFAULTS.MAX_WORKERS, Math.max(1, cpus - 1));
+}
 
 export const ChunkerConfigSchema = z.object({
 	mode: z.enum(["deterministic", "llm"]).default(DEFAULTS.CHUNKER_MODE),
@@ -17,6 +29,11 @@ export const LlmConfigSchema = z.object({
 	chunker_model: z.string().default(DEFAULTS.CHUNKER_MODEL),
 	describer_model: z.string().default(DEFAULTS.DESCRIBER_MODEL),
 	vision_model: z.string().default(DEFAULTS.VISION_MODEL),
+	describer_skip_when_titled: z.boolean().default(DEFAULTS.DESCRIBER_SKIP_WHEN_TITLED),
+});
+
+export const IngestConfigSchema = z.object({
+	worker_concurrency: z.number().int().positive().default(defaultWorkerConcurrency),
 });
 
 export const DaemonConfigSchema = z.object({
@@ -61,6 +78,7 @@ export const MembotConfigSchema = z.object({
 	chunker: ChunkerConfigSchema.default(() => ChunkerConfigSchema.parse({})),
 	embedding: EmbeddingConfigSchema.default(() => EmbeddingConfigSchema.parse({})),
 	converters: ConvertersConfigSchema.default(() => ConvertersConfigSchema.parse({})),
+	ingest: IngestConfigSchema.default(() => IngestConfigSchema.parse({})),
 	llm: LlmConfigSchema.default(() => LlmConfigSchema.parse({})),
 	downloaders: DownloadersConfigSchema.default(() => DownloadersConfigSchema.parse({})),
 	daemon: DaemonConfigSchema.default(() => DaemonConfigSchema.parse({})),
@@ -72,6 +90,7 @@ export type MembotConfig = z.infer<typeof MembotConfigSchema>;
 export type ChunkerConfig = z.infer<typeof ChunkerConfigSchema>;
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
 export type ConvertersConfig = z.infer<typeof ConvertersConfigSchema>;
+export type IngestConfig = z.infer<typeof IngestConfigSchema>;
 export type LlmConfig = z.infer<typeof LlmConfigSchema>;
 export type DownloadersConfig = z.infer<typeof DownloadersConfigSchema>;
 export type LinearDownloaderConfig = z.infer<typeof LinearDownloaderConfigSchema>;
