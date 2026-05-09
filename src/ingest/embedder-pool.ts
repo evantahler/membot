@@ -72,7 +72,7 @@ export class EmbedderPool {
 	spawn(): void {
 		if (this.spawned) return;
 		this.spawned = true;
-		logger.debug(`embedder-pool: spawning ${this.workerCount} workers (model=${this.model})`);
+		logger.info(`embedder-pool: spawning ${this.workerCount} workers (model=${this.model})`);
 		for (let i = 0; i < this.workerCount; i++) {
 			this.workers.push(this.spawnWorker(i));
 		}
@@ -133,6 +133,9 @@ export class EmbedderPool {
 	async dispose(): Promise<void> {
 		if (this.disposed) return;
 		this.disposed = true;
+		if (this.spawned) {
+			logger.info(`embedder-pool: tearing down ${this.workers.length} workers`);
+		}
 		const disposeError = () =>
 			new HelpfulError({
 				kind: "internal_error",
