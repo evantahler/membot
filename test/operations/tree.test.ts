@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildTree, truncateTree } from "../../src/operations/tree.ts";
+import { buildTree, treeOperation, truncateTree } from "../../src/operations/tree.ts";
 
 describe("buildTree", () => {
 	test("groups paths sharing a prefix into a single subtree", () => {
@@ -29,6 +29,13 @@ describe("buildTree", () => {
 	test("ignores empty path inputs", () => {
 		const tree = buildTree(["", "/", "a.md"], 4);
 		expect(tree.map((n) => n.name)).toEqual(["a.md"]);
+	});
+});
+
+describe("treeOperation schema", () => {
+	test("max_depth default is 6", () => {
+		const parsed = treeOperation.inputSchema.parse({});
+		expect(parsed.max_depth).toBe(6);
 	});
 });
 

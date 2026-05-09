@@ -171,7 +171,7 @@ describe("operations end-to-end lifecycle", () => {
 	});
 
 	test("rm tombstones a path", async () => {
-		const r = await removeOperation.handler({ paths: [dbPath] }, ctx);
+		const r = await removeOperation.handler({ paths: [dbPath], recursive: false }, ctx);
 		expect(r.total).toBe(1);
 		expect(r.ok).toBe(1);
 		expect(r.failed).toBe(0);
@@ -277,7 +277,7 @@ describe("rm variadic + glob", () => {
 	});
 
 	test("rm with a glob removes every matching current file", async () => {
-		const r = await removeOperation.handler({ paths: ["docs/**/*.md"] }, ctx2);
+		const r = await removeOperation.handler({ paths: ["docs/**/*.md"], recursive: false }, ctx2);
 		expect(r.total).toBe(3);
 		expect(r.ok).toBe(3);
 		expect(r.failed).toBe(0);
@@ -296,7 +296,7 @@ describe("rm variadic + glob", () => {
 
 		// "x.md" is a literal match; "*.md" is a glob that ALSO matches it.
 		// The dedup should mean x.md is tombstoned exactly once.
-		const r = await removeOperation.handler({ paths: ["x.md", "*.md"] }, ctx2);
+		const r = await removeOperation.handler({ paths: ["x.md", "*.md"], recursive: false }, ctx2);
 		// Matches: readme.md + x.md + y.md + z.md (4 unique current paths)
 		expect(r.total).toBe(4);
 		expect(r.ok).toBe(4);
@@ -307,7 +307,7 @@ describe("rm variadic + glob", () => {
 
 	test("rm with a glob that matches nothing throws HelpfulError(not_found)", async () => {
 		try {
-			await removeOperation.handler({ paths: ["does/not/exist/**"] }, ctx2);
+			await removeOperation.handler({ paths: ["does/not/exist/**"], recursive: false }, ctx2);
 			throw new Error("expected throw");
 		} catch (err) {
 			expect(err).toBeInstanceOf(HelpfulError);
@@ -320,11 +320,56 @@ describe("rm variadic + glob", () => {
 	test("rm with a literal that doesn't exist throws HelpfulError(not_found)", async () => {
 		await writeOperation.handler({ logical_path: "still-here.md", content: "# H" }, ctx2);
 		try {
-			await removeOperation.handler({ paths: ["nope.md"] }, ctx2);
+			await removeOperation.handler({ paths: ["nope.md"], recursive: false }, ctx2);
 			throw new Error("expected throw");
 		} catch (err) {
 			expect(err).toBeInstanceOf(HelpfulError);
 			expect((err as HelpfulError).kind).toBe("not_found");
+		}
+	});
+
+	test("rm on a directory prefix without --recursive throws HelpfulError naming --recursive", async () => {
+		await writeOperation.handler({ logical_path: "remotes/docs.google.com/d/abc/title.md", content: "# 1" }, ctx2);
+		await writeOperation.handler({ logical_path: "remotes/docs.google.com/d/def/other.md", content: "# 2" }, ctx2);
+		try {
+			await removeOperation.handler({ paths: ["remotes/docs.google.com"], recursive: false }, ctx2);
+			throw new Error("expected throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(HelpfulError);
+			const helpful = err as HelpfulError;
+			expect(helpful.kind).toBe("not_found");
+			expect(helpful.message).toContain("is a directory");
+			expect(helpful.hint).toContain("--recursive");
+		}
+	});
+
+	test("rm with --recursive tombstones every path under a directory prefix", async () => {
+		const r = await removeOperation.handler({ paths: ["remotes/docs.google.com"], recursive: true }, ctx2);
+		expect(r.total).toBe(2);
+		expect(r.ok).toBe(2);
+		expect(r.failed).toBe(0);
+		const removedPaths = r.removed.map((e) => e.logical_path).sort();
+		expect(removedPaths).toEqual(["remotes/docs.google.com/d/abc/title.md", "remotes/docs.google.com/d/def/other.md"]);
+	});
+
+	test("rm with --recursive treats trailing-slash directory identically", async () => {
+		await writeOperation.handler({ logical_path: "team/notes/onboarding.md", content: "# A" }, ctx2);
+		await writeOperation.handler({ logical_path: "team/notes/incidents.md", content: "# B" }, ctx2);
+		const r = await removeOperation.handler({ paths: ["team/notes/"], recursive: true }, ctx2);
+		expect(r.ok).toBe(2);
+		const removedPaths = r.removed.map((e) => e.logical_path).sort();
+		expect(removedPaths).toEqual(["team/notes/incidents.md", "team/notes/onboarding.md"]);
+	});
+
+	test("rm --recursive on a literal that is neither a file nor a directory prefix still errors", async () => {
+		try {
+			await removeOperation.handler({ paths: ["totally-missing"], recursive: true }, ctx2);
+			throw new Error("expected throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(HelpfulError);
+			const helpful = err as HelpfulError;
+			expect(helpful.kind).toBe("not_found");
+			expect(helpful.hint).toContain("membot ls");
 		}
 	});
 });
