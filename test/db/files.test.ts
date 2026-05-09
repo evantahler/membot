@@ -95,17 +95,17 @@ describe("files CRUD", () => {
 		expect(docs.map((r) => r.logical_path).sort()).toEqual(["docs/a.md", "docs/b.md"]);
 	});
 
-	test("fetcher_args round-trips through JSON", async () => {
+	test("downloader_args round-trips through JSON", async () => {
 		await insertVersion(db, {
 			logical_path: "u.md",
 			source_type: "remote",
-			fetcher: "mcpx",
-			fetcher_server: "firecrawl",
-			fetcher_tool: "scrape",
-			fetcher_args: { url: "https://x.com", format: "markdown" },
+			fetcher: "downloader",
+			downloader: "google-docs",
+			downloader_args: { document_id: "abc123" },
 		});
 		const row = await getCurrent(db, "u.md");
-		expect(row?.fetcher_args).toEqual({ url: "https://x.com", format: "markdown" });
+		expect(row?.downloader).toBe("google-docs");
+		expect(row?.downloader_args).toEqual({ document_id: "abc123" });
 	});
 
 	test("pruneOldVersions keeps current, drops older non-current", async () => {

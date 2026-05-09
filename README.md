@@ -16,15 +16,43 @@
 
 ```bash
 bun install -g membot
+bunx playwright install chromium    # one-time browser binary download (~150 MB)
 ```
 
-This pulls in DuckDB's per-platform native bindings alongside membot. The build externalizes `@duckdb/*` (those `.node` bindings can't be embedded by `bun build --compile`), so a global Bun install is the supported path.
+This pulls in DuckDB's per-platform native bindings and Playwright's Chromium binary alongside membot. The build externalizes `@duckdb/*` (those `.node` bindings can't be embedded by `bun build --compile`) and `playwright*` (the browser binary lives in `~/.cache/ms-playwright`), so a global Bun install is the supported path.
+
+After installing, set up the services you want to ingest from:
+
+```bash
+membot login
+```
+
+A real Chromium window opens with two sections:
+
+- **Browser sign-in** — Google Docs / Sheets / Slides. Click the Google link in the window, sign in, close the window. Cookies + IndexedDB persist to `~/.membot/auth/browser-profile/` and reused by every browser-based downloader.
+- **API-key services** — GitHub and Linear. The window shows the settings URL where you create a token and the `membot config set …` command to run in your terminal:
+
+```bash
+# GitHub: settings/tokens → fine-grained, repo:read
+membot config set downloaders.github.api_key <PAT>
+# or read from environment
+export GITHUB_TOKEN=<PAT>
+
+# Linear: linear.app/settings/api → personal API key
+membot config set downloaders.linear.api_key <KEY>
+```
+
+Public GitHub repos work without a token (rate-limited at 60 req/hr). Linear always needs a key.
 
 ## Quick start
 
 ```bash
+membot login                                     # one-time: sign into Google / GitHub / Linear in a browser
 membot add ./docs                                # ingest a directory recursively
-membot add https://example.com/spec.pdf          # ingest a URL (auto-converted to markdown)
+membot add https://docs.google.com/document/d/.. # Google Docs / Sheets / Slides via export endpoints
+membot add https://github.com/o/r/issues/123     # GitHub issues + PRs (with comments)
+membot add https://linear.app/w/issue/ABC-12     # Linear issues + projects
+membot add https://example.com/spec.pdf          # any other URL (browser print-to-PDF fallback)
 membot add a.md b.md "docs/**/*.md"              # any number of files / globs in one call
 membot ls                                        # list current files
 membot search "how does refresh work?"           # hybrid search
@@ -65,7 +93,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot serve`                  | Run the MCP server (stdio default; `--http <port>` for HTTP)                      |
 | `membot reindex`                | Rebuild the FTS keyword index over current chunks                                 |
 | `membot config <subcommand>`    | Get / set values in `~/.membot/config.json` (`get`, `set`, `unset`, `list`, `path`) |
-| `membot mcpx <subcommand>`      | Forward to the bundled `mcpx` CLI for managing remote MCP servers                 |
+| `membot login`                  | Open a Chromium window to sign into Google / GitHub / Linear / etc. — closes save the session |
 | `membot skill install`          | Install the Claude Code / Cursor agent skill                                      |
 
 Run `membot <command> --help` for full flags and arguments. Every command produces JSON when piped, when `--json` is set, or when `CI=true`.
@@ -114,9 +142,12 @@ Add `--watch` (and optional `--tick <sec>`) to also run the refresh daemon, whic
   ```
 
   Values are written with file mode `0600`. `ANTHROPIC_API_KEY` set in the environment still wins on read, so existing env-var setups keep working.
+- **Browser session:** `~/.membot/auth/browser-profile/` (Playwright persistent profile — cookies, localStorage, IndexedDB). Captured by `membot login`; cookie-based downloaders (Google) reuse it on every fetch. Delete the directory to force a fresh login.
+- **API keys:** stored under `downloaders.<service>.api_key` in `~/.membot/config.json`. Read by API-based downloaders (GitHub, Linear).
 - **Environment variables:**
   - `ANTHROPIC_API_KEY` — optional. Enables LLM fallback for messy / scanned input (vision captions for images, last-resort markdown conversion). Without it, the pipeline degrades to deterministic native conversion. Equivalent to `membot config set llm.anthropic_api_key ...`; the env var takes precedence on read.
   - `MEMBOT_HOME` — override the data directory.
+  - `MEMBOT_SKIP_E2E` — skip live-network E2E downloader tests in `bun test`.
   - `NO_COLOR`, `CI`, `FORCE_COLOR` — standard output controls.
 
 ## Development

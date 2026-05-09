@@ -1,94 +1,88 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { MembotConfigSchema } from "../../src/config/schemas.ts";
-import { fetchRemote } from "../../src/ingest/fetcher.ts";
+import { describe, expect, test } from "bun:test";
+import { findDownloader, findDownloaderByName, listDownloaders } from "../../src/ingest/downloaders/index.ts";
 
-const baseLlm = MembotConfigSchema.parse({}).llm;
-
-describe("fetchRemote (coordinator)", () => {
-	let server: ReturnType<typeof Bun.serve>;
-	let baseUrl: string;
-
-	beforeAll(() => {
-		server = Bun.serve({
-			port: 0,
-			fetch(req) {
-				const url = new URL(req.url);
-				if (url.pathname === "/ok") {
-					return new Response("hello world", { headers: { "content-type": "text/plain" } });
-				}
-				if (url.pathname === "/md") {
-					return new Response("# title\n\nbody", { headers: { "content-type": "text/markdown" } });
-				}
-				if (url.pathname === "/401") {
-					return new Response("nope", { status: 401 });
-				}
-				return new Response("?", { status: 500 });
-			},
-		});
-		baseUrl = `http://${server.hostname}:${server.port}`;
-	});
-
-	afterAll(() => {
-		server.stop();
-	});
-
-	test("hint=http forces plain HTTP", async () => {
-		const r = await fetchRemote(`${baseUrl}/ok`, { hint: "http" });
-		expect(new TextDecoder().decode(r.bytes)).toBe("hello world");
-		expect(r.fetcher).toBe("http");
-	});
-
-	test("no mcpx adapter → HTTP fetch (no agent involved)", async () => {
-		const r = await fetchRemote(`${baseUrl}/md`, {});
-		expect(r.mimeType).toBe("text/markdown");
-		expect(r.fetcher).toBe("http");
-	});
-
-	test("non-2xx HTTP response → HelpfulError(network_error)", async () => {
-		expect(fetchRemote(`${baseUrl}/401`, { hint: "http" })).rejects.toMatchObject({ kind: "network_error" });
-	});
-
-	test("mcpx configured but no API key → tries HTTP first; HTTP works → success", async () => {
-		const stub = makeUnusedMcpxStub();
-		const r = await fetchRemote(`${baseUrl}/ok`, { mcpx: stub, llm: { ...baseLlm, anthropic_api_key: "" } });
-		expect(r.fetcher).toBe("http");
-		expect(stub.callCounts.search).toBe(0);
-		expect(stub.callCounts.exec).toBe(0);
-	});
-
-	test("mcpx configured but no API key + HTTP fails → HelpfulError(auth_error) naming the env var", async () => {
-		const stub = makeUnusedMcpxStub();
-		try {
-			await fetchRemote(`${baseUrl}/401`, { mcpx: stub, llm: { ...baseLlm, anthropic_api_key: "" } });
-			throw new Error("expected fetchRemote to throw");
-		} catch (err) {
-			const e = err as { kind?: string; hint?: string; message?: string };
-			expect(e.kind).toBe("auth_error");
-			expect(e.hint ?? "").toContain("ANTHROPIC_API_KEY");
+describe("downloader registry", () => {
+	test("listDownloaders surfaces every registered handler with non-empty descriptions", () => {
+		const all = listDownloaders();
+		expect(all.length).toBeGreaterThanOrEqual(6);
+		for (const d of all) {
+			expect(d.name.length).toBeGreaterThan(0);
+			expect(d.description.length).toBeGreaterThan(20);
+		}
+		const names = all.map((d) => d.name);
+		for (const expected of ["google-docs", "google-sheets", "google-slides", "github", "linear", "generic-web"]) {
+			expect(names).toContain(expected);
 		}
 	});
-});
 
-/** Stub mcpx adapter that records call counts but never returns useful data. */
-function makeUnusedMcpxStub() {
-	const callCounts = { search: 0, listTools: 0, info: 0, exec: 0 };
-	return {
-		callCounts,
-		async search() {
-			callCounts.search++;
-			return [];
-		},
-		async listTools() {
-			callCounts.listTools++;
-			return [];
-		},
-		async info() {
-			callCounts.info++;
-			return undefined;
-		},
-		async exec() {
-			callCounts.exec++;
-			return {};
-		},
-	};
-}
+	test("findDownloaderByName is case-sensitive and returns null for unknowns", () => {
+		expect(findDownloaderByName("google-docs")?.name).toBe("google-docs");
+		expect(findDownloaderByName("GOOGLE-DOCS")).toBeNull();
+		expect(findDownloaderByName("nonexistent")).toBeNull();
+	});
+
+	test("findDownloader returns null for non-URL input", () => {
+		expect(findDownloader("not a url")).toBeNull();
+		expect(findDownloader("")).toBeNull();
+	});
+
+	test("findDownloader: Google Docs URL → google-docs", () => {
+		const d = findDownloader("https://docs.google.com/document/d/abc123/edit");
+		expect(d?.name).toBe("google-docs");
+	});
+
+	test("findDownloader: Google Sheets URL → google-sheets", () => {
+		const d = findDownloader("https://docs.google.com/spreadsheets/d/abc123/edit#gid=0");
+		expect(d?.name).toBe("google-sheets");
+	});
+
+	test("findDownloader: Google Slides URL → google-slides", () => {
+		const d = findDownloader("https://docs.google.com/presentation/d/abc123/edit");
+		expect(d?.name).toBe("google-slides");
+	});
+
+	test("findDownloader: GitHub issue URL → github", () => {
+		const d = findDownloader("https://github.com/owner/repo/issues/42");
+		expect(d?.name).toBe("github");
+	});
+
+	test("findDownloader: GitHub PR URL → github", () => {
+		const d = findDownloader("https://github.com/owner/repo/pull/100");
+		expect(d?.name).toBe("github");
+	});
+
+	test("findDownloader: GitHub repo root → generic-web (no specific handler)", () => {
+		const d = findDownloader("https://github.com/owner/repo");
+		expect(d?.name).toBe("generic-web");
+	});
+
+	test("findDownloader: Linear issue URL → linear", () => {
+		const d = findDownloader("https://linear.app/arcade/issue/ABC-123");
+		expect(d?.name).toBe("linear");
+	});
+
+	test("findDownloader: Linear project URL → linear", () => {
+		const d = findDownloader("https://linear.app/arcade/project/my-project-abc123");
+		expect(d?.name).toBe("linear");
+	});
+
+	test("findDownloader: arbitrary URL → generic-web catch-all", () => {
+		const d = findDownloader("https://example.com/some/page");
+		expect(d?.name).toBe("generic-web");
+	});
+
+	test("generic-web matches http and https only", () => {
+		const generic = findDownloaderByName("generic-web");
+		expect(generic?.matches(new URL("http://example.com"))).toBe(true);
+		expect(generic?.matches(new URL("https://example.com"))).toBe(true);
+		expect(generic?.matches(new URL("file:///etc/hosts"))).toBe(false);
+	});
+
+	test("specific downloaders do not match unrelated URLs", () => {
+		const docs = findDownloaderByName("google-docs");
+		expect(docs?.matches(new URL("https://docs.google.com/spreadsheets/d/abc/edit"))).toBe(false);
+		expect(docs?.matches(new URL("https://example.com/document/d/abc/edit"))).toBe(false);
+		const linear = findDownloaderByName("linear");
+		expect(linear?.matches(new URL("https://linear.app/arcade/team/abc"))).toBe(false);
+	});
+});

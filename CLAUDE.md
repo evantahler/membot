@@ -6,10 +6,9 @@ Guidance for Claude Code when working in this repo. Pair with `docs/plan.md` (th
 
 `membot` is a standalone Bun CLI + MCP server (Bun package `membot`, binary `membot`) that gives AI agents a persistent, versioned, searchable context store. Files (markdown, PDF, DOCX, HTML, URLs) are ingested, converted to markdown, chunked, embedded locally with `@huggingface/transformers` (WASM, 384-dim `Xenova/bge-small-en-v1.5`), and indexed in DuckDB with hybrid search (vector + BM25). Every agent-visible artifact is a row in `files`, addressed by a virtual `logical_path` — there is **no** on-disk tree of stored content.
 
-Reference projects (read these to understand the conventions before changing anything):
+Reference project (origin):
 
-- `botholomew` — origin of the context system. The chunker, embedder, fetcher, markdown-converter, and hybrid search live in `src/context/` and `src/tools/search/`.
-- `mcpx` — the project this one mirrors for layout, build, distribution, logger, and CLI shape.
+- `botholomew` — the chunker, embedder, markdown-converter, and hybrid search were originally embedded here. The earlier mcpx-based fetcher has been replaced; today's fetcher is a per-service downloader registry (see "Architecture at a glance" below).
 
 ## Hard constraints
 
@@ -18,7 +17,8 @@ Reference projects (read these to understand the conventions before changing any
 - **DuckDB is the only store.** Content AND original bytes live in rows (`files.content`, `blobs.bytes`), not in a filesystem tree. `~/.membot/index.duckdb` holds everything except cached model weights. The DB will get large — that's accepted.
 - **Append-only versioning.** Every ingest, refresh that finds new bytes, write, or rename creates a new `(logical_path, version_id)` row. `version_id` is a `TIMESTAMP` (ms precision). Default queries flow through `current_files` / `current_chunks` views. Delete = tombstone, not a row removal.
 - **MCP defaults to current.** Every MCP tool acts on the latest non-tombstoned version unless `version` is passed explicitly.
-- **Mcpx invocations are persisted.** When `membot_add` fetches a remote URL via mcpx, store `fetcher_server`, `fetcher_tool`, and `fetcher_args` on the row so refresh re-invokes the exact same tool — never re-route through the agent.
+- **Per-service downloaders + persisted provenance.** Remote URLs are dispatched to a downloader registry (`src/ingest/downloaders/`): Google Docs/Sheets/Slides via export endpoints with cookies from a persistent chromium profile, GitHub via REST API + PAT, Linear via GraphQL + personal API key, generic-web (Playwright print-to-PDF or plain GET) as the catch-all. Each row persists `(downloader, downloader_args)` so refresh replays the exact same downloader against the same URL — deterministic, no LLM, no agent loop.
+- **Fetches are non-interactive.** `membot add` and `membot refresh` never open a browser themselves. Auth failures throw `HelpfulError` with a concrete next step (`membot login` for cookie services, `membot config set downloaders.<svc>.api_key` for token services). The single interactive entry point is `membot login`, which the user runs once.
 - **Native conversion first, LLM fallback for messy/binary input.** `unpdf`, `mammoth`, `turndown` handle the common cases. Tesseract WASM (`tesseract.js`) does OCR for `image/*` and for PDFs whose text extraction came back empty. Claude vision captions images; Claude markdown-converter is the last-resort fallback. Missing `ANTHROPIC_API_KEY` is not a hard error — the pipeline degrades to deterministic surrogates.
 - **Textual surrogate is the universal interface.** Every artifact (markdown, PDF, image, audio, anything) produces a markdown body that flows through chunking + embedding + FTS. Original bytes live in `blobs` and are reachable via `membot_read bytes=true`. Search has zero special cases for binary content.
 - **Always describe.** `files.description` is generated for every ingested file, including plain markdown. The string `<logical_path>\n<description>\n\n<chunk_content>` is what gets embedded and FTS-indexed (stored as `chunks.search_text`); `chunks.chunk_content` keeps the raw body for clean snippet rendering.
@@ -34,22 +34,35 @@ Reference projects (read these to understand the conventions before changing any
 ## Architecture at a glance
 
 ```
-membot_add ──► local-reader OR fetcher (mcpx) ──► converter (mime dispatch)
-                                                    │
-                                                    ▼
-                                       chunker ──► embedder (WASM)
-                                                    │
-                                                    ▼
-                                       db.files.insertVersion + db.chunks.insertForVersion
-                                                    │
-                                                    ▼
-                                       FTS index rebuild (current_chunks)
+membot_add ──► local-reader OR downloader-registry ──► converter (mime dispatch)
+                                                         │
+                                                         ▼
+                                            chunker ──► embedder (WASM)
+                                                         │
+                                                         ▼
+                                            db.files.insertVersion + db.chunks.insertForVersion
+                                                         │
+                                                         ▼
+                                            FTS index rebuild (current_chunks)
 
 membot_refresh ──► re-read source ──► sha256 compare
                                        │
                           unchanged ◄──┴──► changed ──► same pipeline as membot_add
                           (status only)        (creates new version_id)
 ```
+
+The downloader registry maps URLs to a tactic:
+
+| Service | Match | Strategy | Auth |
+|---|---|---|---|
+| google-docs | `docs.google.com/document/d/<id>` | `?format=docx` export → existing `convertDocx` | Cookies from persistent chromium profile (populated by `membot login`) |
+| google-sheets | `docs.google.com/spreadsheets/d/<id>` | `?format=html` export → `convertHtml` | Same |
+| google-slides | `docs.google.com/presentation/d/<id>` | `/export/pdf` → `convertPdf` | Same |
+| github | `github.com/<owner>/<repo>/(issues\|pull)/<n>` | `api.github.com/repos/.../issues/<n>` + `/comments` → render JSON to markdown | `downloaders.github.api_key` PAT (or `GITHUB_TOKEN`); public repos work unauth at 60 req/hr |
+| linear | `linear.app/<workspace>/issue/<KEY>` and `…/project/<slug>` | `api.linear.app/graphql` (Issue / Project queries) → render JSON to markdown | `downloaders.linear.api_key` personal API key |
+| generic-web | catch-all for any http(s) URL | Plain GET (mime-dispatched) or Playwright print-to-PDF for `text/html` | Cookies from the persistent profile if present |
+
+Google fetches go through Node's built-in `fetch()` with a `Cookie` header read from the chromium profile — Playwright's `APIRequestContext` has a cookie-parser bug on Google's same-origin redirects. GitHub + Linear are pure HTTP; they don't open chromium at all. Only Google + generic-web need the browser pool.
 
 Daemon mode (`membot serve --watch`) ticks every `tick_interval_sec` and runs the no-arg refresh path against rows whose `refresh_frequency_sec` has elapsed.
 
@@ -59,7 +72,7 @@ Daemon mode (`membot serve --watch`) ticks every `tick_interval_sec` and runs th
 src/
   cli.ts                # commander entry; iterates operations registry
   sdk.ts                # programmatic API for embedding membot
-  context.ts            # AppContext: config + db + embedder + mcpx + logger
+  context.ts            # AppContext: config + db + embedder + logger
   constants.ts          # MEMBOT_HOME, EMBEDDING_DIMENSION=384, defaults
   operations/           # ★ one file per user-facing capability; single source of truth
     types.ts            # Operation<I,O>, defineOperation()
@@ -70,17 +83,17 @@ src/
     mcp.ts              # mountAsMcpTool — registers an Operation as an MCP tool
     commander.ts        # mountAsCommanderCommand — registers an Operation as a CLI subcommand
     zod-to-cli.ts       # introspects zod schema → commander .argument()/.option() calls
-  commands/             # CLI-only commands with no MCP equivalent (serve, reindex)
+  commands/             # CLI-only commands with no MCP equivalent (serve, reindex, login)
   config/               # zod schema + loader (~/.membot/config.json)
   db/                   # DuckDB connection, migrations, files.ts, chunks.ts
-  ingest/               # source-resolver (file/dir/glob/url/inline), local-reader, fetcher, chunker, embedder, describer, search-text, converter/ (pdf/docx/html/image/text/ocr/llm)
+  ingest/               # source-resolver (file/dir/glob/url/inline), local-reader, fetcher, chunker, embedder, describer, search-text, converter/ (pdf/docx/html/image/text/ocr/llm), downloaders/ (per-service: google-docs/sheets/slides, github, linear, generic-web)
   search/               # semantic.ts, keyword.ts, hybrid.ts (RRF)
   refresh/              # runner.ts (per-row), scheduler.ts (daemon)
   mcp/                  # server.ts, instructions.ts
   output/               # tty.ts (mode detection), logger.ts (spinner-aware), progress.ts (multi-entry bar), formatter.ts (table/markdown/json)
   errors.ts             # HelpfulError class — the only error type allowed in handlers
 test/                   # bun test, _preload.ts applies transformers patch
-patches/                # @huggingface/transformers WASM patch (copy from mcpx) + @evantahler/mcpx onnx-wasm-paths stub
+patches/                # @huggingface/transformers WASM patch
 scripts/                # apply-patches.sh (pre-build hook — applies all node_modules patches)
 docs/plan.md            # source-of-truth design
 ```
@@ -94,7 +107,7 @@ docs/plan.md            # source-of-truth design
 - **Spinners & progress are advisory.** Operations call `ctx.progress.tick(...)` and `ctx.logger.info(...)` without checking whether they're rendered. The renderer in `src/output/` decides; non-interactive mode coerces both into stderr lines or no-ops.
 - **No duplicated handlers.** If you find yourself writing logic in `src/commands/*.ts` that an MCP tool would also want, it belongs in `src/operations/` instead. The only legitimate `src/commands/*.ts` files are CLI-only behaviors with no agent-facing meaning (`serve`, `reindex`).
 - **Logger, not console.** Use `src/output/logger.ts` (spinner-aware, JSON/TTY-aware). `console.log` in production code is a bug.
-- **Colors via `ansis`, spinners via `nanospinner`.** Same as mcpx.
+- **Colors via `ansis`, spinners via `nanospinner`.**
 - **No premature abstractions.** Three similar lines beat a generic helper. Don't build for hypothetical fetchers, hypothetical embedders, or hypothetical storage backends.
 
 ## Tool / command descriptions
@@ -128,17 +141,17 @@ If a command, flag, or workflow changes, the README command table, the skill com
 
 ## Build & distribution
 
-- Pre-build: `scripts/apply-patches.sh` (applies the transformers WASM patch — copy from mcpx — and stubs `@evantahler/mcpx`'s `src/search/onnx-wasm-paths.ts` so its build-time-static asset imports don't break `bun --compile`).
-- Build: `bun build --compile --minify --sourcemap --external '@duckdb/*' ./src/cli.ts --outfile dist/membot`. `@duckdb/*` is externalized because `@duckdb/node-bindings` ships per-platform `.node` native files (`@duckdb/node-bindings-{darwin-arm64,darwin-x64,linux-arm64,linux-x64,win32-arm64,win32-x64}`) that `bun build --compile` cannot resolve and bundle. The trade-off: the published binary expects `@duckdb/node-api` to be reachable at runtime, so the README directs users to `bun add -g membot` as the primary install path. `install.sh` / `install.ps1` are documented as a secondary path that requires DuckDB to be installed separately.
+- Pre-build: `scripts/apply-patches.sh` (applies the transformers WASM patch).
+- Build: `bun build --compile --minify --sourcemap --external '@duckdb/*' --external 'playwright*' ./src/cli.ts --outfile dist/membot`. Both `@duckdb/*` and `playwright*` are externalized: DuckDB ships per-platform `.node` bindings that `bun build --compile` can't bundle, and Playwright relies on a separately-installed Chromium binary at `~/.cache/ms-playwright/`. The published binary expects both to be reachable at runtime, so the README directs users to `bun add -g membot` (which installs both as deps) and `bunx playwright install chromium` (one-time browser download).
 - Targets: darwin-arm64, darwin-x64, linux-arm64, linux-x64, windows-x64, windows-arm64.
-- Distribution: `install.sh` / `install.ps1` mirror mcpx.
 
 ## Things to avoid
 
 - Re-introducing a filesystem store under `~/.membot/context/`. The store is rows.
 - Cloud embeddings. Local WASM only.
 - Mutating an existing version's `content` / `content_sha256` / `chunks`. Those fields are immutable once the row is written — corrections are new versions.
-- Re-routing a remote refresh through the LLM/agent. Replay the stored `fetcher_*` columns directly via mcpx.
+- Re-routing a remote refresh through an LLM/agent loop. Refresh looks up the persisted `downloader` name and re-invokes the same downloader against `source_path` — deterministic, no LLM call.
+- Opening a browser window during a fetch. `membot add` and `membot refresh` MUST stay non-interactive (the daemon depends on it). Browser windows only open inside `membot login`.
 - Tools that return content blobs without a `version_id` — every read-shaped response must echo which version it served.
 - A separate `membot_read_blob` tool. Bytes are reachable via `membot_read` with `bytes=true`. One read tool, one mental model.
 - Embedding `chunk_content` raw. Always embed `search_text` (the prepended `<path>\n<description>\n\n<body>`) — that's what `chunks.search_text` holds and what FTS is built on.

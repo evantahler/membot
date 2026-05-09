@@ -1,158 +1,133 @@
-import type { LlmConfig } from "../config/schemas.ts";
-import { DEFAULTS } from "../constants.ts";
-import { asHelpful, HelpfulError } from "../errors.ts";
+import { join } from "node:path";
+import type { MembotConfig } from "../config/schemas.ts";
+import { FILES } from "../constants.ts";
+import { HelpfulError } from "../errors.ts";
 import { logger } from "../output/logger.ts";
-import type { AgentMcpxAdapter } from "./agent-fetcher.ts";
-import { agentFetch } from "./agent-fetcher.ts";
-import { sha256Hex } from "./local-reader.ts";
+import { BrowserPool } from "./downloaders/browser.ts";
+import {
+	type DownloadedRemote,
+	type Downloader,
+	type DownloaderCtx,
+	findDownloader,
+	findDownloaderByName,
+	listDownloaders,
+} from "./downloaders/index.ts";
 
-export interface FetchedRemote {
-	bytes: Uint8Array;
-	sha256: string;
-	mimeType: string;
-	fetcher: "http" | "mcpx";
-	fetcherServer: string | null;
-	fetcherTool: string | null;
-	fetcherArgs: Record<string, unknown> | null;
-	sourceUrl: string;
-}
+export type FetchedRemote = DownloadedRemote;
 
 export interface FetchOptions {
 	/**
-	 * User-provided hint. Free-form keyword (e.g. "firecrawl", "github",
-	 * "google-docs", "http"). Special-cased: "http" forces plain fetch.
-	 * Otherwise the hint is passed verbatim to the agent loop as extra
-	 * guidance about which provider to prefer.
+	 * Optional explicit downloader override. Free-form; matched
+	 * case-insensitively against `Downloader.name`. When given, skips the
+	 * URL-based matching and forces that downloader (useful for the
+	 * "use the generic-web fallback even though google-docs claimed
+	 * this URL" escape hatch).
 	 */
-	hint?: string;
-	/** Live mcpx adapter the agent loop drives via search/list/info/exec. */
-	mcpx?: AgentMcpxAdapter | null;
+	downloaderName?: string;
 	/**
-	 * LLM config. The agent loop needs an Anthropic key; without one the
-	 * mcpx path is skipped and we fall back to plain HTTP.
+	 * Override the on-disk path of the persistent chromium profile.
+	 * Defaults to `<ctx.dataDir>/auth/browser-profile`.
 	 */
-	llm?: LlmConfig;
+	userDataDir?: string;
+	/** Pre-built BrowserPool to share across many fetches (set by ingest's outer loop). */
+	pool?: BrowserPool;
 	/**
-	 * Forwarded to the agent loop so callers (e.g. the ingest progress
-	 * reporter) can drive a spinner sublabel from per-turn agent activity.
+	 * Sublabel hook forwarded to the downloader's `DownloaderCtx`.
+	 * Drives the per-entry spinner text during multi-step fetches.
 	 */
 	onProgress?: (sublabel: string) => void;
 }
 
 /**
- * Fetch a remote URL.
- *
- * - `--fetcher http` (or no mcpx, or no LLM key) → plain HTTP.
- * - Otherwise → multi-turn agent loop: Claude is given mcpx tools
- *   (search/list/info/exec) and decides how to retrieve the URL,
- *   including multi-step flows (start a job → poll → download).
- *   The agent's selected mcp_exec invocation is recorded on the
- *   returned row so refresh can replay it deterministically without
- *   another agent round-trip.
- *
- * If the agent decides plain HTTP is the right call (`request_http_fallback`,
- * no tool calls, max turns) we transparently fall through to `httpFetch`.
- * If the agent reports an actionable failure, we surface that as a
- * `HelpfulError`. If mcpx is configured but the LLM key is missing AND
- * the HTTP fallback also fails, we surface an `auth_error` naming the env
- * var so users see the real cause instead of a misleading 401.
+ * Fetch a remote URL via the per-service downloader registry. Specific
+ * downloaders (Google, GitHub, Linear) match first; the generic-web
+ * downloader is the always-matching catch-all. Every fetch authenticates
+ * via the cookies the user persisted with `membot login`. The returned
+ * shape includes the chosen downloader name and its args so refresh can
+ * replay it deterministically without involving the LLM.
  */
-export async function fetchRemote(url: string, options: FetchOptions = {}): Promise<FetchedRemote> {
-	const mcpx = options.mcpx;
-	const hint = options.hint?.trim();
+export async function fetchRemote(
+	url: string,
+	config: MembotConfig,
+	options: FetchOptions = {},
+	dataDir?: string,
+): Promise<FetchedRemote> {
+	const downloader = pickDownloader(url, options.downloaderName);
+	const userDataDir = options.userDataDir ?? defaultProfileDir(dataDir);
+	const ownsPool = !options.pool;
+	const headless = !downloader.requireHeaded;
+	const pool = options.pool ?? new BrowserPool({ userDataDir, headless });
+	const dctx: DownloaderCtx = { pool, logger, config, onProgress: options.onProgress };
 
-	if (hint === "http") return httpFetch(url);
-	if (!mcpx) return httpFetch(url);
-
-	const apiKey = options.llm?.anthropic_api_key?.trim();
-	if (!apiKey) {
-		// No way to drive the agent. Try HTTP; if that fails, the user
-		// almost certainly wanted mcpx — surface a clear key-missing error.
-		try {
-			return await httpFetch(url);
-		} catch (err) {
-			if (err instanceof HelpfulError && err.kind === "network_error") {
-				throw new HelpfulError({
-					kind: "auth_error",
-					message: `${url} couldn't be fetched directly (${err.message}). Membot has mcpx configured, but routing through it requires Claude to translate the URL into the right tool arguments — and ANTHROPIC_API_KEY isn't set.`,
-					hint: `Set ANTHROPIC_API_KEY in your environment (or under llm.anthropic_api_key in ~/.membot/config.json), then retry. To force the HTTP path explicitly, run \`membot add ${url} --fetcher http\`.`,
-				});
-			}
-			throw err;
-		}
-	}
-
-	let outcome: Awaited<ReturnType<typeof agentFetch>>;
 	try {
-		outcome = await agentFetch({ url, mcpx, llm: options.llm!, hint, onProgress: options.onProgress });
-	} catch (err) {
-		if (err instanceof HelpfulError) throw err;
-		logger.warn(`agent-fetch failed (${err instanceof Error ? err.message : String(err)}) — falling back to HTTP`);
-		return httpFetch(url);
+		// Fetches are strictly non-interactive: there's no auto-launch
+		// of a browser when auth fails. Batch ingest (`membot add` of
+		// many URLs) and the refresh daemon both run without a human
+		// available to drive a window, so any auth_error must
+		// propagate as-is. The HelpfulError's hint tells the user to
+		// `membot login` (cookie-based services) or `membot config set
+		// downloaders.<svc>.api_key` (API-key services); they fix it
+		// once and re-run.
+		return await downloader.download(new URL(url), dctx);
+	} finally {
+		if (ownsPool) await pool.dispose();
 	}
-
-	if (outcome.kind === "accepted") {
-		return {
-			bytes: outcome.result.bytes,
-			sha256: outcome.result.sha256,
-			mimeType: outcome.result.mimeType,
-			fetcher: "mcpx",
-			fetcherServer: outcome.result.fetcherServer,
-			fetcherTool: outcome.result.fetcherTool,
-			fetcherArgs: outcome.result.fetcherArgs,
-			sourceUrl: url,
-		};
-	}
-	logger.info(`[fetcher] falling back to HTTP: ${outcome.reason}`);
-	return httpFetch(url);
-}
-
-/** Plain `fetch` fallback. Used when mcpx isn't configured or the hint says so. */
-async function httpFetch(url: string): Promise<FetchedRemote> {
-	let resp: Response;
-	try {
-		resp = await fetch(url, {
-			headers: { "User-Agent": "membot/0.1" },
-			signal: AbortSignal.timeout(DEFAULTS.HTTP_TIMEOUT_MS),
-		});
-	} catch (err) {
-		throw asHelpful(
-			err,
-			`while fetching ${url}`,
-			`Check your network and that ${url} is reachable. For mcpx-managed sources (gdocs/github/firecrawl), set ANTHROPIC_API_KEY so membot can drive an mcpx tool.`,
-			"network_error",
-		);
-	}
-	if (!resp.ok) {
-		throw new HelpfulError({
-			kind: "network_error",
-			message: `HTTP ${resp.status} ${resp.statusText}: ${url}`,
-			hint: "Verify the URL is reachable and not gated behind auth. For private docs use mcpx (set ANTHROPIC_API_KEY).",
-		});
-	}
-	const bytes = new Uint8Array(await resp.arrayBuffer());
-	const ct = resp.headers.get("content-type") ?? "";
-	const mime = ct.split(";")[0]?.trim() || "application/octet-stream";
-	return {
-		bytes,
-		sha256: sha256Hex(bytes),
-		mimeType: mime,
-		fetcher: "http",
-		fetcherServer: null,
-		fetcherTool: null,
-		fetcherArgs: null,
-		sourceUrl: url,
-	};
 }
 
 /**
- * Detect MCP `CallToolResult` envelopes that signal tool failure. MCP
- * tool errors don't throw — they return `{ isError: true, content: [...] }`
- * — so callers must check this explicitly before treating the content
- * as a successful payload. Used by the refresh runner; the agent loop
- * has its own preview-aware check.
+ * Replay a fetch by downloader name (used by refresh). Looks up the
+ * persisted downloader by name and calls it against the original URL —
+ * deterministic, no agent loop. When the persisted downloader is no
+ * longer registered (e.g. from a prior membot version), falls back to
+ * URL-based dispatch so refresh degrades gracefully instead of erroring.
  */
-export function isMcpToolError(result: unknown): boolean {
-	if (!result || typeof result !== "object") return false;
-	return (result as { isError?: unknown }).isError === true;
+export async function fetchRemoteByDownloader(
+	downloaderName: string | null,
+	url: string,
+	pool: BrowserPool,
+	config: MembotConfig,
+): Promise<FetchedRemote> {
+	const named = downloaderName ? findDownloaderByName(downloaderName) : null;
+	const downloader = named ?? findDownloader(url);
+	if (!downloader) {
+		throw new HelpfulError({
+			kind: "input_error",
+			message: `no downloader matches ${url}`,
+			hint: "Re-add the URL with `membot add <url>` to pick a fresh downloader.",
+		});
+	}
+	const dctx: DownloaderCtx = { pool, logger, config };
+	return downloader.download(new URL(url), dctx);
+}
+
+function pickDownloader(url: string, override?: string): Downloader {
+	if (override) {
+		const named = findDownloaderByName(override.toLowerCase());
+		if (!named) {
+			const available = listDownloaders()
+				.map((d) => d.name)
+				.join(", ");
+			throw new HelpfulError({
+				kind: "input_error",
+				message: `unknown downloader '${override}'`,
+				hint: `Pick one of: ${available}.`,
+			});
+		}
+		return named;
+	}
+	const matched = findDownloader(url);
+	if (!matched) {
+		throw new HelpfulError({
+			kind: "input_error",
+			message: `not a fetchable URL: ${url}`,
+			hint: "Pass an http(s):// URL.",
+		});
+	}
+	return matched;
+}
+
+function defaultProfileDir(dataDir?: string): string {
+	if (dataDir) return join(dataDir, FILES.BROWSER_PROFILE);
+	const home = process.env.MEMBOT_HOME ?? `${process.env.HOME ?? "."}/.membot`;
+	return join(home, FILES.BROWSER_PROFILE);
 }

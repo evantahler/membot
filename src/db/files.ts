@@ -1,7 +1,7 @@
 import type { DbConnection, SqlParam } from "./connection.ts";
 
 export type SourceType = "local" | "remote" | "inline";
-export type FetcherKind = "http" | "mcpx" | "local" | "inline";
+export type FetcherKind = "downloader" | "local" | "inline";
 
 export interface FileRow {
 	logical_path: string;
@@ -18,9 +18,8 @@ export interface FileRow {
 	mime_type: string | null;
 	size_bytes: number | null;
 	fetcher: FetcherKind | null;
-	fetcher_server: string | null;
-	fetcher_tool: string | null;
-	fetcher_args: Record<string, unknown> | null;
+	downloader: string | null;
+	downloader_args: Record<string, unknown> | null;
 	refresh_frequency_sec: number | null;
 	refreshed_at: string | null;
 	last_refresh_status: string | null;
@@ -43,9 +42,8 @@ export interface NewFileVersion {
 	mime_type?: string | null;
 	size_bytes?: number | null;
 	fetcher?: FetcherKind | null;
-	fetcher_server?: string | null;
-	fetcher_tool?: string | null;
-	fetcher_args?: Record<string, unknown> | null;
+	downloader?: string | null;
+	downloader_args?: Record<string, unknown> | null;
 	refresh_frequency_sec?: number | null;
 	refreshed_at?: string | null;
 	last_refresh_status?: string | null;
@@ -67,9 +65,8 @@ const ROW_COLUMNS = [
 	"mime_type",
 	"size_bytes",
 	"fetcher",
-	"fetcher_server",
-	"fetcher_tool",
-	"fetcher_args",
+	"downloader",
+	"downloader_args",
 	"refresh_frequency_sec",
 	"refreshed_at",
 	"last_refresh_status",
@@ -86,21 +83,21 @@ const COLUMN_LIST = ROW_COLUMNS.join(", ");
  */
 export async function insertVersion(db: DbConnection, file: NewFileVersion): Promise<string> {
 	const versionId = file.version_id ?? millisIso(Date.now());
-	const fetcherArgsJson = file.fetcher_args ? JSON.stringify(file.fetcher_args) : null;
+	const downloaderArgsJson = file.downloader_args ? JSON.stringify(file.downloader_args) : null;
 
 	await db.queryRun(
 		`INSERT INTO files (
 			logical_path, version_id, tombstone, source_type,
 			source_path, source_mtime_ms, source_sha256, blob_sha256,
 			content_sha256, content, description, mime_type, size_bytes,
-			fetcher, fetcher_server, fetcher_tool, fetcher_args,
+			fetcher, downloader, downloader_args,
 			refresh_frequency_sec, refreshed_at, last_refresh_status, change_note
 		) VALUES (
 			?1, CAST(?2 AS TIMESTAMP), ?3, ?4,
 			?5, ?6, ?7, ?8,
 			?9, ?10, ?11, ?12, ?13,
-			?14, ?15, ?16, ?17,
-			?18, ?19, ?20, ?21
+			?14, ?15, ?16,
+			?17, ?18, ?19, ?20
 		)`,
 		file.logical_path,
 		versionId,
@@ -116,9 +113,8 @@ export async function insertVersion(db: DbConnection, file: NewFileVersion): Pro
 		file.mime_type ?? null,
 		file.size_bytes ?? null,
 		file.fetcher ?? null,
-		file.fetcher_server ?? null,
-		file.fetcher_tool ?? null,
-		fetcherArgsJson,
+		file.downloader ?? null,
+		downloaderArgsJson,
 		file.refresh_frequency_sec ?? null,
 		file.refreshed_at ?? null,
 		file.last_refresh_status ?? null,
@@ -132,33 +128,33 @@ export function millisIso(ms: number): string {
 	return new Date(ms).toISOString();
 }
 
-interface RawFileRow extends Omit<FileRow, "fetcher_args" | "tombstone"> {
-	fetcher_args: string | null | Record<string, unknown>;
+interface RawFileRow extends Omit<FileRow, "downloader_args" | "tombstone"> {
+	downloader_args: string | null | Record<string, unknown>;
 	tombstone: boolean | number;
 	[key: string]: unknown;
 }
 
 /**
  * Coerce a raw DuckDB row into a typed `FileRow`. JSON-parses the
- * `fetcher_args` column (DuckDB returns it as text or a parsed object
+ * `downloader_args` column (DuckDB returns it as text or a parsed object
  * depending on driver version) and normalizes `tombstone` to a boolean
  * (some drivers return 0/1).
  */
 function toFileRow(row: RawFileRow | null): FileRow | null {
 	if (!row) return null;
 	let parsed: Record<string, unknown> | null = null;
-	if (row.fetcher_args && typeof row.fetcher_args === "string") {
+	if (row.downloader_args && typeof row.downloader_args === "string") {
 		try {
-			parsed = JSON.parse(row.fetcher_args);
+			parsed = JSON.parse(row.downloader_args);
 		} catch {
 			parsed = null;
 		}
-	} else if (row.fetcher_args && typeof row.fetcher_args === "object") {
-		parsed = row.fetcher_args;
+	} else if (row.downloader_args && typeof row.downloader_args === "object") {
+		parsed = row.downloader_args;
 	}
 	return {
 		...row,
-		fetcher_args: parsed,
+		downloader_args: parsed,
 		tombstone: !!row.tombstone,
 	};
 }

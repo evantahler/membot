@@ -7,7 +7,7 @@ import { defineOperation } from "./types.ts";
 export const refreshOperation = defineOperation({
 	name: "membot_refresh",
 	cliName: "refresh",
-	description: `Re-read a file's source and create a new version only if the source bytes changed. Pass \`logical_path\` to refresh one file, or omit it to refresh every file whose refresh_frequency_sec has elapsed. Local files are detected via mtime+sha; remote files are re-fetched via the same mcpx invocation that was originally used. On auth or network failure the prior version stays current — check \`last_refresh_status\`.`,
+	description: `Re-read a file's source and create a new version only if the source bytes changed. Pass \`logical_path\` to refresh one file, or omit it to refresh every file whose refresh_frequency_sec has elapsed. Local files are detected via mtime+sha; remote files are re-fetched via the same downloader (Google Docs, GitHub, etc.) that was originally chosen. On auth or network failure the prior version stays current — check \`last_refresh_status\`. If the failure mentions a login redirect, re-run \`membot login\` and try again.`,
 	inputSchema: z.object({
 		logical_path: z.string().optional().describe("Single path to refresh; omit for all-due"),
 		force: z.boolean().default(false).describe("Re-embed even if source sha is unchanged"),
@@ -60,9 +60,7 @@ export const refreshOperation = defineOperation({
 		for (const path of targets) {
 			ctx.progress.tick(path);
 			try {
-				const r = await refreshOne(ctx, path, input.force, (done, total) =>
-					ctx.progress.update(`embedding ${done}/${total}`),
-				);
+				const r = await refreshOne(ctx, path, input.force, (sublabel) => ctx.progress.update(sublabel));
 				out.push(r);
 			} catch (err) {
 				out.push({ logical_path: path, status: "failed", error: err instanceof Error ? err.message : String(err) });

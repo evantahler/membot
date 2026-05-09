@@ -5,7 +5,7 @@ import { program } from "commander";
 import pkg from "../package.json" with { type: "json" };
 import { registerCheckUpdateCommand } from "./commands/check-update.ts";
 import { registerConfigCommand } from "./commands/config.ts";
-import { registerMcpxCommand } from "./commands/mcpx.ts";
+import { registerLoginCommand } from "./commands/login.ts";
 import { registerReindexCommand } from "./commands/reindex.ts";
 import { registerServeCommand } from "./commands/serve.ts";
 import { registerSkillCommand } from "./commands/skill.ts";
@@ -59,7 +59,7 @@ for (const op of OPERATIONS) {
 registerServeCommand(program);
 registerReindexCommand(program);
 registerConfigCommand(program);
-registerMcpxCommand(program);
+registerLoginCommand(program);
 registerSkillCommand(program);
 registerCheckUpdateCommand(program);
 registerUpgradeCommand(program);

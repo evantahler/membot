@@ -5,10 +5,7 @@
 import { existsSync } from "node:fs";
 import { $ } from "bun";
 
-const markers = [
-	"node_modules/@huggingface/transformers/.membot-transformers-patch-applied",
-	"node_modules/@evantahler/mcpx/.membot-mcpx-patch-applied",
-];
+const markers = ["node_modules/@huggingface/transformers/.membot-transformers-patch-applied"];
 
 if (markers.some((m) => !existsSync(m))) {
 	await $`bash scripts/apply-patches.sh`;

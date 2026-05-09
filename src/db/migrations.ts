@@ -2,6 +2,7 @@ import { logger } from "../output/logger.ts";
 import type { DbConnection } from "./connection.ts";
 import { MIGRATION_001 } from "./migrations/001-init.ts";
 import { MIGRATION_002 } from "./migrations/002-fts.ts";
+import { MIGRATION_003 } from "./migrations/003-downloader-columns.ts";
 
 /**
  * One DDL/DML migration step. The id is monotonically increasing; the name
@@ -14,7 +15,7 @@ export interface Migration {
 	statements: string[];
 }
 
-const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002];
+const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002, MIGRATION_003];
 
 /**
  * Process-level cache of paths whose migrations have been applied (or

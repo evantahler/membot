@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>membot login</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; padding: 2.5rem; max-width: 720px; margin: auto; color: #222; line-height: 1.5; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.05rem; margin-top: 2rem; margin-bottom: 0.5rem; color: #444; }
+  .hint { color: #666; margin-bottom: 1.5rem; }
+  ul { padding: 0; list-style: none; }
+  li { padding: 0.7rem 0.9rem; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 0.5rem; }
+  a { color: #2855ff; text-decoration: none; font-weight: 500; }
+  a:hover { text-decoration: underline; }
+  .desc { color: #666; }
+  .footer { color: #888; font-size: 0.9rem; margin-top: 2rem; }
+  code { background: #f5f5f5; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.85rem; }
+  pre { background: #f5f5f5; padding: 0.6rem 0.8rem; border-radius: 4px; font-size: 0.85rem; overflow-x: auto; margin: 0.4rem 0 0 0; }
+</style>
+</head>
+<body>
+<h1>Set up the services membot will fetch from</h1>
+<p class="hint">This is a separate browser session from your daily Chrome — even if you're signed in there, you have to set things up here.</p>
+
+{{#hasBrowser}}
+<h2>Sign in via this browser</h2>
+<p class="hint">Click any link, complete the login, then close this window when you're done. Cookies + IndexedDB land in your membot profile.</p>
+<ul>
+{{#browser}}
+  <li><a href="{{url}}">{{name}}</a>{{#description}} <span class="desc">— {{description}}</span>{{/description}}</li>
+{{/browser}}
+</ul>
+{{/hasBrowser}}
+
+{{#hasApiKey}}
+<h2>API-key services</h2>
+<p class="hint">Open the settings page, create a token, then run the command shown in your terminal (not in this browser).</p>
+<ul>
+{{#apiKey}}
+  <li>
+    <a href="{{url}}">{{name}}</a>{{#description}} <span class="desc">— {{description}}</span>{{/description}}
+    <pre>{{setupCommand}}</pre>
+  </li>
+{{/apiKey}}
+</ul>
+{{/hasApiKey}}
+
+<p class="footer">Closing this window saves the browser-session profile. Run <code>membot login</code> again to refresh expired sessions.</p>
+</body>
+</html>

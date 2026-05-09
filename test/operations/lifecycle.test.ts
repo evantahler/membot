@@ -59,7 +59,6 @@ describe("operations end-to-end lifecycle", () => {
 			db,
 			logger,
 			progress: createProgress(),
-			mcpx: null,
 		};
 	}, 120_000);
 
@@ -215,7 +214,6 @@ describe("add variadic sources", () => {
 			db,
 			logger,
 			progress: createProgress(),
-			mcpx: null,
 		};
 	}, 120_000);
 
@@ -262,7 +260,6 @@ describe("rm variadic + glob", () => {
 			db,
 			logger,
 			progress: createProgress(),
-			mcpx: null,
 		};
 
 		await writeOperation.handler({ logical_path: "readme.md", content: "# Readme" }, ctx2);

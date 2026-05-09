@@ -40,7 +40,6 @@ describe("add idempotency", () => {
 			db,
 			logger,
 			progress: createProgress(),
-			mcpx: null,
 		};
 	}, 120_000);
 
