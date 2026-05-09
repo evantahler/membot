@@ -27,6 +27,7 @@ export const genericWebDownloader: Downloader = {
 		return url.protocol === "http:" || url.protocol === "https:";
 	},
 	async download(url, ctx): Promise<DownloadedRemote> {
+		ctx.onProgress?.("fetching");
 		const request = await ctx.pool.request();
 		const response = await request.get(url.toString(), { timeout: 30_000 });
 		// As the catch-all we don't know which login page each unknown
@@ -49,7 +50,9 @@ export const genericWebDownloader: Downloader = {
 		if (contentType === "text/html" || contentType === "application/xhtml+xml") {
 			const page = await ctx.pool.newPage();
 			try {
+				ctx.onProgress?.("rendering page");
 				await page.goto(url.toString(), { waitUntil: "networkidle", timeout: 45_000 });
+				ctx.onProgress?.("printing to pdf");
 				const pdfBuf = await page.pdf({ format: "A4", printBackground: true, preferCSSPageSize: false });
 				const bytes = new Uint8Array(pdfBuf);
 				return {

@@ -24,6 +24,7 @@ export async function fetchWithBrowserCookies(
 	serviceName: string,
 	sourceUrl: URL,
 ): Promise<Buffer> {
+	ctx.onProgress?.(`downloading from ${serviceName.toLowerCase()}`);
 	const cookieHeader = await ctx.pool.cookieHeader(exportUrl);
 
 	let currentUrl = exportUrl;

@@ -27,7 +27,7 @@ export interface RefreshOutcome {
  * creates a new version only if the source bytes changed. Always
  * updates `refreshed_at` and `last_refresh_status` on the row. Returns
  * a per-path outcome — never throws unless the path doesn't exist. The
- * optional `onEmbedProgress` callback is forwarded to the embedder so
+ * optional `onPhase` callback is forwarded to the embedder so
  * interactive callers (e.g. the `refresh` operation) can drive a
  * spinner during the slow phase.
  */
@@ -35,7 +35,7 @@ export async function refreshOne(
 	ctx: AppContext,
 	logicalPath: string,
 	force = false,
-	onEmbedProgress?: (done: number, total: number) => void,
+	onPhase?: (sublabel: string) => void,
 ): Promise<RefreshOutcome> {
 	const cur = await getCurrent(ctx.db, logicalPath);
 	if (!cur) {
@@ -52,10 +52,10 @@ export async function refreshOne(
 
 	try {
 		if (cur.source_type === "local") {
-			return await refreshLocal(ctx, cur, force, onEmbedProgress);
+			return await refreshLocal(ctx, cur, force, onPhase);
 		}
 		if (cur.source_type === "remote") {
-			return await refreshRemote(ctx, cur, force, onEmbedProgress);
+			return await refreshRemote(ctx, cur, force, onPhase);
 		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
@@ -87,7 +87,7 @@ async function refreshLocal(
 	ctx: AppContext,
 	cur: CurrentRow,
 	force: boolean,
-	onEmbedProgress?: (done: number, total: number) => void,
+	onPhase?: (sublabel: string) => void,
 ): Promise<RefreshOutcome> {
 	if (!cur.source_path) {
 		throw new HelpfulError({
@@ -122,7 +122,7 @@ async function refreshLocal(
 			downloaderArgs: null,
 			refreshSec: cur.refresh_frequency_sec,
 		},
-		onEmbedProgress,
+		onPhase,
 	);
 	return { logical_path: cur.logical_path, status: "ok", new_version_id: versionId };
 }
@@ -139,7 +139,7 @@ async function refreshRemote(
 	ctx: AppContext,
 	cur: CurrentRow,
 	force: boolean,
-	onEmbedProgress?: (done: number, total: number) => void,
+	onPhase?: (sublabel: string) => void,
 ): Promise<RefreshOutcome> {
 	if (!cur.source_path) {
 		throw new HelpfulError({
@@ -181,7 +181,7 @@ async function refreshRemote(
 			downloaderArgs: fetched.downloaderArgs,
 			refreshSec: cur.refresh_frequency_sec,
 		},
-		onEmbedProgress,
+		onPhase,
 	);
 	return { logical_path: cur.logical_path, status: "ok", new_version_id: versionId };
 }
@@ -210,8 +210,9 @@ interface PipelineParams {
 async function runPipelineForRefresh(
 	ctx: AppContext,
 	p: PipelineParams,
-	onEmbedProgress?: (done: number, total: number) => void,
+	onPhase?: (sublabel: string) => void,
 ): Promise<string> {
+	onPhase?.("storing blob");
 	await upsertBlob(ctx.db, {
 		sha256: p.sourceSha,
 		mime_type: p.mime,
@@ -219,12 +220,17 @@ async function runPipelineForRefresh(
 		bytes: p.bytes,
 	});
 
+	onPhase?.("converting");
 	const conversion = await convert(p.bytes, p.mime, p.source, ctx.config.llm);
 	const markdown = conversion.markdown;
+	onPhase?.("describing");
 	const description = await describe(p.logicalPath, p.mime, markdown, ctx.config.llm);
+	onPhase?.("chunking");
 	const chunks = chunkDeterministic(markdown, ctx.config.chunker);
 	const searchTexts = chunks.map((c) => buildSearchText(p.logicalPath, description, c.content));
-	const embeddings = await embed(searchTexts, ctx.config.embedding_model, { onProgress: onEmbedProgress });
+	const embeddings = await embed(searchTexts, ctx.config.embedding_model, {
+		onProgress: (done, total) => onPhase?.(`embedding ${done}/${total}`),
+	});
 
 	const versionId = millisIso(Date.now());
 	const contentSha = sha256Hex(new TextEncoder().encode(markdown));
@@ -250,6 +256,8 @@ async function runPipelineForRefresh(
 		change_note: "refresh: source updated",
 	});
 
+	onPhase?.("persisting");
+
 	await insertChunksForVersion(
 		ctx.db,
 		p.logicalPath,
@@ -262,6 +270,7 @@ async function runPipelineForRefresh(
 		})),
 	);
 
+	onPhase?.("indexing");
 	await rebuildFts(ctx.db);
 	return versionId;
 }

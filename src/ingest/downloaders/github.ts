@@ -47,7 +47,9 @@ export const githubDownloader: Downloader = {
 		const number = args.number as number;
 
 		const token = (ctx.config.downloaders.github.api_key || process.env.GITHUB_TOKEN || "").trim();
+		ctx.onProgress?.("fetching issue");
 		const issue = await getJson<GithubIssue>(`/repos/${owner}/${repo}/issues/${number}`, token, url);
+		ctx.onProgress?.("fetching comments");
 		const comments = await getJson<GithubComment[]>(
 			`/repos/${owner}/${repo}/issues/${number}/comments?per_page=100`,
 			token,

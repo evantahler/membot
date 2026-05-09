@@ -60,9 +60,7 @@ export const refreshOperation = defineOperation({
 		for (const path of targets) {
 			ctx.progress.tick(path);
 			try {
-				const r = await refreshOne(ctx, path, input.force, (done, total) =>
-					ctx.progress.update(`embedding ${done}/${total}`),
-				);
+				const r = await refreshOne(ctx, path, input.force, (sublabel) => ctx.progress.update(sublabel));
 				out.push(r);
 			} catch (err) {
 				out.push({ logical_path: path, status: "failed", error: err instanceof Error ? err.message : String(err) });

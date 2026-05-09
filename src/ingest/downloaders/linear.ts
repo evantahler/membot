@@ -53,12 +53,14 @@ export const linearDownloader: Downloader = {
 
 		if (issueMatch) {
 			const identifier = issueMatch[2] as string;
+			ctx.onProgress?.(`querying issue ${identifier}`);
 			const issue = await fetchIssue(identifier, apiKey, url);
 			markdown = renderIssue(issue);
 			downloaderArgs = { kind: "issue", workspace: issueMatch[1], identifier };
 		} else if (projectMatch) {
 			const slug = projectMatch[2] as string;
 			const slugId = extractProjectSlugId(slug);
+			ctx.onProgress?.(`querying project ${slugId}`);
 			const project = await fetchProject(slugId, apiKey, url);
 			markdown = renderProject(project);
 			downloaderArgs = { kind: "project", workspace: projectMatch[1], slug, slug_id: slugId };

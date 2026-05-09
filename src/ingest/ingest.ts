@@ -166,7 +166,7 @@ async function ingestInline(
 				refreshSec,
 				changeNote: input.change_note ?? null,
 			},
-			(done, total) => callbacks?.onEntryProgress?.(logicalPath, `embedding ${done}/${total}`),
+			(sublabel) => callbacks?.onEntryProgress?.(logicalPath, sublabel),
 		);
 		result.version_id = versionId;
 	} catch (err) {
@@ -200,6 +200,7 @@ async function ingestUrl(
 	};
 
 	try {
+		callbacks?.onEntryProgress?.(url, "fetching");
 		const fetched = await fetchRemote(
 			url,
 			ctx.config,
@@ -241,7 +242,7 @@ async function ingestUrl(
 				refreshSec,
 				changeNote: input.change_note ?? null,
 			},
-			(done, total) => callbacks?.onEntryProgress?.(url, `embedding ${done}/${total}`),
+			(sublabel) => callbacks?.onEntryProgress?.(url, sublabel),
 		);
 		result.version_id = versionId;
 	} catch (err) {
@@ -326,7 +327,7 @@ async function ingestLocalFiles(
 					refreshSec,
 					changeNote: input.change_note ?? null,
 				},
-				(done, total) => callbacks?.onEntryProgress?.(entry.relPathFromBase, `embedding ${done}/${total}`),
+				(sublabel) => callbacks?.onEntryProgress?.(entry.relPathFromBase, sublabel),
 			);
 			result.version_id = versionId;
 		} catch (err) {
@@ -371,8 +372,9 @@ interface PipelineParams {
 async function pipelineForBytes(
 	ctx: AppContext,
 	p: PipelineParams,
-	onEmbedProgress?: (done: number, total: number) => void,
+	onPhase?: (sublabel: string) => void,
 ): Promise<string> {
+	onPhase?.("storing blob");
 	await upsertBlob(ctx.db, {
 		sha256: p.sourceSha,
 		mime_type: p.mime,
@@ -380,6 +382,7 @@ async function pipelineForBytes(
 		bytes: p.bytes,
 	});
 
+	onPhase?.("converting");
 	const conversion = await convert(p.bytes, p.mime, p.source, ctx.config.llm);
 	const markdown = conversion.markdown;
 	const contentSha = sha256Hex(new TextEncoder().encode(markdown));
@@ -403,7 +406,7 @@ async function pipelineForBytes(
 			refreshSec: p.refreshSec,
 			changeNote: p.changeNote,
 		},
-		onEmbedProgress,
+		onPhase,
 	);
 }
 
@@ -434,14 +437,18 @@ interface PersistParams {
 async function persistVersion(
 	ctx: AppContext,
 	p: PersistParams,
-	onEmbedProgress?: (done: number, total: number) => void,
+	onPhase?: (sublabel: string) => void,
 ): Promise<string> {
+	onPhase?.("describing");
 	const description = await describe(p.logicalPath, p.mime, p.markdown, ctx.config.llm);
+	onPhase?.("chunking");
 	const chunks = chunkDeterministic(p.markdown, ctx.config.chunker);
 	const searchTexts = chunks.map((c) => buildSearchText(p.logicalPath, description, c.content));
 	let embeddings: number[][];
 	try {
-		embeddings = await embed(searchTexts, ctx.config.embedding_model, { onProgress: onEmbedProgress });
+		embeddings = await embed(searchTexts, ctx.config.embedding_model, {
+			onProgress: (done, total) => onPhase?.(`embedding ${done}/${total}`),
+		});
 	} catch (err) {
 		throw asHelpful(
 			err,
@@ -450,6 +457,7 @@ async function persistVersion(
 		);
 	}
 
+	onPhase?.("persisting");
 	const versionId = millisIso(Date.now());
 	const contentSha = p.contentSha ?? sha256Hex(new TextEncoder().encode(p.markdown));
 	await insertVersion(ctx.db, {
@@ -485,6 +493,7 @@ async function persistVersion(
 			embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
 		})),
 	);
+	onPhase?.("indexing");
 	await rebuildFts(ctx.db);
 	return versionId;
 }

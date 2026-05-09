@@ -1,5 +1,10 @@
 import * as XLSX from "xlsx";
 
+export interface ConvertXlsxOptions {
+	/** Optional sublabel callback driven per-sheet (`parsing 3/8 tabs`). */
+	onProgress?: (sublabel: string) => void;
+}
+
 /**
  * Convert an XLSX workbook into markdown — one `## <SheetName>`
  * section per tab, each tab rendered as a GitHub-flavored pipe table
@@ -8,19 +13,28 @@ import * as XLSX from "xlsx";
  * use their displayed value via `XLSX.utils.format_cell`).
  *
  * Pure-JS via SheetJS — no native deps, bundles cleanly with
- * `bun build --compile`.
+ * `bun build --compile`. Yields a macrotask between sheets so
+ * nanospinner's setInterval keeps animating during big workbooks
+ * (otherwise the spinner visibly freezes).
  */
-export function convertXlsx(bytes: Uint8Array): string {
+export async function convertXlsx(bytes: Uint8Array, opts: ConvertXlsxOptions = {}): Promise<string> {
 	const workbook = XLSX.read(bytes, { type: "array", cellDates: true });
 	const sections: string[] = [];
+	const sheetNames = workbook.SheetNames;
 
-	for (const sheetName of workbook.SheetNames) {
+	for (let i = 0; i < sheetNames.length; i++) {
+		const sheetName = sheetNames[i] as string;
+		opts.onProgress?.(`parsing ${i + 1}/${sheetNames.length} tabs`);
 		const sheet = workbook.Sheets[sheetName];
-		if (!sheet) continue;
-		const rows = sheetToMatrix(sheet);
-		const trimmed = trimEmptyEdges(rows);
-		if (trimmed.length === 0) continue;
-		sections.push(`## ${sheetName}\n\n${renderTable(trimmed)}`);
+		if (sheet) {
+			const rows = sheetToMatrix(sheet);
+			const trimmed = trimEmptyEdges(rows);
+			if (trimmed.length > 0) sections.push(`## ${sheetName}\n\n${renderTable(trimmed)}`);
+		}
+		// Yield so the spinner can repaint between sheets — large
+		// workbooks would otherwise freeze the UI for the duration of
+		// the parse.
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
 	}
 
 	if (sections.length === 0) return "(empty workbook)";

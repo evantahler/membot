@@ -60,7 +60,7 @@ export async function convert(
 	}
 
 	if (XLSX_MIMES.has(mt)) {
-		return { markdown: convertXlsx(bytes), contentMimeType: "text/markdown" };
+		return { markdown: await convertXlsx(bytes), contentMimeType: "text/markdown" };
 	}
 
 	if (PDF_MIMES.has(mt)) {
