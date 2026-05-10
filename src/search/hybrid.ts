@@ -18,18 +18,27 @@ const SNIPPET_MAX = 300;
  * keyed by `(logical_path, version_id, chunk_index)` so the same chunk
  * appearing in both lists gets one fused score = sum of its RRF scores.
  *
+ * `semanticWeight` (default 0.5) lets callers bias fusion toward one signal:
+ * the semantic side's RRF contribution is multiplied by `semanticWeight`,
+ * the keyword side's by `1 - semanticWeight`. With the default, a chunk that
+ * tops both lists scores exactly the same as before; with `semanticWeight >
+ * 0.5`, a chunk that ranks only on the semantic side can outrank a chunk
+ * that only earned BM25 hits via incidental token overlap.
+ *
  * The returned `score` is normalized to [0,1] by dividing by the theoretical
- * max RRF (`2/(k+1)`, achieved when a chunk is rank-0 on both lists). This
- * preserves ordering — division is monotonic — but makes the displayed value
- * interpretable: 1.0 = top-1 on both signals, ~0.5 = top-1 on one.
+ * max fused RRF (`1/(k+1)` regardless of `semanticWeight`, since the per-side
+ * weights sum to 1). 1.0 = top-1 on both signals; a chunk top-1 on only the
+ * semantic list reads as `semanticWeight`.
  */
 export function fuseRRF(
 	semantic: SemanticHit[],
 	keyword: KeywordHit[],
-	options: { k?: number; limit: number },
+	options: { k?: number; limit: number; semanticWeight?: number },
 ): FusedHit[] {
 	const k = options.k ?? 60;
-	const maxRrf = 2 / (k + 1);
+	const wSem = options.semanticWeight ?? 0.5;
+	const wKw = 1 - wSem;
+	const maxRrf = 1 / (k + 1);
 	const merged = new Map<
 		string,
 		{
@@ -49,7 +58,7 @@ export function fuseRRF(
 		const hit = semantic[i];
 		if (!hit) continue;
 		const key = keyOf(hit.logical_path, hit.version_id, hit.chunk_index);
-		const rrf = 1 / (k + i + 1);
+		const rrf = wSem / (k + i + 1);
 		const existing = merged.get(key);
 		if (existing) {
 			existing.rrf += rrf;
@@ -71,7 +80,7 @@ export function fuseRRF(
 		const hit = keyword[i];
 		if (!hit) continue;
 		const key = keyOf(hit.logical_path, hit.version_id, hit.chunk_index);
-		const rrf = 1 / (k + i + 1);
+		const rrf = wKw / (k + i + 1);
 		const existing = merged.get(key);
 		if (existing) {
 			existing.rrf += rrf;

@@ -212,7 +212,7 @@ src/
       browser.ts        # BrowserPool (persistent chromium profile)
       google-docs.ts google-sheets.ts google-slides.ts google-shared.ts
       github.ts linear.ts generic-web.ts
-  search/               # semantic.ts, keyword.ts, hybrid.ts (RRF)
+  search/               # semantic.ts, keyword.ts, hybrid.ts (weighted RRF; semantic gets BGE query prefix)
   refresh/              # runner.ts, scheduler.ts (daemon)
   mcp/                  # server.ts, instructions.ts
   output/               # tty.ts, logger.ts, progress.ts, formatter.ts
@@ -274,6 +274,7 @@ or when `CI=true`.
     "linear": { "api_key": "" },                              // linear.app/settings/api
     "github": { "api_key": "" }                               // env: GITHUB_TOKEN; or github.com/settings/tokens
   },
+  "search": { "semantic_weight": 0.6 },                       // RRF weight on the semantic list (keyword gets 1 - this); 0.5 = equal, 0 = keyword-only, 1 = semantic-only
   "daemon": { "tick_interval_sec": 60 },
   "default_refresh_frequency_sec": null
 }

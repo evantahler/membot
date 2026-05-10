@@ -1,7 +1,13 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { env, type FeatureExtractionPipeline, pipeline } from "@huggingface/transformers";
-import { EMBEDDING_BATCH_SIZE, EMBEDDING_DIMENSION, EMBEDDING_MODEL } from "../constants.ts";
+import {
+	BGE_QUERY_PREFIX,
+	BGE_QUERY_PREFIX_MODELS,
+	EMBEDDING_BATCH_SIZE,
+	EMBEDDING_DIMENSION,
+	EMBEDDING_MODEL,
+} from "../constants.ts";
 import { HelpfulError } from "../errors.ts";
 import { logger } from "../output/logger.ts";
 
@@ -72,10 +78,17 @@ async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
  * `directOnly` bypasses any registered EmbedderPool and runs the embed call
  * inline in the current process. Use it for query-time single-text embedding
  * where IPC overhead would dominate.
+ *
+ * `kind` selects asymmetric retrieval behavior. For BGE-v1.5 models, queries
+ * get a recommended instruction prefix (`BGE_QUERY_PREFIX`) prepended before
+ * embedding; passages stay un-prefixed. Default is `"passage"` so all bulk
+ * ingest call sites keep their current behavior. Search-time callers pass
+ * `"query"`. For non-BGE models the prefix is skipped.
  */
 export interface EmbedOptions {
 	onProgress?: (done: number, total: number) => void;
 	directOnly?: boolean;
+	kind?: "query" | "passage";
 }
 
 /**
@@ -127,9 +140,11 @@ export async function embed(
 		return pool.embed(texts, model, opts);
 	}
 	const extractor = await getPipeline(model);
+	const usePrefix = opts.kind === "query" && BGE_QUERY_PREFIX_MODELS.has(model);
+	const inputs = usePrefix ? texts.map((t) => `${BGE_QUERY_PREFIX}${t}`) : texts;
 	const out: number[][] = [];
-	for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
-		const slice = texts.slice(i, i + EMBEDDING_BATCH_SIZE);
+	for (let i = 0; i < inputs.length; i += EMBEDDING_BATCH_SIZE) {
+		const slice = inputs.slice(i, i + EMBEDDING_BATCH_SIZE);
 		const output = await extractor(slice, { pooling: "mean", normalize: true });
 		const data = output.tolist() as number[][];
 		if (out.length === 0 && data[0] && data[0].length !== EMBEDDING_DIMENSION) {
@@ -152,9 +167,18 @@ export async function embed(
  * Embed a single text — convenience wrapper for query-time embedding. Always
  * runs in-process (`directOnly: true`) so search latency isn't paying the IPC
  * round-trip through the worker pool for one vector.
+ *
+ * Pass `kind: "query"` to apply BGE-v1.5's asymmetric retrieval prefix to the
+ * input before embedding. Default `"passage"` mirrors `embed()` so callers
+ * that re-use `embedSingle` for non-search work (tests, ad-hoc scripts) get
+ * vectors that line up with the bulk path.
  */
-export async function embedSingle(text: string, model: string = EMBEDDING_MODEL): Promise<number[]> {
-	const all = await embed([text], model, { directOnly: true });
+export async function embedSingle(
+	text: string,
+	model: string = EMBEDDING_MODEL,
+	opts: { kind?: "query" | "passage" } = {},
+): Promise<number[]> {
+	const all = await embed([text], model, { directOnly: true, kind: opts.kind ?? "passage" });
 	const vec = all[0];
 	if (!vec) {
 		throw new HelpfulError({

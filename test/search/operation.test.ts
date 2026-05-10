@@ -152,6 +152,33 @@ describe("search Operation handler", () => {
 		expect(r.hits.length).toBeLessThanOrEqual(1);
 	});
 
+	test("ctx.config.search.semantic_weight controls fusion: a hit only on the semantic list scales with the weight", async () => {
+		// "speed" doesn't literally appear in any doc, so the keyword side
+		// returns zero hits — every fused result earns rank only via the
+		// semantic side. Its normalized score equals semantic_weight.
+		const original = ctx.config.search.semantic_weight;
+		try {
+			ctx.config.search.semantic_weight = 0.2;
+			const lo = await searchOperation.handler(
+				{ query: "speed", mode: "hybrid", limit: 5, include_history: false },
+				ctx,
+			);
+			ctx.config.search.semantic_weight = 0.8;
+			const hi = await searchOperation.handler(
+				{ query: "speed", mode: "hybrid", limit: 5, include_history: false },
+				ctx,
+			);
+			expect(lo.hits.length).toBeGreaterThan(0);
+			expect(hi.hits.length).toBeGreaterThan(0);
+			expect(lo.hits[0]?.keyword_score).toBeNull();
+			expect(hi.hits[0]?.keyword_score).toBeNull();
+			expect(lo.hits[0]?.score).toBeCloseTo(0.2, 2);
+			expect(hi.hits[0]?.score).toBeCloseTo(0.8, 2);
+		} finally {
+			ctx.config.search.semantic_weight = original;
+		}
+	}, 60_000);
+
 	test("falls back to query when only pattern is provided (and vice versa)", async () => {
 		const a = await searchOperation.handler(
 			{ pattern: "carbonara", mode: "keyword", limit: 5, include_history: false },

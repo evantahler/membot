@@ -164,4 +164,5 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 - Data lives in `~/.membot/index.duckdb` (override via `MEMBOT_HOME`).
 - Optional `ANTHROPIC_API_KEY` enables LLM fallback for messy/binary input. Without it, conversion degrades to deterministic native output.
 - `embedding.workers` (config key) caps the per-command embed-worker subprocess pool spawned at the top of `add` / `refresh` / `write`. Default `null` resolves to `cpus()-1`; set `1` to disable the pool.
+- `search.semantic_weight` (config key, default `0.6`, range `[0, 1]`) tilts hybrid-search RRF toward the semantic side. `0.5` = equal, `0.0` = keyword-only behaviour, `1.0` = semantic-only. Search-time queries automatically get the BGE-v1.5 instruction prefix prepended; stored embeddings are unaffected.
 - Config file: `~/.membot/config.json` (see `membot --help` for the global flags).
