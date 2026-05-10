@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import ansis from "ansis";
 import { addOperation } from "../../src/operations/add.ts";
 import { diffOperation } from "../../src/operations/diff.ts";
@@ -16,6 +16,14 @@ import { writeOperation } from "../../src/operations/write.ts";
 import { detectMode, setMode } from "../../src/output/tty.ts";
 
 const STRIP = (s: string) => ansis.strip(s);
+
+// Pin non-interactive mode so add/refresh formatters render their full
+// per-entry view (the interactive branch returns a one-line summary instead,
+// which would make these assertions flap depending on whether `bun test`
+// runs from a TTY).
+beforeEach(() => {
+	setMode({ interactive: false, color: false, json: false, verbose: false, silent: true });
+});
 
 afterEach(() => {
 	setMode(detectMode({}));
