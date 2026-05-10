@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { listCurrent } from "../db/files.ts";
+import { normalizeLogicalPath } from "../ingest/ingest.ts";
 import { colors, renderTable } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
@@ -44,7 +45,7 @@ export const listOperation = defineOperation({
 	},
 	handler: async (input, ctx) => {
 		const rows = await listCurrent(ctx.db, {
-			prefix: input.prefix,
+			prefix: input.prefix ? normalizeLogicalPath(input.prefix) : undefined,
 			limit: input.limit,
 			offset: input.offset,
 		});

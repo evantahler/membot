@@ -31,17 +31,16 @@ on-disk tree of stored content.
   description text, `--help` output, and `tools/list` output never
   drift apart.
 - **Native conversion first, LLM fallback for messy input.** `unpdf`
-  for PDFs, `mammoth` for DOCX, `turndown` for HTML, Tesseract WASM
-  for image OCR. Claude vision captions images and Claude markdown-
-  conversion is the last-resort fallback. Missing
-  `ANTHROPIC_API_KEY` is not a hard error — degrades to deterministic
-  surrogates.
+  for PDFs, `mammoth` for DOCX, `turndown` for HTML. Claude vision
+  captions images and Claude markdown-conversion is the last-resort
+  fallback. Missing `ANTHROPIC_API_KEY` is not a hard error — degrades
+  to deterministic surrogates.
 - **Embedded images become inline captions.** DOCX and HTML conversion
   intercept embedded images (mammoth's `convertImage` callback;
   `<img src="data:…">` extraction for HTML), keep their bytes out of
   the markdown body, and run each one through `convertImage` (Claude
-  vision + Tesseract OCR). The caption is spliced back in place of the
-  original image reference as its own paragraph block, so embedded
+  vision). The caption is spliced back in place of the original image
+  reference as its own paragraph block, so embedded
   diagrams/screenshots become real searchable text instead of megabytes
   of base64 noise. `converters.max_inline_image_captions` (default 20)
   caps the per-document fan-out.
@@ -206,7 +205,7 @@ src/
     fetcher.ts          # downloader registry dispatch
     chunker.ts embedder.ts embedder-pool.ts embed-worker.ts describer.ts search-text.ts
     concurrency.ts      # pMap (worker-pool with stable workerId) + AsyncMutex
-    converter/          # pdf, docx, html, image, text, ocr, llm
+    converter/          # pdf, docx, html, image, text, llm
     downloaders/
       index.ts          # Downloader interface, findDownloader, listDownloaders, collectLoginEntries
       browser.ts        # BrowserPool (persistent chromium profile)

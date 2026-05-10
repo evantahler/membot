@@ -1,6 +1,6 @@
 {
 	"name": "membot",
-	"version": "0.11.2",
+	"version": "0.12.0",
 	"description": "Versioned context store with hybrid search for AI agents. Stdio + HTTP MCP server and CLI.",
 	"type": "module",
 	"exports": {
@@ -69,7 +69,6 @@
 		"onnxruntime-web": "1.26.0-dev.20260416-b7804b056c",
 		"picomatch": "^4.0.4",
 		"playwright": "^1.59.1",
-		"tesseract.js": "^5.1.0",
 		"turndown": "^7.2.0",
 		"unpdf": "^0.12.0",
 		"xlsx": "^0.18.5",

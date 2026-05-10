@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { listVersions } from "../db/files.ts";
+import { normalizeLogicalPath } from "../ingest/ingest.ts";
 import { colors, renderTable } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
@@ -60,9 +61,10 @@ export const versionsOperation = defineOperation({
 		return `${header}\n${table}`;
 	},
 	handler: async (input, ctx) => {
-		const versions = await listVersions(ctx.db, input.logical_path);
+		const path = normalizeLogicalPath(input.logical_path);
+		const versions = await listVersions(ctx.db, path);
 		return {
-			logical_path: input.logical_path,
+			logical_path: path,
 			versions: versions.map((v) => ({
 				version_id: v.version_id,
 				content_sha256: v.content_sha256,

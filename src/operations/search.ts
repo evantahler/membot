@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { HelpfulError } from "../errors.ts";
 import { embedSingle } from "../ingest/embedder.ts";
+import { normalizeLogicalPath } from "../ingest/ingest.ts";
 import { colors } from "../output/formatter.ts";
 import { fuseRRF } from "../search/hybrid.ts";
 import { searchKeyword } from "../search/keyword.ts";
@@ -74,19 +75,21 @@ export const searchOperation = defineOperation({
 			});
 		}
 
+		const pathPrefix = input.path_prefix ? normalizeLogicalPath(input.path_prefix) : undefined;
+
 		const semanticHits =
 			input.mode === "keyword" || !query.trim()
 				? []
 				: await searchSemantic(ctx.db, await embedSingle(query, ctx.config.embedding_model, { kind: "query" }), {
 						limit: input.limit * 5,
-						pathPrefix: input.path_prefix,
+						pathPrefix,
 						includeHistory: input.include_history,
 					});
 
 		const keywordHits =
 			input.mode === "semantic" || !pattern.trim()
 				? []
-				: await searchKeyword(ctx.db, pattern, { limit: input.limit * 5, pathPrefix: input.path_prefix });
+				: await searchKeyword(ctx.db, pattern, { limit: input.limit * 5, pathPrefix });
 
 		const fused = fuseRRF(semanticHits, keywordHits, {
 			limit: input.limit,

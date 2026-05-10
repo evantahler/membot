@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { defaultLogicalForUrl, normalizeAbs, pickLogicalPath } from "../../src/ingest/ingest.ts";
+import { defaultLogicalForUrl, normalizeLogicalPath, pickLogicalPath } from "../../src/ingest/ingest.ts";
 import type { ResolvedLocalEntry } from "../../src/ingest/source-resolver.ts";
 
 const entry = (absPath: string, relPathFromBase: string): ResolvedLocalEntry => ({
@@ -7,17 +7,17 @@ const entry = (absPath: string, relPathFromBase: string): ResolvedLocalEntry => 
 	relPathFromBase,
 });
 
-describe("normalizeAbs", () => {
+describe("normalizeLogicalPath", () => {
 	test("strips a single leading slash", () => {
-		expect(normalizeAbs("/Users/evan/projA/README.md")).toBe("Users/evan/projA/README.md");
+		expect(normalizeLogicalPath("/Users/evan/projA/README.md")).toBe("Users/evan/projA/README.md");
 	});
 
 	test("strips multiple leading slashes", () => {
-		expect(normalizeAbs("///etc/hosts")).toBe("etc/hosts");
+		expect(normalizeLogicalPath("///etc/hosts")).toBe("etc/hosts");
 	});
 
 	test("converts windows backslashes to forward slashes", () => {
-		expect(normalizeAbs("C:\\Users\\evan\\projA\\README.md")).toBe("C:/Users/evan/projA/README.md");
+		expect(normalizeLogicalPath("C:\\Users\\evan\\projA\\README.md")).toBe("C:/Users/evan/projA/README.md");
 	});
 });
 
@@ -34,8 +34,12 @@ describe("pickLogicalPath", () => {
 		expect(a).not.toBe(b);
 	});
 
-	test("explicit logical_path on a single source: used verbatim", () => {
+	test("explicit logical_path on a single source: used verbatim (after normalization)", () => {
 		expect(pickLogicalPath("notes/auth.md", entry("/tmp/whatever.md", "whatever.md"), false)).toBe("notes/auth.md");
+	});
+
+	test("explicit logical_path with a leading slash is normalized so read can find it", () => {
+		expect(pickLogicalPath("/notes/auth.md", entry("/tmp/whatever.md", "whatever.md"), false)).toBe("notes/auth.md");
 	});
 
 	test("explicit logical_path on a multi-entry walk: treated as a prefix over relPathFromBase", () => {
