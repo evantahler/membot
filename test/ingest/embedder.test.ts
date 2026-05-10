@@ -58,4 +58,21 @@ describe("embedSingle", () => {
 		const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
 		expect(norm).toBeCloseTo(1, 3);
 	});
+
+	test("kind='query' produces a different vector than kind='passage' for BGE models", async () => {
+		// BGE-v1.5 retrieval is asymmetric — the query-side embed prepends an
+		// instruction prefix, so the resulting vector must diverge from the
+		// passage-side embed of the same raw text.
+		const text = "team retrospective notes";
+		const passage = await embedSingle(text, undefined, { kind: "passage" });
+		const query = await embedSingle(text, undefined, { kind: "query" });
+		expect(passage.length).toBe(EMBEDDING_DIMENSION);
+		expect(query.length).toBe(EMBEDDING_DIMENSION);
+		let dot = 0;
+		for (let i = 0; i < passage.length; i++) dot += (passage[i] as number) * (query[i] as number);
+		// Same content → still highly similar, but the prefix shifts the vector
+		// enough that they're not bit-equal.
+		expect(dot).toBeLessThan(0.999);
+		expect(dot).toBeGreaterThan(0.5);
+	}, 120_000);
 });

@@ -77,7 +77,7 @@ export const searchOperation = defineOperation({
 		const semanticHits =
 			input.mode === "keyword" || !query.trim()
 				? []
-				: await searchSemantic(ctx.db, await embedSingle(query, ctx.config.embedding_model), {
+				: await searchSemantic(ctx.db, await embedSingle(query, ctx.config.embedding_model, { kind: "query" }), {
 						limit: input.limit * 5,
 						pathPrefix: input.path_prefix,
 						includeHistory: input.include_history,
@@ -88,7 +88,10 @@ export const searchOperation = defineOperation({
 				? []
 				: await searchKeyword(ctx.db, pattern, { limit: input.limit * 5, pathPrefix: input.path_prefix });
 
-		const fused = fuseRRF(semanticHits, keywordHits, { limit: input.limit });
+		const fused = fuseRRF(semanticHits, keywordHits, {
+			limit: input.limit,
+			semanticWeight: ctx.config.search.semantic_weight,
+		});
 		return { hits: fused, mode: input.mode };
 	},
 });

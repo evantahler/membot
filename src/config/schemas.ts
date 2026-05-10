@@ -35,6 +35,27 @@ export const EmbeddingConfigSchema = z.object({
 	workers: z.number().int().min(1).nullable().default(null),
 });
 
+/**
+ * Hybrid-search ranking knobs.
+ *
+ * `semantic_weight` controls how RRF balances the semantic and keyword lists:
+ * the weight applied to the semantic side is `semantic_weight`; the keyword
+ * side gets `1 - semantic_weight`. 0.5 = equal weight (the legacy behavior).
+ * Default 0.6 — a small tilt toward semantic so a chunk that earns rank only
+ * via semantic similarity (no literal token overlap) can still surface above
+ * docs that incidentally contain one of the query tokens.
+ */
+export const SearchConfigSchema = z.object({
+	semantic_weight: z
+		.number()
+		.min(0)
+		.max(1)
+		.default(0.6)
+		.describe(
+			"RRF weight on the semantic list (keyword gets 1 - this). 0.5 = equal, >0.5 favors semantic, <0.5 favors keyword.",
+		),
+});
+
 export const LinearDownloaderConfigSchema = z.object({
 	api_key: z.string().meta({ secret: true }).default(""),
 });
@@ -63,6 +84,7 @@ export const MembotConfigSchema = z.object({
 	converters: ConvertersConfigSchema.default(() => ConvertersConfigSchema.parse({})),
 	llm: LlmConfigSchema.default(() => LlmConfigSchema.parse({})),
 	downloaders: DownloadersConfigSchema.default(() => DownloadersConfigSchema.parse({})),
+	search: SearchConfigSchema.default(() => SearchConfigSchema.parse({})),
 	daemon: DaemonConfigSchema.default(() => DaemonConfigSchema.parse({})),
 	db_lock_retry: DbLockRetryConfigSchema.default(() => DbLockRetryConfigSchema.parse({})),
 	default_refresh_frequency_sec: z.number().int().positive().nullable().default(null),
@@ -76,3 +98,4 @@ export type LlmConfig = z.infer<typeof LlmConfigSchema>;
 export type DownloadersConfig = z.infer<typeof DownloadersConfigSchema>;
 export type LinearDownloaderConfig = z.infer<typeof LinearDownloaderConfigSchema>;
 export type GithubDownloaderConfig = z.infer<typeof GithubDownloaderConfigSchema>;
+export type SearchConfig = z.infer<typeof SearchConfigSchema>;

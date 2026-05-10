@@ -20,6 +20,27 @@ export const EMBEDDING_MODEL = "Xenova/bge-small-en-v1.5";
 export const EMBEDDING_DIMENSION = 384;
 
 /**
+ * BGE-v1.5 retrieval is asymmetric: query embeddings improve when prefixed
+ * with this instruction, while passage embeddings stay un-prefixed. Applied
+ * at query time only (in `embedSingle`), so stored DB embeddings are
+ * unaffected and no reindex is needed when toggling this on.
+ *
+ * Source: BGE-v1.5 model card on HuggingFace.
+ */
+export const BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: ";
+
+/**
+ * Models in the BGE-v1.5 family that benefit from `BGE_QUERY_PREFIX`. Other
+ * models (future embedder swap-ins) get the raw query text — adding an
+ * instruction prefix to a non-instruction-tuned model degrades retrieval.
+ */
+export const BGE_QUERY_PREFIX_MODELS: ReadonlySet<string> = new Set([
+	"Xenova/bge-small-en-v1.5",
+	"Xenova/bge-base-en-v1.5",
+	"Xenova/bge-large-en-v1.5",
+]);
+
+/**
  * Max chunks fed to the feature-extraction pipeline in one forward pass.
  * ONNX/WASM allocates activations linearly with batch size, so a single
  * unbounded call OOMs (`std::bad_alloc`) on large files — a 168-chunk file
