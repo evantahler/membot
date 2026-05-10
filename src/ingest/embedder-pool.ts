@@ -88,9 +88,7 @@ export class EmbedderPool {
 	async warmup(): Promise<void> {
 		if (this.disposed || !this.spawned) return;
 		logger.info(`embedder-pool: warming up ${this.workers.length} workers`);
-		await Promise.all(
-			Array.from({ length: this.workers.length }, () => this.dispatchBatch(["warmup"], this.model)),
-		);
+		await Promise.all(Array.from({ length: this.workers.length }, () => this.dispatchBatch(["warmup"], this.model)));
 	}
 
 	/**
