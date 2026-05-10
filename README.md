@@ -139,6 +139,7 @@ Add `--watch` (and optional `--tick <sec>`) to also run the refresh daemon, whic
   membot config set llm.anthropic_api_key sk-ant-...            # enable LLM-fallback paths
   membot config set chunker.target_chars 800                    # tweak any nested value
   membot config set embedding.workers 4                         # cap parallel embed workers
+  membot config set search.semantic_weight 0.6                  # tilt hybrid-search RRF toward semantic (default 0.6; 0.5 = equal, 0 = keyword-only, 1 = semantic-only)
   membot config set converters.max_inline_image_captions 50     # raise per-doc cap on vision captions for embedded images
   membot config set ingest.worker_concurrency 4                 # cap parallel ingest workers (default: cpus-1, max 8)
   membot config set llm.describer_skip_when_titled false        # always LLM-describe (default true skips when markdown has a clear H1)
@@ -148,6 +149,8 @@ Add `--watch` (and optional `--tick <sec>`) to also run the refresh daemon, whic
   ```
 
   **Parallel embedding:** `embedding.workers` (default `null` → `cpus()-1`) controls how many subprocess workers fan out the WASM embedding work. The pool is **per-command** — spawned at the start of `add` / `refresh` / `write` and killed before the command returns, so membot doesn't keep idle workers around between invocations. Each worker loads its own ~50MB copy of the model, so on RAM-constrained machines drop it to a small fixed number (e.g. `4`); set `1` to disable the pool entirely and embed inline.
+
+  **Hybrid-search ranking:** `search.semantic_weight` (default `0.6`, range `[0, 1]`) controls reciprocal-rank fusion between the semantic and keyword sides. The semantic list contributes weight `semantic_weight`; keyword contributes `1 - semantic_weight`. The default tilts slightly toward semantic so a chunk that matches a query conceptually (without literal token overlap) can outrank docs that incidentally contain a query word. Set to `0.5` to restore equal weighting, `0.0` for keyword-only ranking behaviour, or `1.0` for semantic-only. Search-time queries also get the BGE-v1.5 instruction prefix prepended automatically — stored embeddings are unaffected, no reindex required.
 
   Values are written with file mode `0600`. `ANTHROPIC_API_KEY` set in the environment still wins on read, so existing env-var setups keep working.
 - **Browser session:** `~/.membot/auth/browser-profile/` (Playwright persistent profile — cookies, localStorage, IndexedDB). Captured by `membot login`; cookie-based downloaders (Google) reuse it on every fetch. Delete the directory to force a fresh login.
