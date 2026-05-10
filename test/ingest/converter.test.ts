@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import * as XLSX from "xlsx";
 import { convertHtml } from "../../src/ingest/converter/html.ts";
 import { convert } from "../../src/ingest/converter/index.ts";
 import { convertText } from "../../src/ingest/converter/text.ts";
 import { deterministicDescription } from "../../src/ingest/describer.ts";
+
+function loadFixture(name: string): Uint8Array {
+	return new Uint8Array(readFileSync(join(import.meta.dir, "../fixtures", name)));
+}
 
 const NO_LLM = {
 	anthropic_api_key: "",
@@ -49,6 +56,64 @@ describe("converter dispatch", () => {
 		const json = `{"a": 1}`;
 		const r = await convert(new TextEncoder().encode(json), "application/json", "src", NO_LLM, CONVERTERS);
 		expect(r.markdown).toContain('"a"');
+	});
+
+	test("application/pdf routes through convertPdf", async () => {
+		const r = await convert(loadFixture("sample.pdf"), "application/pdf", "src", NO_LLM, CONVERTERS);
+		expect(r.markdown).toContain("FIXTURE_TOKEN_42");
+		expect(r.markdown).toMatch(/## Page 1/);
+		expect(r.contentMimeType).toBe("text/markdown");
+	});
+
+	test("application/vnd.openxmlformats…wordprocessingml.document routes through convertDocx", async () => {
+		const r = await convert(
+			loadFixture("sample-with-image.docx"),
+			"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+			"src",
+			NO_LLM,
+			CONVERTERS,
+		);
+		// Sample docx contains plain text plus an embedded image; we just need
+		// to confirm the dispatcher landed on convertDocx (not the LLM fallback).
+		expect(r.markdown.length).toBeGreaterThan(0);
+		expect(r.markdown).not.toContain("unknown binary");
+		expect(r.markdown).not.toContain("data:image");
+	});
+
+	test("application/vnd.openxmlformats…spreadsheetml.sheet routes through convertXlsx", async () => {
+		const wb = XLSX.utils.book_new();
+		XLSX.utils.book_append_sheet(
+			wb,
+			XLSX.utils.aoa_to_sheet([
+				["Name", "Role"],
+				["Alice", "Engineer"],
+			]),
+			"People",
+		);
+		const bytes = new Uint8Array(XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+		const r = await convert(
+			bytes,
+			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+			"src",
+			NO_LLM,
+			CONVERTERS,
+		);
+		expect(r.markdown).toContain("## People");
+		expect(r.markdown).toContain("| Name | Role |");
+		expect(r.markdown).toContain("| Alice | Engineer |");
+	});
+
+	test("image/* without an API key produces the no-caption placeholder", async () => {
+		// 1×1 transparent PNG.
+		const png = new Uint8Array(
+			Buffer.from(
+				"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+				"base64",
+			),
+		);
+		const r = await convert(png, "image/png", "src", NO_LLM, CONVERTERS);
+		expect(r.markdown).toContain("(image, image/png");
+		expect(r.markdown).toContain("no caption available");
 	});
 });
 
