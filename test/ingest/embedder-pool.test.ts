@@ -77,6 +77,19 @@ describe("EmbedderPool", () => {
 	);
 
 	test(
+		"warmup() primes every worker so the next real embed succeeds",
+		async () => {
+			const pool = makePool(2);
+			pool.spawn();
+			await pool.warmup();
+			const out = await pool.embed(["a", "b"]);
+			expect(out.length).toBe(2);
+			for (const v of out) expect(v.length).toBe(EMBEDDING_DIMENSION);
+		},
+		TIMEOUT,
+	);
+
+	test(
 		"empty input short-circuits without dispatching",
 		async () => {
 			const pool = makePool(2);

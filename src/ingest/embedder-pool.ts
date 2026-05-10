@@ -79,6 +79,21 @@ export class EmbedderPool {
 	}
 
 	/**
+	 * Send one tiny embed to each worker so they each pay the WASM model-load
+	 * cost up front instead of stalling the first real batch. Relies on
+	 * `acquire()` synchronously handing out distinct workers when N concurrent
+	 * dispatches race against N idle workers, so every worker receives exactly
+	 * one warmup. No-op when not yet spawned or when disposed.
+	 */
+	async warmup(): Promise<void> {
+		if (this.disposed || !this.spawned) return;
+		logger.info(`embedder-pool: warming up ${this.workers.length} workers`);
+		await Promise.all(
+			Array.from({ length: this.workers.length }, () => this.dispatchBatch(["warmup"], this.model)),
+		);
+	}
+
+	/**
 	 * Embed `texts` using the worker pool. Splits into batches of
 	 * `EMBEDDING_BATCH_SIZE`, dispatches each batch to whichever worker is
 	 * free, and reassembles vectors in original order. `opts.onProgress` is
@@ -381,6 +396,7 @@ export async function withEmbedderPool<T>(workerCount: number, model: string, fn
 	if (workerCount <= 1) return fn();
 	const pool = new EmbedderPool(workerCount, model);
 	pool.spawn();
+	await pool.warmup();
 	setEmbedderPool(pool);
 	try {
 		return await fn();
