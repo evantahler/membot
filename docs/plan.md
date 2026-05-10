@@ -45,6 +45,17 @@ on-disk tree of stored content.
   diagrams/screenshots become real searchable text instead of megabytes
   of base64 noise. `converters.max_inline_image_captions` (default 20)
   caps the per-document fan-out.
+- **Parallel ingest pipeline.** A pMap worker pool (default `cpus - 1`,
+  capped at `MAX_WORKERS = 8`) runs the full per-file pipeline (read →
+  unchanged check → convert → describe → chunk → embed → persist) end-
+  to-end. The persist phase is gated by an `AsyncMutex` so concurrent
+  workers don't trip DuckDB's single-writer constraint. Embed is
+  offloaded to a `Bun.Worker` pool — each worker hosts its own
+  transformers feature-extraction pipeline (own ONNX session, own model
+  weights), giving real OS-thread parallelism on the WASM step instead
+  of contending for one shared extractor on the main JS thread. A
+  multi-line stderr live area shows one status row per active worker
+  plus the total bar, ETA, and cumulative chunk count.
 - **Bun-compiled standalone binaries** for darwin/linux/windows ×
   arm64/x64. Runtime must not require Bun installed.
 - **Stdio + HTTP MCP server** exposing every operation as a tool, plus
@@ -194,6 +205,7 @@ src/
     local-reader.ts
     fetcher.ts          # downloader registry dispatch
     chunker.ts embedder.ts embedder-pool.ts embed-worker.ts describer.ts search-text.ts
+    concurrency.ts      # pMap (worker-pool with stable workerId) + AsyncMutex
     converter/          # pdf, docx, html, image, text, ocr, llm
     downloaders/
       index.ts          # Downloader interface, findDownloader, listDownloaders, collectLoginEntries
@@ -247,14 +259,16 @@ or when `CI=true`.
   "embedding_model": "Xenova/bge-small-en-v1.5",
   "embedding_dimension": 384,
   "chunker": { "mode": "deterministic", "target_chars": 4000, "max_chars": 15000 },
-  "embedding": { "workers": null },                           // null → cpus()-1; 1 disables the subprocess pool
-  "converters": { "max_inline_image_captions": 20 },          // per-doc cap on vision captions for embedded images
+  "embedding": { "workers": null },                          // embed-subprocess pool size; null → cpus()-1, 1 runs inline
+  "converters": { "max_inline_image_captions": 20 },         // per-doc cap on vision captions for embedded images
+  "ingest": { "worker_concurrency": null },                  // pMap orchestration parallelism for the ingest pipeline; null → cpus()-1, max MAX_WORKERS=8
   "llm": {
     "anthropic_api_key": "",                                  // env: ANTHROPIC_API_KEY
     "converter_model": "claude-haiku-4-5-20251001",
     "chunker_model":   "claude-haiku-4-5-20251001",
     "describer_model": "claude-haiku-4-5-20251001",
-    "vision_model":    "claude-haiku-4-5-20251001"
+    "vision_model":    "claude-haiku-4-5-20251001",
+    "describer_skip_when_titled": true                        // skip LLM when markdown has a clear H1 in the opening
   },
   "downloaders": {
     "linear": { "api_key": "" },                              // linear.app/settings/api

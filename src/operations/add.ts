@@ -9,7 +9,9 @@ import {
 	ingestResolved,
 } from "../ingest/ingest.ts";
 import { type ResolvedSource, resolveSource } from "../ingest/source-resolver.ts";
-import { colors } from "../output/formatter.ts";
+import { colors, formatBytes } from "../output/formatter.ts";
+import { pieFor } from "../output/progress.ts";
+import { isInteractive } from "../output/tty.ts";
 import { defineOperation } from "./types.ts";
 
 const FetcherKindEnum = z.enum(["downloader", "local", "inline"]);
@@ -78,6 +80,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 				error: z.string().optional(),
 				mime_type: z.string().nullable(),
 				size_bytes: z.number(),
+				chunk_count: z.number().nullable(),
 				fetcher: FetcherKindEnum,
 				source_sha256: z.string(),
 			}),
@@ -92,24 +95,27 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 		aliases: { logical_path: "-p", refresh_frequency: "-r", change_note: "-m", force: "-f" },
 	},
 	console_formatter: (result) => {
-		const lines = result.ingested.map((e) => {
-			if (e.status === "ok") {
-				return `${colors.green("✓")} ${colors.cyan(e.logical_path)} ${colors.dim(`(${e.fetcher}, ${e.size_bytes}B)`)}`;
-			}
-			if (e.status === "unchanged") {
-				return `${colors.dim("≡")} ${colors.cyan(e.logical_path)} ${colors.dim("(unchanged)")}`;
-			}
-			return `${colors.red("✗")} ${e.source_path} ${colors.dim(e.error ?? "")}`;
-		});
 		const parts: string[] = [colors.green(`added ${result.ok}`)];
 		if (result.unchanged > 0) parts.push(colors.dim(`unchanged ${result.unchanged}`));
 		if (result.failed > 0) parts.push(colors.red(`failed ${result.failed}`));
-		return `${lines.join("\n")}\n${parts.join(", ")}`;
+		const summary = parts.join(", ");
+
+		// In interactive mode, every entry was already streamed to stderr via
+		// progress.entry() during ingest; printing the same list to stdout
+		// here would just duplicate the scrollback. Non-interactive callers
+		// (JSON, piped stdout, CI) don't see the live stream, so they still
+		// get the full per-entry list as the operation's stdout payload.
+		if (isInteractive()) return summary;
+
+		const lines = result.ingested.map(formatEntryLine);
+		return `${lines.join("\n")}\n${summary}`;
 	},
 	handler: async (input, ctx) => {
 		// Spin up an ephemeral embedder pool for the whole `add` command —
 		// `withEmbedderPool` handles the workers=1 short-circuit and disposes
-		// the children when the closure returns (see embedder-pool.ts).
+		// the children when the closure returns (see embedder-pool.ts). Inside
+		// the closure, every embed() call from the ingest pipeline transparently
+		// fans out to the subprocess pool.
 		const workers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
 		return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
 			const { sources, ...rest } = input;
@@ -145,9 +151,27 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 
 			ctx.progress.start(total, "ingest");
 			const callbacks: IngestCallbacks = {
-				onEntryStart: (label) => ctx.progress.tick(label),
-				onEntryComplete: (entry) => ctx.progress.entry(formatEntryLine(entry)),
-				onEntryProgress: (_label, sublabel) => ctx.progress.update(sublabel),
+				// Counter advances on COMPLETION so concurrent prep doesn't race the
+				// bar to 100% before any file is fully persisted. The per-worker
+				// status section (one line per active worker) shows file + step in
+				// real time, prefixed with a pie glyph that fills as the per-file
+				// pipeline progresses. `setWorkers(n)` resizes the section whenever
+				// a new ingest source kicks off with its own pool size.
+				onWorkerCount: (n) => ctx.progress.setWorkers(n),
+				onEntryStart: (label, workerId) => {
+					if (workerId !== undefined) ctx.progress.workerSet(workerId, `${pieFor(undefined)} ${label}`);
+					ctx.progress.setLabel(label);
+				},
+				onEntryComplete: (entry, workerId) => {
+					if (workerId !== undefined) ctx.progress.workerSet(workerId, "");
+					ctx.progress.tick(entry.logical_path);
+					ctx.progress.entry(formatEntryLine(entry));
+				},
+				onEntryProgress: (label, sublabel, workerId) => {
+					if (workerId !== undefined) ctx.progress.workerSet(workerId, `${pieFor(sublabel)} ${label} — ${sublabel}`);
+					ctx.progress.update(sublabel);
+				},
+				onChunks: (n) => ctx.progress.addChunks(n),
 			};
 
 			for (const outcome of outcomes) {
@@ -160,6 +184,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 						error: outcome.error.message,
 						mime_type: null,
 						size_bytes: 0,
+						chunk_count: null,
 						fetcher: "local",
 						source_sha256: "",
 					};
@@ -188,6 +213,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 						error: message,
 						mime_type: null,
 						size_bytes: 0,
+						chunk_count: null,
 						fetcher: "local",
 						source_sha256: "",
 					};
@@ -215,11 +241,17 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
  * Render the persistent stderr line shown for one completed entry. Mirrors
  * the glyphs used by the final `console_formatter` so users see the same
  * status indicators twice (once during ingest on stderr, once in the final
- * stdout summary).
+ * stdout summary). Successful entries show source kind, humanized byte
+ * size, and chunk count so the user can spot oddly small / oddly large
+ * files at a glance.
  */
 function formatEntryLine(entry: IngestEntryResult): string {
 	if (entry.status === "ok") {
-		return `${colors.green("✓")} ${colors.cyan(entry.logical_path)} ${colors.dim(`(${entry.fetcher}, ${entry.size_bytes}B)`)}`;
+		const parts: string[] = [entry.fetcher, formatBytes(entry.size_bytes)];
+		if (entry.chunk_count !== null) {
+			parts.push(`${entry.chunk_count} chunk${entry.chunk_count === 1 ? "" : "s"}`);
+		}
+		return `${colors.green("✓")} ${colors.cyan(entry.logical_path)} ${colors.dim(`(${parts.join(", ")})`)}`;
 	}
 	if (entry.status === "unchanged") {
 		return `${colors.dim("≡")} ${colors.cyan(entry.logical_path)} ${colors.dim("(unchanged)")}`;

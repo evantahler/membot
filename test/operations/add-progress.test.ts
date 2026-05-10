@@ -14,6 +14,7 @@ import type { Progress } from "../../src/output/progress.ts";
 interface RecordedProgress extends Progress {
 	starts: Array<{ total: number; label?: string }>;
 	ticks: string[];
+	labels: string[];
 	updates: string[];
 	entries: string[];
 	dones: Array<string | undefined>;
@@ -22,12 +23,14 @@ interface RecordedProgress extends Progress {
 function recordingProgress(): RecordedProgress {
 	const starts: RecordedProgress["starts"] = [];
 	const ticks: string[] = [];
+	const labels: string[] = [];
 	const updates: string[] = [];
 	const entries: string[] = [];
 	const dones: Array<string | undefined> = [];
 	return {
 		starts,
 		ticks,
+		labels,
 		updates,
 		entries,
 		dones,
@@ -37,9 +40,15 @@ function recordingProgress(): RecordedProgress {
 		tick(label) {
 			ticks.push(label);
 		},
+		setLabel(label) {
+			labels.push(label);
+		},
 		update(suffix) {
 			updates.push(suffix);
 		},
+		setWorkers() {},
+		workerSet() {},
+		addChunks() {},
 		entry(line) {
 			entries.push(line);
 		},

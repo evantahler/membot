@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import ansis from "ansis";
-import { colors, renderResult, renderTable } from "../../src/output/formatter.ts";
+import { colors, formatBytes, renderResult, renderTable } from "../../src/output/formatter.ts";
 import { detectMode, setMode } from "../../src/output/tty.ts";
 
 const STRIP = (s: string): string => ansis.strip(s);
@@ -110,5 +110,32 @@ describe("colors helper gates on useColor()", () => {
 		setMode(detectMode({ forceColor: true }));
 		expect(ansis.strip(colors.red("hello"))).toBe("hello");
 		expect(ansis.strip(colors.bold("x"))).toBe("x");
+	});
+});
+
+describe("formatBytes", () => {
+	test("renders bytes under 1 KiB as raw bytes", () => {
+		expect(formatBytes(0)).toBe("0 B");
+		expect(formatBytes(512)).toBe("512 B");
+		expect(formatBytes(1023)).toBe("1023 B");
+	});
+
+	test("scales up through KB / MB / GB / TB at binary boundaries", () => {
+		expect(formatBytes(1024)).toBe("1.0 KB");
+		expect(formatBytes(5654)).toBe("5.5 KB"); // typical small markdown
+		expect(formatBytes(2 * 1024 * 1024)).toBe("2.0 MB");
+		expect(formatBytes(3.5 * 1024 * 1024 * 1024)).toBe("3.5 GB");
+		expect(formatBytes(2 * 1024 * 1024 * 1024 * 1024)).toBe("2.0 TB");
+	});
+
+	test("drops the decimal once the magnitude reaches 100 in a unit", () => {
+		expect(formatBytes(100 * 1024)).toBe("100 KB");
+		expect(formatBytes(150 * 1024 * 1024)).toBe("150 MB");
+	});
+
+	test("returns 0 B for negative or non-finite input", () => {
+		expect(formatBytes(-1)).toBe("0 B");
+		expect(formatBytes(Number.NaN)).toBe("0 B");
+		expect(formatBytes(Number.POSITIVE_INFINITY)).toBe("0 B");
 	});
 });
