@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type DbConnection, isLockConflictError, openDb, withLockRetry } from "../../src/db/connection.ts";
-import { forgetMigrations } from "../../src/db/migrations.ts";
+import { applyMigrations, forgetMigrations, type Migration } from "../../src/db/migrations.ts";
 import { isHelpfulError } from "../../src/errors.ts";
 
 describe("openDb / connection", () => {
@@ -109,6 +109,68 @@ describe("DbConnection — lazy claim / release", () => {
 		const db = await openDb(path);
 		await db.close();
 		await expect(db.queryGet(`SELECT 1`)).rejects.toThrow(/closed/);
+	});
+});
+
+describe("applyMigrations — transactional wrap", () => {
+	let tmp: string;
+
+	beforeAll(() => {
+		tmp = mkdtempSync(join(tmpdir(), "membot-db-migr-"));
+	});
+
+	afterAll(() => {
+		rmSync(tmp, { recursive: true, force: true });
+	});
+
+	test("rolls back schema changes and does not insert a _migrations row when a transactional migration fails", async () => {
+		const path = join(tmp, "rollback.duckdb");
+		const db = await openDb(path);
+		forgetMigrations(path);
+
+		const broken: Migration = {
+			id: 999,
+			name: "broken",
+			statements: [
+				`CREATE TABLE tx_test_tmp (x INTEGER)`,
+				// Second statement deliberately invalid — should fail and trigger ROLLBACK.
+				`SELECT * FROM nonexistent_table_zzz`,
+			],
+		};
+
+		await expect(applyMigrations(db, [broken])).rejects.toThrow();
+
+		// The CREATE TABLE inside the broken migration must have rolled back.
+		const tables = await db.queryAll<{ name: string }>(
+			`SELECT table_name AS name FROM information_schema.tables WHERE table_schema = 'main' AND table_name = 'tx_test_tmp'`,
+		);
+		expect(tables).toEqual([]);
+
+		// And no _migrations row was inserted for the failing migration.
+		const row = await db.queryGet(`SELECT id FROM _migrations WHERE id = ?1`, 999);
+		expect(row).toBeNull();
+
+		await db.close();
+	});
+
+	test("non-transactional migration still records its _migrations row on success", async () => {
+		const path = join(tmp, "non-tx.duckdb");
+		const db = await openDb(path);
+		forgetMigrations(path);
+
+		const nonTx: Migration = {
+			id: 998,
+			name: "non-tx",
+			transactional: false,
+			statements: [`CREATE TABLE non_tx_test_tmp (x INTEGER)`],
+		};
+
+		await applyMigrations(db, [nonTx]);
+
+		const row = await db.queryGet<{ id: number }>(`SELECT id FROM _migrations WHERE id = ?1`, 998);
+		expect(row?.id).toBe(998);
+
+		await db.close();
 	});
 });
 

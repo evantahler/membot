@@ -8,11 +8,26 @@ import { MIGRATION_003 } from "./migrations/003-downloader-columns.ts";
  * One DDL/DML migration step. The id is monotonically increasing; the name
  * is for logging only. Each statement runs independently so PRAGMA / INSTALL
  * / LOAD calls (which DuckDB doesn't allow in multi-statement strings) work.
+ *
+ * `transactional` defaults to true: `statements` and the matching
+ * `_migrations` insert run inside a single BEGIN/COMMIT so the WAL only ever
+ * sees the completed post-migration shape (avoids partial-state replay races
+ * like the one in issue #54 on ALTER TABLE DROP COLUMN). Set it to false for
+ * migrations whose statements DuckDB doesn't accept inside an explicit
+ * transaction (INSTALL / LOAD).
+ *
+ * `preStatements` always run auto-committed, before the transaction opens.
+ * Use this for setup whose side effects must be visible to the transactional
+ * block — notably DROP INDEX, which DuckDB doesn't materialize within the
+ * same transaction when a later ALTER TABLE DROP COLUMN checks index
+ * dependencies.
  */
 export interface Migration {
 	id: number;
 	name: string;
 	statements: string[];
+	preStatements?: string[];
+	transactional?: boolean;
 }
 
 const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002, MIGRATION_003];
@@ -38,9 +53,12 @@ export function forgetMigrations(path?: string): void {
  * user upgrading membot can see exactly what changed in their store. The
  * first call for a given DB path checks the table; subsequent calls in the
  * same process short-circuit via `checkedPaths`.
+ *
+ * Tests may pass a custom `migrations` list (e.g. to inject a deliberately
+ * failing step and assert rollback). Production code uses the default.
  */
-export async function applyMigrations(db: DbConnection): Promise<void> {
-	if (checkedPaths.has(db.path)) return;
+export async function applyMigrations(db: DbConnection, migrations: Migration[] = MIGRATIONS): Promise<boolean> {
+	if (checkedPaths.has(db.path)) return false;
 
 	await db.exec(`CREATE TABLE IF NOT EXISTS _migrations (
 		id INTEGER PRIMARY KEY,
@@ -51,17 +69,38 @@ export async function applyMigrations(db: DbConnection): Promise<void> {
 	const applied = await db.queryAll<{ id: number }>(`SELECT id FROM _migrations ORDER BY id`);
 	const appliedIds = new Set(applied.map((r) => Number(r.id)));
 
-	for (const migration of MIGRATIONS) {
+	let appliedAny = false;
+	for (const migration of migrations) {
 		if (appliedIds.has(migration.id)) continue;
-		logger.info(`migration: applying ${String(migration.id).padStart(3, "0")}-${migration.name}`);
-		for (const stmt of migration.statements) {
+		const label = `${String(migration.id).padStart(3, "0")}-${migration.name}`;
+		logger.info(`migration: applying ${label}`);
+		for (const stmt of migration.preStatements ?? []) {
 			const trimmed = stmt.trim();
 			if (!trimmed) continue;
 			await db.exec(trimmed);
 		}
-		await db.queryRun(`INSERT INTO _migrations(id, name) VALUES (?1, ?2)`, migration.id, migration.name);
-		logger.info(`migration: applied  ${String(migration.id).padStart(3, "0")}-${migration.name}`);
+		const wrap = migration.transactional !== false;
+		if (wrap) await db.exec("BEGIN TRANSACTION");
+		try {
+			for (const stmt of migration.statements) {
+				const trimmed = stmt.trim();
+				if (!trimmed) continue;
+				await db.exec(trimmed);
+			}
+			await db.queryRun(`INSERT INTO _migrations(id, name) VALUES (?1, ?2)`, migration.id, migration.name);
+			if (wrap) await db.exec("COMMIT");
+		} catch (err) {
+			if (wrap) {
+				// Best effort — if ROLLBACK itself fails (already aborted, no active
+				// transaction, etc.) we still want the original error to surface.
+				await db.exec("ROLLBACK").catch(() => {});
+			}
+			throw err;
+		}
+		appliedAny = true;
+		logger.info(`migration: applied  ${label}`);
 	}
 
 	checkedPaths.add(db.path);
+	return appliedAny;
 }

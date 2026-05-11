@@ -25,17 +25,23 @@ import type { Migration } from "../migrations.ts";
 export const MIGRATION_003: Migration = {
 	id: 3,
 	name: "downloader-columns",
-	statements: [
-		// DuckDB refuses DROP COLUMN when an index covers any column that
-		// comes AFTER the dropped one in the schema, so the indexes have
-		// to come down first. The view drops are needed for the same
-		// reason — `current_files` is `SELECT f.*`, which pins every
-		// column at view-creation time.
-		`DROP VIEW IF EXISTS current_chunks`,
-		`DROP VIEW IF EXISTS current_files`,
+	// DuckDB refuses DROP COLUMN when an index covers any column that comes
+	// AFTER the dropped one in the schema, and it doesn't see an in-transaction
+	// DROP INDEX when checking that constraint — so the index drops have to
+	// commit before the ALTER block opens. They live in `preStatements` for
+	// that reason. The view drops can stay inside the transaction (DuckDB does
+	// honor in-transaction DROP VIEW).
+	preStatements: [
 		`DROP INDEX IF EXISTS files_refresh_due_idx`,
 		`DROP INDEX IF EXISTS files_blob_sha256_idx`,
 		`DROP INDEX IF EXISTS files_logical_path_idx`,
+	],
+	// Everything below runs inside one BEGIN/COMMIT so the WAL only ever sees
+	// the completed post-migration shape — avoids the partial-state replay
+	// crash documented in issue #54.
+	statements: [
+		`DROP VIEW IF EXISTS current_chunks`,
+		`DROP VIEW IF EXISTS current_files`,
 		`UPDATE files SET fetcher = 'downloader' WHERE fetcher IN ('http', 'mcpx')`,
 		`ALTER TABLE files DROP COLUMN fetcher_server`,
 		`ALTER TABLE files DROP COLUMN fetcher_tool`,

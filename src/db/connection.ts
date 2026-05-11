@@ -167,11 +167,12 @@ export class DbConnection {
 
 	private async openOnce(): Promise<void> {
 		const instance = await createInstanceWithRetry(this.path, this.retry);
+		let appliedAny = false;
 		try {
 			const conn = await instance.connect();
 			this.instance = instance;
 			this.conn = conn;
-			await applyMigrations(this);
+			appliedAny = await applyMigrations(this);
 		} catch (err) {
 			// On any failure after instance creation, release the lock immediately.
 			try {
@@ -182,6 +183,31 @@ export class DbConnection {
 			this.instance = null;
 			this.conn = null;
 			throw err;
+		}
+		// If we actually applied a migration, close-and-reopen the instance so
+		// the WAL gets checkpointed cleanly via DuckDB's normal shutdown path.
+		// Leaving schema changes — especially migration 003's ALTER TABLE DROP
+		// COLUMN — in the WAL means the next reopen has to replay them, which
+		// crashes with "DatabaseManager::GetDefaultDatabase with no default
+		// database set" (issue #54). An in-band `CHECKPOINT` works but can hit
+		// a FATAL "Bad file descriptor" path that poisons the connection; a
+		// fresh instance avoids that landmine entirely.
+		if (appliedAny) {
+			this.disposeHandles();
+			const reopened = await createInstanceWithRetry(this.path, this.retry);
+			try {
+				this.conn = await reopened.connect();
+				this.instance = reopened;
+			} catch (err) {
+				try {
+					reopened.closeSync();
+				} catch {
+					// best effort
+				}
+				this.instance = null;
+				this.conn = null;
+				throw err;
+			}
 		}
 	}
 }
