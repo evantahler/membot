@@ -23,7 +23,7 @@ export function mountAsMcpTool<I extends z.ZodObject, O extends z.ZodTypeAny>(
 		op.name,
 		{
 			description: composeDescription(op),
-			inputSchema: op.inputSchema.shape as z.ZodRawShape,
+			inputSchema: op.inputSchema.shape as Record<string, z.ZodTypeAny>,
 		},
 		async (rawInput: unknown): Promise<CallToolResult> => {
 			const start = performance.now();
