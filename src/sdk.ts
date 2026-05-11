@@ -1,7 +1,10 @@
-// SDK entrypoint for embedding membot in other apps. Re-exports the core
-// surfaces — context, errors, operations, search, ingest, refresh — so
-// callers don't need to depend on internal file paths.
+// SDK entrypoint for embedding membot in other apps. Exports the high-level
+// MembotClient class for most callers, plus the lower-level surfaces —
+// context, errors, operations, search, ingest, refresh — for callers that
+// need to bypass the client. Most users want MembotClient.
 
+export type { MembotClientOptions } from "./client.ts";
+export { MembotClient } from "./client.ts";
 export { loadConfig, saveConfig } from "./config/loader.ts";
 export type { ChunkerConfig, LlmConfig, MembotConfig } from "./config/schemas.ts";
 export { defaultMembotHome, EMBEDDING_DIMENSION, EMBEDDING_MODEL } from "./constants.ts";
