@@ -2,7 +2,7 @@ import { cpus } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./config/loader.ts";
 import type { MembotConfig } from "./config/schemas.ts";
-import { FILES } from "./constants.ts";
+import { DEFAULTS, FILES } from "./constants.ts";
 import { type DbConnection, openDb } from "./db/connection.ts";
 import { logger } from "./output/logger.ts";
 import type { Progress } from "./output/progress.ts";
@@ -34,15 +34,20 @@ export interface BuildContextOptions {
  *      don't pay the per-pool subprocess-spawn cost on slow CI runners.
  *   3. Otherwise `null`/missing → `max(1, cpus()-1)`. The minus-one leaves
  *      a core for the parent process (DB writes, IO, the spinner).
+ *
+ * All three branches are clamped into `[1, DEFAULTS.MAX_WORKERS]` so a
+ * very-high-core-count box (or a user typo) can't spawn more subprocesses
+ * than the documented ceiling — each worker loads ~130MB of model weights.
  */
 export function resolveEmbeddingWorkers(configured: number | null | undefined): number {
-	if (typeof configured === "number" && configured >= 1) return configured;
+	const clamp = (n: number) => Math.min(DEFAULTS.MAX_WORKERS, Math.max(1, Math.floor(n)));
+	if (typeof configured === "number" && configured >= 1) return clamp(configured);
 	const envOverride = process.env.MEMBOT_EMBEDDING_WORKERS;
 	if (envOverride) {
 		const n = Number(envOverride);
-		if (Number.isFinite(n) && n >= 1) return Math.floor(n);
+		if (Number.isFinite(n) && n >= 1) return clamp(n);
 	}
-	return Math.max(1, cpus().length - 1);
+	return clamp(cpus().length - 1);
 }
 
 /**

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { resolveEmbeddingWorkers } from "../context.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { insertVersion, millisIso } from "../db/files.ts";
 import { chunkDeterministic } from "../ingest/chunker.ts";
@@ -32,11 +31,13 @@ export const writeOperation = defineOperation({
 	console_formatter: (result) =>
 		`${colors.green("✓")} ${colors.cyan(result.logical_path)} ${colors.dim(`@ ${result.version_id}`)} ${colors.dim(`(${result.size_bytes}B)`)}`,
 	handler: async (input, ctx) => {
-		// Per-command embedder pool: spawn workers, embed this version's
-		// chunks in parallel, kill workers before returning. Short-circuits
-		// to single-process when `embedding.workers` is 1.
-		const workers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
-		return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
+		// `write` always handles exactly one logical_path. The embedder
+		// subprocess pool can't help one document's chunks (embed() runs
+		// once with N strings and the pool's win is parallelizing across
+		// files, not across chunks of one file), so hard-clamp to 1 worker
+		// and let withEmbedderPool take its inline short-circuit — no
+		// subprocess spawn, no model-weight reload.
+		return withEmbedderPool(1, ctx.config.embedding_model, async () => {
 			const path = normalizeLogicalPath(input.logical_path);
 			const refreshSec = parseDuration(input.refresh_frequency);
 			const bytes = new TextEncoder().encode(input.content);
