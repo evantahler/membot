@@ -1,4 +1,6 @@
+import { join } from "node:path";
 import type { Command } from "commander";
+import { defaultMembotHome, FILES } from "../constants.ts";
 import { buildContext, closeContext } from "../context.ts";
 import { startStdioServer } from "../mcp/server.ts";
 import { logger } from "../output/logger.ts";
@@ -24,9 +26,15 @@ export function registerServeCommand(program: Command): void {
 			let stopServer: (() => Promise<void>) | null = null;
 			let stopDaemon: (() => void) | null = null;
 
+			const logPath = join(defaultMembotHome(), FILES.LOGS_DIR, "serve.log");
+			logger.attachFileSink(logPath);
+			logger.event("info", `serve: log → ${logPath}`, { event: "serve.start", log_path: logPath });
+
 			const onShutdown = async () => {
 				if (stopDaemon) stopDaemon();
 				if (stopServer) await stopServer();
+				logger.event("info", "serve: shutdown", { event: "serve.stop" });
+				logger.detachFileSink();
 			};
 			process.on("SIGINT", () => {
 				logger.info("shutting down...");
