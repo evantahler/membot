@@ -10,16 +10,16 @@ const NO_LLM = {
 	describer_skip_when_titled: true,
 };
 
-// 1×1 transparent PNG. Real bytes; valid header so vision/ocr clients accept it.
+// 1×1 transparent PNG. Real bytes; valid header so the vision client accepts it.
 const TINY_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 function pngBytes(): Uint8Array {
 	return new Uint8Array(Buffer.from(TINY_PNG_BASE64, "base64"));
 }
 
 describe("convertImage size caps", () => {
-	test("bytes over both VISION_MAX_BYTES and OCR_MAX_BYTES yield the over-size placeholder", async () => {
-		// VISION_MAX_BYTES = 4 MB, OCR_MAX_BYTES = 8 MB. 9 MB skips both branches.
-		const huge = new Uint8Array(9 * 1024 * 1024);
+	test("bytes over VISION_MAX_BYTES yield the over-size placeholder", async () => {
+		// VISION_MAX_BYTES = 4 MB. 5 MB skips vision.
+		const huge = new Uint8Array(5 * 1024 * 1024);
 		const out = await convertImage(huge, "image/png", NO_LLM);
 		expect(out).toContain("exceeds vision size limit");
 		expect(out).toContain(`${huge.byteLength} bytes`);
@@ -29,7 +29,7 @@ describe("convertImage size caps", () => {
 describe("convertImage with no API key", () => {
 	test("tiny PNG without an API key produces the no-caption placeholder", async () => {
 		const out = await convertImage(pngBytes(), "image/png", NO_LLM);
-		// Tiny test PNG has no text → OCR returns nothing → placeholder.
+		// No API key → vision skipped → placeholder.
 		expect(out).toContain("(image, image/png");
 		expect(out).toContain("no caption available");
 	});

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { resolveEmbeddingWorkers } from "../context.ts";
 import { listDueRefreshes } from "../db/files.ts";
 import { withEmbedderPool } from "../ingest/embedder-pool.ts";
+import { normalizeLogicalPath } from "../ingest/ingest.ts";
 import { colors } from "../output/formatter.ts";
 import { isInteractive } from "../output/tty.ts";
 import { refreshOne } from "../refresh/runner.ts";
@@ -75,7 +76,7 @@ export const refreshOperation = defineOperation({
 		// hits the inline short-circuit in withEmbedderPool and skips the
 		// subprocess spawn entirely.
 		const targets = input.logical_path
-			? [input.logical_path]
+			? [normalizeLogicalPath(input.logical_path)]
 			: (await listDueRefreshes(ctx.db)).map((r) => r.logical_path);
 
 		// Per-command embedder pool: workers come up at the start of the

@@ -134,6 +134,16 @@ describe("operations end-to-end lifecycle", () => {
 		expect(decoded).toContain("# Auth");
 	});
 
+	test("read accepts the original absolute path and normalizes it", async () => {
+		// Repro for the "added file but read can't find it" UX bug: add stores
+		// /Users/me/foo.md as Users/me/foo.md, so read /Users/me/foo.md must
+		// resolve to the same row.
+		const absInput = `/${authPath}`;
+		const out = await readOperation.handler({ logical_path: absInput, bytes: false }, ctx);
+		expect(out.logical_path).toBe(authPath);
+		expect(out.content).toContain("OAuth");
+	});
+
 	test("info returns metadata without content", async () => {
 		const info = await infoOperation.handler({ logical_path: authPath }, ctx);
 		expect(info.source_type).toBe("local");

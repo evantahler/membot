@@ -1,7 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { LlmConfig } from "../../config/schemas.ts";
 import { logger } from "../../output/logger.ts";
-import { ocrImage } from "./ocr.ts";
 
 const VISION_PROMPT = `Describe this image as a one-paragraph caption suitable for retrieval. Focus on:
 - The subject and any people / objects / diagrams visible
@@ -14,42 +13,25 @@ const VISION_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/web
 
 /** Anthropic vision rejects images > 5MB; stay under that with margin. */
 const VISION_MAX_BYTES = 4 * 1024 * 1024;
-/** Tesseract is roughly linear in pixel count; bail past this byte size to avoid pathological hangs. */
-const OCR_MAX_BYTES = 8 * 1024 * 1024;
-/** Hard wall-clock for either subtask so a stuck network call never freezes ingest. */
+/** Hard wall-clock so a stuck network call never freezes ingest. */
 const SUBTASK_TIMEOUT_MS = 60_000;
 
 /**
  * Build the markdown surrogate for an image: an LLM-generated caption
- * (when an API key is available) folded together with any text recovered
- * by Tesseract OCR. Falls back to OCR-only or a deterministic placeholder
- * when no API key is set.
+ * when an API key is available and the mime is supported. Falls back
+ * to a deterministic placeholder otherwise.
  */
 export async function convertImage(bytes: Uint8Array, mimeType: string, llm: LlmConfig): Promise<string> {
-	const captionPromise =
-		bytes.byteLength <= VISION_MAX_BYTES
-			? withTimeout(describeImage(bytes, mimeType, llm), SUBTASK_TIMEOUT_MS, "vision")
-			: Promise.resolve("");
-	const ocrPromise =
-		bytes.byteLength <= OCR_MAX_BYTES ? withTimeout(ocrImage(bytes), SUBTASK_TIMEOUT_MS, "ocr") : Promise.resolve("");
-	const [caption, ocrText] = await Promise.all([captionPromise, ocrPromise]);
-
-	const sections: string[] = [];
-	if (caption) sections.push(caption);
-	if (ocrText) sections.push(`## Text detected via OCR\n\n${ocrText}`);
-	if (sections.length === 0) {
-		const note =
-			bytes.byteLength > VISION_MAX_BYTES
-				? `(image, ${mimeType}, ${bytes.byteLength} bytes — exceeds vision size limit, no caption available)`
-				: `(image, ${mimeType}, no caption available)`;
-		sections.push(note);
+	if (bytes.byteLength > VISION_MAX_BYTES) {
+		return `(image, ${mimeType}, ${bytes.byteLength} bytes — exceeds vision size limit, no caption available)`;
 	}
-	return sections.join("\n\n");
+	const caption = await withTimeout(describeImage(bytes, mimeType, llm), SUBTASK_TIMEOUT_MS, "vision");
+	if (caption) return caption;
+	return `(image, ${mimeType}, no caption available)`;
 }
 
 /**
- * Race a promise against a timer so a stuck network call (vision) or a
- * pathological CPU-bound job (OCR on a multi-megapixel image) never freezes
+ * Race a promise against a timer so a stuck network call never freezes
  * the whole conversion pipeline. Logs a warning when the timer wins.
  */
 async function withTimeout<T extends string>(p: Promise<T>, ms: number, label: string): Promise<T | ""> {

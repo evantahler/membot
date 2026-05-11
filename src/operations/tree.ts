@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { listAllCurrentPaths } from "../db/files.ts";
+import { normalizeLogicalPath } from "../ingest/ingest.ts";
 import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
@@ -47,12 +48,13 @@ export const treeOperation = defineOperation({
 		return lines.join("\n");
 	},
 	handler: async (input, ctx) => {
+		const prefix = input.prefix ? normalizeLogicalPath(input.prefix) : undefined;
 		const allPaths = await listAllCurrentPaths(ctx.db);
-		const filtered = input.prefix ? allPaths.filter((p) => p.startsWith(input.prefix!)) : allPaths;
+		const filtered = prefix ? allPaths.filter((p) => p.startsWith(prefix)) : allPaths;
 		const tree = buildTree(filtered, input.max_depth);
 		const truncated = truncateTree(tree, input.max_items);
 		return {
-			root: input.prefix ?? "/",
+			root: prefix ?? "/",
 			tree,
 			...(truncated > 0 ? { truncated } : {}),
 		};

@@ -126,6 +126,21 @@ membot serve --http 3000
 
 Add `--watch` (and optional `--tick <sec>`) to also run the refresh daemon, which re-reads any file whose `refresh_frequency` has elapsed.
 
+## Programmatic use
+
+The same package ships a TypeScript SDK so you can drive every operation directly from another Bun app — handy for embedding membot in a custom agent loop, a Slack bot, or another CLI. One method per CLI verb / MCP tool, schema-validated I/O, lazy connect.
+
+```ts
+import { MembotClient } from "membot";
+
+const client = new MembotClient();
+await client.add({ sources: ["inline:hello world"], logical_path: "scratch/hello.md" });
+const hits = await client.search({ query: "hello" });
+await client.close();
+```
+
+See [`docs/sdk.md`](./docs/sdk.md) for the full method list, error model, and lower-level primitives (`buildContext`, `OPERATIONS`, `ingest`, `searchSemantic`, …) for callers that need to bypass the client.
+
 ## Configuration
 
 - **Data directory:** `~/.membot/` (override with `MEMBOT_HOME=/path` or `--config <path>`).

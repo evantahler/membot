@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getCurrent, getVersion } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
+import { normalizeLogicalPath } from "../ingest/ingest.ts";
 import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
@@ -35,19 +36,18 @@ export const diffOperation = defineOperation({
 		return `${header}\n${body}`;
 	},
 	handler: async (input, ctx) => {
-		const aRow = await getVersion(ctx.db, input.logical_path, input.a);
-		const bRow = input.b
-			? await getVersion(ctx.db, input.logical_path, input.b)
-			: await getCurrent(ctx.db, input.logical_path);
+		const path = normalizeLogicalPath(input.logical_path);
+		const aRow = await getVersion(ctx.db, path, input.a);
+		const bRow = input.b ? await getVersion(ctx.db, path, input.b) : await getCurrent(ctx.db, path);
 		if (!aRow || !bRow) {
 			throw new HelpfulError({
 				kind: "not_found",
 				message: `couldn't load both versions for diff (${aRow ? "" : "a missing"} ${bRow ? "" : "b missing"})`.trim(),
-				hint: `Run \`membot versions ${input.logical_path}\` to list valid version_ids.`,
+				hint: `Run \`membot versions ${path}\` to list valid version_ids.`,
 			});
 		}
 		const diff = unifiedDiff(aRow.content ?? "", bRow.content ?? "", input.a, bRow.version_id);
-		return { logical_path: input.logical_path, a: aRow.version_id, b: bRow.version_id, diff };
+		return { logical_path: path, a: aRow.version_id, b: bRow.version_id, diff };
 	},
 });
 

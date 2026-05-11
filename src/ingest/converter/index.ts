@@ -3,8 +3,7 @@ import { convertDocx } from "./docx.ts";
 import { convertHtml } from "./html.ts";
 import { convertImage } from "./image.ts";
 import { convertWithLlm } from "./llm.ts";
-import { ocrImage } from "./ocr.ts";
-import { convertPdf, shouldOcrPdf } from "./pdf.ts";
+import { convertPdf } from "./pdf.ts";
 import { convertText } from "./text.ts";
 import { convertXlsx } from "./xlsx.ts";
 
@@ -65,16 +64,12 @@ export async function convert(
 	}
 
 	if (PDF_MIMES.has(mt)) {
-		const conversion = await convertPdf(bytes);
-		if (!shouldOcrPdf(conversion)) {
-			return { markdown: conversion.markdown, contentMimeType: "text/markdown" };
-		}
-		const ocrText = await ocrPdfBytes(bytes);
-		const merged = [conversion.markdown, ocrText ? `## Text detected via OCR\n\n${ocrText}` : ""]
-			.filter(Boolean)
-			.join("\n\n");
+		// Capture byteLength before convertPdf — unpdf detaches the underlying
+		// ArrayBuffer, leaving bytes.byteLength at 0 afterward.
+		const inputBytes = bytes.byteLength;
+		const markdown = await convertPdf(bytes);
 		return {
-			markdown: merged || `(scanned PDF, ${bytes.byteLength} bytes — no recognizable text)`,
+			markdown: markdown || `(scanned PDF, ${inputBytes} bytes — no recognizable text)`,
 			contentMimeType: "text/markdown",
 		};
 	}
@@ -115,15 +110,3 @@ function sampleAsText(bytes: Uint8Array, mimeType: string): string {
 	const b64 = Buffer.from(slice).toString("base64");
 	return `Binary content of type ${mimeType}, ${bytes.byteLength} bytes total. First 4096 bytes (base64):\n\n${b64}`;
 }
-
-/**
- * Tesseract over a PDF's bytes is unhelpful (it's not an image). For a real
- * scanned-PDF OCR pipeline we'd rasterize each page first; for now this
- * function exists as a hook and returns an empty string so the dispatcher
- * still produces a usable surrogate.
- */
-async function ocrPdfBytes(_bytes: Uint8Array): Promise<string> {
-	return "";
-}
-
-export { ocrImage };

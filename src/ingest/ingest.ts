@@ -721,19 +721,22 @@ async function persistVersion(
  *   prefix and append each entry's path relative to the walk base.
  */
 export function pickLogicalPath(explicit: string | undefined, entry: ResolvedLocalEntry, isMulti: boolean): string {
-	if (!explicit) return normalizeAbs(entry.absPath);
-	if (!isMulti) return explicit;
+	if (!explicit) return normalizeLogicalPath(entry.absPath);
+	if (!isMulti) return normalizeLogicalPath(explicit);
 	const prefix = explicit.endsWith("/") ? explicit.slice(0, -1) : explicit;
-	return `${prefix}/${entry.relPathFromBase.replaceAll("\\", "/")}`;
+	return normalizeLogicalPath(`${prefix}/${entry.relPathFromBase.replaceAll("\\", "/")}`);
 }
 
 /**
- * Normalize an absolute filesystem path into a logical_path:
- * `\` → `/`, leading `/` stripped. Drive letters (Windows `C:`) are kept
- * as the first path segment.
+ * Canonicalize an arbitrary path-shaped input (an absolute filesystem path,
+ * a user-supplied `logical_path`, a prefix) into the form actually stored in
+ * the DB: `\` → `/`, leading `/` stripped. Drive letters (Windows `C:`) are
+ * kept as the first path segment. Idempotent, so safe to apply at any input
+ * boundary — `bun dev read /Users/me/foo.md` and `bun dev read Users/me/foo.md`
+ * both resolve to the same row.
  */
-export function normalizeAbs(absPath: string): string {
-	return absPath.replaceAll("\\", "/").replace(/^\/+/, "");
+export function normalizeLogicalPath(p: string): string {
+	return p.replaceAll("\\", "/").replace(/^\/+/, "");
 }
 
 /**
