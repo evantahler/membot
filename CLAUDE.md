@@ -143,6 +143,7 @@ If a command, flag, or workflow changes, the README command table, the skill com
 ## Testing
 
 - `bun test`. Test preload at `test/_preload.ts` applies the transformers WASM patch.
+- **Bun runs test files sequentially by default**, in a single process. Parallel execution is opt-in via `--parallel=<n>` (creates that many worker processes). Cross-test flakes therefore come from shared in-process state — module-level singletons, leaked file handles, leftover global DuckDB state — not from concurrent file-system contention.
 - Use a real ephemeral DuckDB file per test (don't mock the DB).
 - Real fixtures for converters (`test/fixtures/sample.pdf`, `sample.docx`, `sample.html`).
 - Mock the network only for fetcher tests; everything else hits the real local pipeline.
