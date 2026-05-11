@@ -21,6 +21,7 @@ export type { IngestCallbacks, IngestEntryResult, IngestInput, IngestResult } fr
 export { countResolvedEntries, ingest, ingestResolved } from "./ingest/ingest.ts";
 export type { ResolvedLocalEntry, ResolvedSource } from "./ingest/source-resolver.ts";
 export { resolveSource } from "./ingest/source-resolver.ts";
+export { SERVER_INSTRUCTIONS } from "./mcp/instructions.ts";
 export { buildMcpServer, startHttpServer, startStdioServer } from "./mcp/server.ts";
 export { OPERATIONS } from "./operations/index.ts";
 export type { CliMetadata, Operation } from "./operations/types.ts";
