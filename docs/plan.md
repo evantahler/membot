@@ -30,10 +30,14 @@ on-disk tree of stored content.
   schemas; the CLI (commander) and MCP server both consume that —
   description text, `--help` output, and `tools/list` output never
   drift apart.
-- **Native conversion first, LLM fallback for messy input.** `unpdf`
-  for PDFs, `mammoth` for DOCX, `turndown` for HTML. Claude vision
-  captions images and Claude markdown-conversion is the last-resort
-  fallback. Missing `ANTHROPIC_API_KEY` is not a hard error — degrades
+- **Native conversion only for binaries.** `unpdf` for PDFs, `mammoth`
+  for DOCX, `xlsx` (SheetJS) for XLSX, `jszip` + `fast-xml-parser` for
+  PPTX, `turndown` for HTML. Claude vision captions embedded images and
+  Claude markdown-conversion normalizes structured text (JSON / YAML /
+  CSV / etc.). Opaque binaries we don't recognize return a deterministic
+  `(unknown binary, ...)` placeholder — never a base64-sample LLM
+  round-trip, because that path reliably hallucinated content from the
+  filename. Missing `ANTHROPIC_API_KEY` is not a hard error — degrades
   to deterministic surrogates.
 - **Embedded images become inline captions.** DOCX and HTML conversion
   intercept embedded images (mammoth's `convertImage` callback;
@@ -205,7 +209,7 @@ src/
     fetcher.ts          # downloader registry dispatch
     chunker.ts embedder.ts embedder-pool.ts embed-worker.ts describer.ts search-text.ts
     concurrency.ts      # pMap (worker-pool with stable workerId) + AsyncMutex
-    converter/          # pdf, docx, html, image, text, llm
+    converter/          # pdf, docx, xlsx, pptx, html, image, text, llm
     downloaders/
       index.ts          # Downloader interface, findDownloader, listDownloaders, collectLoginEntries
       browser.ts        # BrowserPool (persistent chromium profile)

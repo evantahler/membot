@@ -52,6 +52,55 @@ describe("converter dispatch", () => {
 		expect(r.markdown).toContain("unknown binary");
 	});
 
+	test("unknown binary WITH an API key still returns the placeholder — never hallucinates", async () => {
+		// Regression guard: previously, the unknown-binary path would base64
+		// 4KB of opaque bytes and ask the LLM to "convert this to markdown",
+		// which reliably produced fabricated content. The contract now: any
+		// unhandled binary mime returns the deterministic placeholder, full
+		// stop. A non-empty API key must not change the result. The
+		// presence of an API key here doesn't issue a network call because
+		// we never reach the LLM branch.
+		const withKey = { ...NO_LLM, anthropic_api_key: "sk-test-not-real" };
+		const r = await convert(
+			new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 1, 2, 3]),
+			"application/x-weird",
+			"x.weird",
+			withKey,
+			CONVERTERS,
+		);
+		expect(r.markdown).toBe("(unknown binary, application/x-weird, 8 bytes)");
+	});
+
+	test("application/vnd.openxmlformats…presentationml.presentation routes through convertPptx", async () => {
+		// Build a minimal pptx inline so we don't need to ship a fixture for
+		// the dispatch test. convertPptx only reads ppt/slides/slide*.xml.
+		const JSZipModule = await import("jszip");
+		const JSZip = JSZipModule.default;
+		const zip = new JSZip();
+		zip.file(
+			"ppt/slides/slide1.xml",
+			`<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+	<p:cSld><p:spTree>
+		<p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
+		<p:txBody><a:p><a:r><a:t>DISPATCH_TOKEN_PPTX</a:t></a:r></a:p></p:txBody></p:sp>
+	</p:spTree></p:cSld>
+</p:sld>`,
+		);
+		const bytes = await zip.generateAsync({ type: "uint8array" });
+		const r = await convert(
+			bytes,
+			"application/vnd.openxmlformats-officedocument.presentationml.presentation",
+			"src",
+			NO_LLM,
+			CONVERTERS,
+		);
+		expect(r.markdown).toContain("DISPATCH_TOKEN_PPTX");
+		expect(r.markdown).toContain("## Slide 1: DISPATCH_TOKEN_PPTX");
+		expect(r.markdown).not.toContain("unknown binary");
+	});
+
 	test("structured text without API key falls back to raw text", async () => {
 		const json = `{"a": 1}`;
 		const r = await convert(new TextEncoder().encode(json), "application/json", "src", NO_LLM, CONVERTERS);

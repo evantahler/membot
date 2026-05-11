@@ -5,7 +5,7 @@
 [![npm](https://img.shields.io/npm/v/membot.svg)](https://www.npmjs.com/package/membot)
 [![license](https://img.shields.io/github/license/evantahler/membot.svg)](./LICENSE)
 
-`membot` is a single-binary CLI and MCP server that gives AI agents a persistent, versioned, searchable context store. Files (markdown, PDFs, DOCX, HTML, URLs, agent-authored notes) are ingested, converted to markdown, chunked, embedded **locally** with `@huggingface/transformers` (WASM, no cloud calls), and indexed in DuckDB with hybrid search (semantic vector + BM25). Every change creates a new version — nothing is overwritten in place.
+`membot` is a single-binary CLI and MCP server that gives AI agents a persistent, versioned, searchable context store. Files (markdown, PDFs, DOCX, XLSX, PPTX, HTML, URLs, agent-authored notes) are ingested, converted to markdown, chunked, embedded **locally** with `@huggingface/transformers` (WASM, no cloud calls), and indexed in DuckDB with hybrid search (semantic vector + BM25). Every change creates a new version — nothing is overwritten in place.
 
 - **Local everything** — embeddings run on your machine; data lives in `~/.membot/index.duckdb`.
 - **One mental model** — every artifact (markdown, PDF, image, audio) becomes a markdown surrogate that flows through the same chunk → embed → search pipeline.
