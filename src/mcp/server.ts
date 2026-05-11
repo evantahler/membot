@@ -63,7 +63,7 @@ export async function startStdioServer(options: McpServerOptions = {}): Promise<
 export async function startHttpServer(port: number, options: McpServerOptions = {}): Promise<() => Promise<void>> {
 	let ctx: AppContext | null = null;
 	const server = buildMcpServer(async () => {
-		ctx = await buildContext({ configFlag: options.configFlag });
+		ctx = await buildContext({ configFlag: options.configFlag, json: true });
 		return ctx;
 	});
 	const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });

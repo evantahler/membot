@@ -119,6 +119,8 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 
 `membot serve` exposes the same operations as MCP tools (`membot_add`, `membot_search`, etc.) over stdio (default) or HTTP (`--http <port>`). When connected, prefer the MCP tools over shelling out — they return structured `outputSchema` data with `version_id` echoed on every read.
 
+Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/serve.log` as a structured JSON record. The log captures tool name, argument keys, duration, result size, and any error kind + hint — never the argument values or result body. Tail it with `membot logs --follow` (or `membot logs --raw | jq` for programmatic use).
+
 ## Available commands
 
 | Command                               | Purpose                                                                        |
@@ -138,6 +140,7 @@ Tombstones hide a path from `ls` / `tree` / `search` but `versions` and `read --
 | `membot refresh [path]`               | Re-read source; create new version only if bytes changed                       |
 | `membot prune --before <ts>`          | Permanently drop non-current versions older than cutoff (irreversible)         |
 | `membot serve`                        | Start MCP server (stdio default, `--http <port>` for HTTP)                     |
+| `membot logs`                         | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`); `--follow`, `--lines <N>`, `--raw` for JSON |
 | `membot reindex`                      | Rebuild the FTS keyword index over current chunks                              |
 | `membot config <subcommand>`          | Host-side config management (`get` / `set` / `unset` / `list` / `path`). **Don't run** — this is for the human operator, not for agents |
 | `membot login`                        | Open a browser to sign into Google / GitHub / Linear / etc. (one-time host-side setup). **Don't run** — this is for the human operator |
