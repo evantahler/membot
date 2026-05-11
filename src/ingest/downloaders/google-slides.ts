@@ -42,7 +42,7 @@ export const googleSlidesDownloader: Downloader = {
 
 function extractSlidesId(url: URL): string {
 	const match = url.pathname.match(SLIDE_PATH);
-	if (!match || !match[1]) {
+	if (!match?.[1]) {
 		throw new HelpfulError({
 			kind: "input_error",
 			message: `not a Google Slides URL: ${url.toString()}`,

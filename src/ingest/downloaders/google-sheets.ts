@@ -47,7 +47,7 @@ export const googleSheetsDownloader: Downloader = {
 
 function extractSheetId(url: URL): string {
 	const match = url.pathname.match(SHEET_PATH);
-	if (!match || !match[1]) {
+	if (!match?.[1]) {
 		throw new HelpfulError({
 			kind: "input_error",
 			message: `not a Google Sheets URL: ${url.toString()}`,

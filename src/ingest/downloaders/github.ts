@@ -1,6 +1,6 @@
 import { HelpfulError } from "../../errors.ts";
 import { sha256Hex } from "../local-reader.ts";
-import type { DownloadedRemote, Downloader, DownloaderCtx } from "./index.ts";
+import type { DownloadedRemote, Downloader } from "./index.ts";
 
 const ISSUE_OR_PR = /^\/([^/]+)\/([^/]+)\/(issues|pull)\/(\d+)(?:$|\/|#|\?)/;
 
