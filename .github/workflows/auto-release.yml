@@ -115,6 +115,7 @@ jobs:
           bun build --compile --minify --sourcemap \
             --target=${{ matrix.target }} \
             --external '@duckdb/*' \
+            --external 'playwright*' \
             ./src/cli.ts --outfile dist/${{ matrix.artifact }}
       - name: Upload to release
         run: gh release upload "${{ needs.check-version.outputs.tag }}" dist/${{ matrix.artifact }} --clobber
