@@ -22,7 +22,7 @@ export function mountAsMcpTool<I extends z.ZodObject, O extends z.ZodTypeAny>(
 		op.name,
 		{
 			description: composeDescription(op),
-			inputSchema: op.inputSchema.shape as Record<string, z.ZodTypeAny>,
+			inputSchema: op.inputSchema.shape as unknown as Record<string, z.ZodTypeAny>,
 		},
 		async (rawInput: unknown): Promise<CallToolResult> => {
 			let parsedInput: z.infer<I>;
