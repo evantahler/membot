@@ -66,8 +66,11 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bash scripts/apply-patches.sh
+      - run: bunx playwright install --with-deps chromium
       - run: bun lint
       - run: bun test
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish-npm:
     needs: [check-version, ci]
