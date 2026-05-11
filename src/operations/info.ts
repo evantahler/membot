@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getCurrent, getVersion } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
+import { normalizeLogicalPath } from "../ingest/ingest.ts";
 import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
@@ -76,13 +77,14 @@ export const infoOperation = defineOperation({
 		return lines.join("\n");
 	},
 	handler: async (input, ctx) => {
-		const cur = await getCurrent(ctx.db, input.logical_path);
-		const row = input.version ? await getVersion(ctx.db, input.logical_path, input.version) : cur;
+		const path = normalizeLogicalPath(input.logical_path);
+		const cur = await getCurrent(ctx.db, path);
+		const row = input.version ? await getVersion(ctx.db, path, input.version) : cur;
 		if (!row) {
 			throw new HelpfulError({
 				kind: "not_found",
-				message: `no version of ${input.logical_path}${input.version ? ` at ${input.version}` : ""}`,
-				hint: `Run \`membot versions ${input.logical_path}\` to list versions, or \`membot ls\` for paths.`,
+				message: `no version of ${path}${input.version ? ` at ${input.version}` : ""}`,
+				hint: `Run \`membot versions ${path}\` to list versions, or \`membot ls\` for paths.`,
 			});
 		}
 		return {

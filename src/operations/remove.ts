@@ -2,6 +2,7 @@ import picomatch from "picomatch";
 import { z } from "zod";
 import { listAllCurrentPaths, tombstone } from "../db/files.ts";
 import { asHelpful, HelpfulError } from "../errors.ts";
+import { normalizeLogicalPath } from "../ingest/ingest.ts";
 import { isGlob } from "../ingest/source-resolver.ts";
 import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
@@ -56,7 +57,8 @@ export const removeOperation = defineOperation({
 		const currentSet = new Set(currentPaths);
 		const targets = new Set<string>();
 
-		for (const arg of input.paths) {
+		for (const rawArg of input.paths) {
+			const arg = normalizeLogicalPath(rawArg);
 			const matches: string[] = [];
 			if (isGlob(arg)) {
 				const isMatch = picomatch(arg, { dot: true });

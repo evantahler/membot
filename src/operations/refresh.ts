@@ -2,6 +2,7 @@ import { z } from "zod";
 import { resolveEmbeddingWorkers } from "../context.ts";
 import { listDueRefreshes } from "../db/files.ts";
 import { withEmbedderPool } from "../ingest/embedder-pool.ts";
+import { normalizeLogicalPath } from "../ingest/ingest.ts";
 import { colors } from "../output/formatter.ts";
 import { isInteractive } from "../output/tty.ts";
 import { refreshOne } from "../refresh/runner.ts";
@@ -76,7 +77,7 @@ export const refreshOperation = defineOperation({
 		const workers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
 		return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
 			const targets = input.logical_path
-				? [input.logical_path]
+				? [normalizeLogicalPath(input.logical_path)]
 				: (await listDueRefreshes(ctx.db)).map((r) => r.logical_path);
 			const out: RefreshEntry[] = [];
 			ctx.progress.start(targets.length, "refresh");

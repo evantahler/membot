@@ -70,10 +70,10 @@ describe.if(SHOULD_RUN)("downloaders end-to-end (live network, chromium)", () =>
 		// Run the same converter the ingest pipeline runs on application/pdf;
 		// catches regressions in either the downloader (empty / login PDF) or
 		// in convertPdf (returns no text).
-		const conversion = await convertPdf(result.bytes);
-		expect(conversion.markdown.length).toBeGreaterThan(200);
-		expect(conversion.markdown).toContain("Evan");
-		expect(conversion.markdown).toContain("Engineering");
+		const markdown = await convertPdf(result.bytes);
+		expect(markdown.length).toBeGreaterThan(200);
+		expect(markdown).toContain("Evan");
+		expect(markdown).toContain("Engineering");
 	}, 120_000);
 
 	test("github downloader pulls the issue body + comments from a public repo", async () => {

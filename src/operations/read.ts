@@ -2,6 +2,7 @@ import { z } from "zod";
 import { readBlob } from "../db/blobs.ts";
 import { getCurrent, getVersion } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
+import { normalizeLogicalPath } from "../ingest/ingest.ts";
 import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
@@ -47,13 +48,14 @@ export const readOperation = defineOperation({
 		return `${head}\n${meta}\n\n${body}`;
 	},
 	handler: async (input, ctx) => {
-		const cur = await getCurrent(ctx.db, input.logical_path);
-		const row = input.version ? await getVersion(ctx.db, input.logical_path, input.version) : cur;
+		const path = normalizeLogicalPath(input.logical_path);
+		const cur = await getCurrent(ctx.db, path);
+		const row = input.version ? await getVersion(ctx.db, path, input.version) : cur;
 		if (!row) {
 			throw new HelpfulError({
 				kind: "not_found",
-				message: `no version of ${input.logical_path}${input.version ? ` at ${input.version}` : ""} found`,
-				hint: `Run \`membot ls\` to see paths, or \`membot versions ${input.logical_path}\` to list versions.`,
+				message: `no version of ${path}${input.version ? ` at ${input.version}` : ""} found`,
+				hint: `Run \`membot ls\` to see paths, or \`membot versions ${path}\` to list versions.`,
 			});
 		}
 		const isCurrent = !!cur && cur.version_id === row.version_id;
@@ -63,7 +65,7 @@ export const readOperation = defineOperation({
 			if (!blob) {
 				throw new HelpfulError({
 					kind: "not_found",
-					message: `no blob bytes available for ${input.logical_path}@${row.version_id}`,
+					message: `no blob bytes available for ${path}@${row.version_id}`,
 					hint: "Inline writes do not have an underlying blob. Use the markdown surrogate (default) instead.",
 				});
 			}

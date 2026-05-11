@@ -6,7 +6,7 @@ import { chunkDeterministic } from "../ingest/chunker.ts";
 import { describe } from "../ingest/describer.ts";
 import { embed } from "../ingest/embedder.ts";
 import { withEmbedderPool } from "../ingest/embedder-pool.ts";
-import { parseDuration } from "../ingest/ingest.ts";
+import { normalizeLogicalPath, parseDuration } from "../ingest/ingest.ts";
 import { sha256Hex } from "../ingest/local-reader.ts";
 import { buildSearchText } from "../ingest/search-text.ts";
 import { colors } from "../output/formatter.ts";
@@ -37,17 +37,18 @@ export const writeOperation = defineOperation({
 		// to single-process when `embedding.workers` is 1.
 		const workers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
 		return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
+			const path = normalizeLogicalPath(input.logical_path);
 			const refreshSec = parseDuration(input.refresh_frequency);
 			const bytes = new TextEncoder().encode(input.content);
-			const description = await describe(input.logical_path, "text/markdown", input.content, ctx.config.llm);
+			const description = await describe(path, "text/markdown", input.content, ctx.config.llm);
 			const chunks = chunkDeterministic(input.content, ctx.config.chunker);
-			const searchTexts = chunks.map((c) => buildSearchText(input.logical_path, description, c.content));
+			const searchTexts = chunks.map((c) => buildSearchText(path, description, c.content));
 			const embeddings = await embed(searchTexts, ctx.config.embedding_model);
 
 			const versionId = millisIso(Date.now());
 			const contentSha = sha256Hex(bytes);
 			await insertVersion(ctx.db, {
-				logical_path: input.logical_path,
+				logical_path: path,
 				version_id: versionId,
 				source_type: "inline",
 				source_path: null,
@@ -68,18 +69,18 @@ export const writeOperation = defineOperation({
 
 			await insertChunksForVersion(
 				ctx.db,
-				input.logical_path,
+				path,
 				versionId,
 				chunks.map((c, i) => ({
 					chunk_index: c.index,
 					chunk_content: c.content,
-					search_text: searchTexts[i] ?? buildSearchText(input.logical_path, description, c.content),
+					search_text: searchTexts[i] ?? buildSearchText(path, description, c.content),
 					embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
 				})),
 			);
 			await rebuildFts(ctx.db);
 
-			return { logical_path: input.logical_path, version_id: versionId, size_bytes: bytes.byteLength };
+			return { logical_path: path, version_id: versionId, size_bytes: bytes.byteLength };
 		});
 	},
 });

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { insertChunksForVersion, listChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { getCurrent, insertVersion, millisIso, tombstone } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
+import { normalizeLogicalPath } from "../ingest/ingest.ts";
 import { buildSearchText } from "../ingest/search-text.ts";
 import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
@@ -24,24 +25,26 @@ export const moveOperation = defineOperation({
 	console_formatter: (result) =>
 		`${colors.green("✓")} ${colors.cyan(result.from_logical_path)} → ${colors.cyan(result.to_logical_path)} ${colors.dim(`@ ${result.new_version_id}`)}`,
 	handler: async (input, ctx) => {
-		const cur = await getCurrent(ctx.db, input.from_logical_path);
+		const fromPath = normalizeLogicalPath(input.from_logical_path);
+		const toPath = normalizeLogicalPath(input.to_logical_path);
+		const cur = await getCurrent(ctx.db, fromPath);
 		if (!cur) {
 			throw new HelpfulError({
 				kind: "not_found",
-				message: `${input.from_logical_path} doesn't exist (or is tombstoned)`,
+				message: `${fromPath} doesn't exist (or is tombstoned)`,
 				hint: "Run `membot ls` to see paths.",
 			});
 		}
-		if (await getCurrent(ctx.db, input.to_logical_path)) {
+		if (await getCurrent(ctx.db, toPath)) {
 			throw new HelpfulError({
 				kind: "conflict",
-				message: `${input.to_logical_path} already has a current version`,
+				message: `${toPath} already has a current version`,
 				hint: "Pick a different destination or `membot rm` the existing one first.",
 			});
 		}
 		const newVersion = millisIso(Date.now());
 		await insertVersion(ctx.db, {
-			logical_path: input.to_logical_path,
+			logical_path: toPath,
 			version_id: newVersion,
 			source_type: cur.source_type,
 			source_path: cur.source_path,
@@ -59,23 +62,23 @@ export const moveOperation = defineOperation({
 			refresh_frequency_sec: cur.refresh_frequency_sec,
 			refreshed_at: cur.refreshed_at,
 			last_refresh_status: cur.last_refresh_status,
-			change_note: `move from ${input.from_logical_path}`,
+			change_note: `move from ${fromPath}`,
 		});
 
 		const oldChunks = await listChunksForVersion(ctx.db, cur.logical_path, cur.version_id);
 		const reKeyed = oldChunks.map((c) => ({
 			chunk_index: c.chunk_index,
 			chunk_content: c.chunk_content,
-			search_text: buildSearchText(input.to_logical_path, cur.description, c.chunk_content),
+			search_text: buildSearchText(toPath, cur.description, c.chunk_content),
 			embedding: c.embedding,
 		}));
-		await insertChunksForVersion(ctx.db, input.to_logical_path, newVersion, reKeyed);
-		await tombstone(ctx.db, input.from_logical_path, `moved to ${input.to_logical_path}`);
+		await insertChunksForVersion(ctx.db, toPath, newVersion, reKeyed);
+		await tombstone(ctx.db, fromPath, `moved to ${toPath}`);
 		await rebuildFts(ctx.db);
 
 		return {
-			from_logical_path: input.from_logical_path,
-			to_logical_path: input.to_logical_path,
+			from_logical_path: fromPath,
+			to_logical_path: toPath,
 			new_version_id: newVersion,
 		};
 	},
