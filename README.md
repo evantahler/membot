@@ -93,6 +93,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot refresh [path]`         | Re-read source; new version only if bytes changed                                 |
 | `membot prune --before <ts>`    | Permanently drop non-current versions older than cutoff (irreversible)            |
 | `membot serve`                  | Run the MCP server (stdio default; `--http <port>` for HTTP)                      |
+| `membot logs`                   | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`) — `--follow`, `--lines <N>`, `--raw` |
 | `membot reindex`                | Rebuild the FTS keyword index over current chunks                                 |
 | `membot config <subcommand>`    | Get / set values in `~/.membot/config.json` (`get`, `set`, `unset`, `list`, `path`) |
 | `membot login`                  | Open a Chromium window to sign into Google / GitHub / Linear / etc. — closes save the session |
@@ -126,6 +127,17 @@ membot serve --http 3000
 
 Add `--watch` (and optional `--tick <sec>`) to also run the refresh daemon, which re-reads any file whose `refresh_frequency` has elapsed.
 
+### Logs
+
+`membot serve` writes a structured audit log to `~/.membot/logs/serve.log` — one JSON record per line — capturing every MCP tool invocation (tool name, argument keys, duration, result size, and any error kind + hint) plus refresh-daemon ticks. Argument values and result bodies are **never** written, so the log stays safe to share. The file rolls over at 5 MB (3 files retained).
+
+```bash
+membot logs                    # pretty-print the last 100 lines
+membot logs --lines 1000       # more history
+membot logs --follow           # tail -F for live viewing
+membot logs --raw | jq '.tool' # raw JSON lines for programmatic use
+```
+
 ## Programmatic use
 
 The same package ships a TypeScript SDK so you can drive every operation directly from another Bun app — handy for embedding membot in a custom agent loop, a Slack bot, or another CLI. One method per CLI verb / MCP tool, schema-validated I/O, lazy connect.
@@ -146,7 +158,7 @@ See [`docs/sdk.md`](./docs/sdk.md) for the full method list, error model, and lo
 - **Data directory:** `~/.membot/` (override with `MEMBOT_HOME=/path` or `--config <path>`).
   - `~/.membot/index.duckdb` — all content, blobs, chunks, embeddings, and metadata.
   - `~/.membot/models/` — cached embedding model weights (`Xenova/bge-small-en-v1.5`, 384-dim).
-  - `~/.membot/logs/` — daemon logs when running `serve --watch`.
+  - `~/.membot/logs/serve.log` — structured audit log written by `membot serve`. One JSON record per line; tail it with `membot logs --follow`. Rolls over at 5 MB; 3 files retained.
 - **Config file:** `~/.membot/config.json` (optional; defaults are sane). Edit it directly or via `membot config`:
 
   ```bash

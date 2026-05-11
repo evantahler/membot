@@ -91,6 +91,19 @@ export const DEFAULTS = {
 	 * file already has a human-written description.
 	 */
 	DESCRIBER_SKIP_WHEN_TITLED: true,
+	/**
+	 * Size threshold at which `membot serve`'s `~/.membot/logs/serve.log`
+	 * rolls over. The active file is renamed to `serve.log.1` (rolling
+	 * `.1` → `.2`, capped at 3 files total) and a fresh file is opened.
+	 * 5 MB keeps a long-running daemon's audit trail bounded while still
+	 * holding many thousands of tool-call records.
+	 */
+	SERVE_LOG_ROTATE_BYTES: 5_000_000,
+	/**
+	 * Maximum number of rotated `serve.log.N` files to keep alongside the
+	 * active log. Older rolls are dropped on rotation.
+	 */
+	SERVE_LOG_ROTATE_KEEP: 3,
 } as const;
 
 export const FILES = {

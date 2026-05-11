@@ -4,6 +4,7 @@ import type { z } from "zod";
 import type { AppContext } from "../context.ts";
 import { asHelpful, HelpfulError, isHelpfulError } from "../errors.ts";
 import { composeDescription, type Operation } from "../operations/types.ts";
+import { logger } from "../output/logger.ts";
 
 /**
  * Mount an Operation as an MCP tool on the supplied server. The tool:
@@ -25,29 +26,63 @@ export function mountAsMcpTool<I extends z.ZodObject, O extends z.ZodTypeAny>(
 			inputSchema: op.inputSchema.shape as unknown as Record<string, z.ZodTypeAny>,
 		},
 		async (rawInput: unknown): Promise<CallToolResult> => {
+			const start = performance.now();
+			const callId = crypto.randomUUID().slice(0, 8);
+			const argKeys = rawInput && typeof rawInput === "object" && !Array.isArray(rawInput) ? Object.keys(rawInput) : [];
+			logger.event("info", `mcp call ${op.name}`, {
+				event: "mcp.call.start",
+				call_id: callId,
+				tool: op.name,
+				arg_keys: argKeys,
+			});
+
+			const logErr = (err: unknown): CallToolResult => {
+				const helpful = isHelpfulError(err)
+					? err
+					: asHelpful(err, "unexpected error", "This is a membot bug; check server logs.", "internal_error");
+				logger.event("warn", `mcp err  ${op.name} ${Math.round(performance.now() - start)}ms ${helpful.kind}`, {
+					event: "mcp.call.err",
+					call_id: callId,
+					tool: op.name,
+					duration_ms: Math.round(performance.now() - start),
+					error_kind: helpful.kind,
+					error_message: helpful.message,
+					error_hint: helpful.hint,
+				});
+				return renderMcpError(helpful);
+			};
+
 			let parsedInput: z.infer<I>;
 			try {
 				parsedInput = parseInput(op, rawInput);
 			} catch (err) {
-				return renderMcpError(err);
+				return logErr(err);
 			}
 
 			let ctx: AppContext;
 			try {
 				ctx = await getCtx();
 			} catch (err) {
-				return renderMcpError(err);
+				return logErr(err);
 			}
 
 			try {
 				const result = await op.handler(parsedInput, ctx);
 				const validated = parseOutput(op, result);
+				const text = jsonOrText(validated);
+				logger.event("info", `mcp ok   ${op.name} ${Math.round(performance.now() - start)}ms`, {
+					event: "mcp.call.ok",
+					call_id: callId,
+					tool: op.name,
+					duration_ms: Math.round(performance.now() - start),
+					result_bytes: text.length,
+				});
 				return {
-					content: [{ type: "text", text: jsonOrText(validated) }],
+					content: [{ type: "text", text }],
 					structuredContent: validated as Record<string, unknown>,
 				};
 			} catch (err) {
-				return renderMcpError(err);
+				return logErr(err);
 			} finally {
 				// Drop the DuckDB lock between MCP tool calls so concurrent CLI
 				// or daemon callers can claim it. The next tool call reopens.
