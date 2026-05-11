@@ -45,7 +45,7 @@ export const googleDocsDownloader: Downloader = {
 
 function extractDocId(url: URL): string {
 	const match = url.pathname.match(DOC_PATH);
-	if (!match || !match[1]) {
+	if (!match?.[1]) {
 		throw new HelpfulError({
 			kind: "input_error",
 			message: `not a Google Docs URL: ${url.toString()}`,
