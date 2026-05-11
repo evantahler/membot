@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { resolveEmbeddingWorkers } from "../src/context.ts";
 import { DEFAULTS } from "../src/constants.ts";
+import { resolveEmbeddingWorkers } from "../src/context.ts";
 
 describe("resolveEmbeddingWorkers", () => {
 	const ENV_KEY = "MEMBOT_EMBEDDING_WORKERS";
