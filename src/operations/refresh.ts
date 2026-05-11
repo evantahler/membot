@@ -70,14 +70,20 @@ export const refreshOperation = defineOperation({
 		return `${lines.join("\n")}\n${summary}`;
 	},
 	handler: async (input, ctx) => {
+		// Resolve the target list before opening the pool so we can clamp
+		// worker count by entry count: a one-path refresh (the common case)
+		// hits the inline short-circuit in withEmbedderPool and skips the
+		// subprocess spawn entirely.
+		const targets = input.logical_path
+			? [input.logical_path]
+			: (await listDueRefreshes(ctx.db)).map((r) => r.logical_path);
+
 		// Per-command embedder pool: workers come up at the start of the
 		// refresh sweep and are killed before we return, so a manual
 		// `membot refresh` doesn't leave subprocesses around.
-		const workers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
+		const configuredWorkers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
+		const workers = Math.max(1, Math.min(configuredWorkers, targets.length));
 		return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
-			const targets = input.logical_path
-				? [input.logical_path]
-				: (await listDueRefreshes(ctx.db)).map((r) => r.logical_path);
 			const out: RefreshEntry[] = [];
 			ctx.progress.start(targets.length, "refresh");
 			for (const path of targets) {

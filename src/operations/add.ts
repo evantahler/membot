@@ -111,36 +111,40 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 		return `${lines.join("\n")}\n${summary}`;
 	},
 	handler: async (input, ctx) => {
-		// Spin up an ephemeral embedder pool for the whole `add` command —
-		// `withEmbedderPool` handles the workers=1 short-circuit and disposes
-		// the children when the closure returns (see embedder-pool.ts). Inside
-		// the closure, every embed() call from the ingest pipeline transparently
-		// fans out to the subprocess pool.
-		const workers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
-		return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
-			const { sources, ...rest } = input;
-			const followSymlinks = rest.follow_symlinks ?? true;
+		const { sources, ...rest } = input;
+		const followSymlinks = rest.follow_symlinks ?? true;
 
-			// Phase 1: resolve every source upfront so the shared progress bar
-			// knows its total. A resolve failure (bad path, glob with no base) is
-			// captured per-source so one bad arg doesn't abort the whole batch.
-			type ResolveOutcome = { source: string; resolved: ResolvedSource } | { source: string; error: Error };
-			const outcomes: ResolveOutcome[] = [];
-			for (const source of sources) {
-				try {
-					const resolved = await resolveSource(source, {
-						include: rest.include,
-						exclude: rest.exclude,
-						followSymlinks,
-					});
-					outcomes.push({ source, resolved });
-				} catch (err) {
-					outcomes.push({ source, error: err instanceof Error ? err : new Error(String(err)) });
-				}
+		// Phase 1: resolve every source upfront — outside the embedder pool
+		// so we can size the pool by the actual entry count. The shared
+		// progress bar also needs the total before anything starts ticking.
+		// A resolve failure (bad path, glob with no base) is captured
+		// per-source so one bad arg doesn't abort the whole batch.
+		type ResolveOutcome = { source: string; resolved: ResolvedSource } | { source: string; error: Error };
+		const outcomes: ResolveOutcome[] = [];
+		for (const source of sources) {
+			try {
+				const resolved = await resolveSource(source, {
+					include: rest.include,
+					exclude: rest.exclude,
+					followSymlinks,
+				});
+				outcomes.push({ source, resolved });
+			} catch (err) {
+				outcomes.push({ source, error: err instanceof Error ? err : new Error(String(err)) });
 			}
+		}
 
-			const total = outcomes.reduce((n, o) => ("error" in o ? n + 1 : n + countResolvedEntries(o.resolved)), 0);
+		const total = outcomes.reduce((n, o) => ("error" in o ? n + 1 : n + countResolvedEntries(o.resolved)), 0);
 
+		// Spin up an ephemeral embedder pool for the whole `add` command,
+		// clamped by the actual entry count: a single-file add hits the
+		// `workers <= 1` inline short-circuit in withEmbedderPool and
+		// avoids spawning N subprocesses (each loads ~130MB of weights).
+		// `withEmbedderPool` disposes the children when the closure
+		// returns; inside it, every embed() call fans out automatically.
+		const configuredWorkers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
+		const workers = Math.max(1, Math.min(configuredWorkers, total));
+		return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
 			const aggregated: IngestResult = {
 				ingested: [],
 				total: 0,
