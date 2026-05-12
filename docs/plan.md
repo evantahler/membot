@@ -126,6 +126,71 @@ next step:
 The refresh daemon depends on this property — it runs unattended and
 must never block on a browser window.
 
+## Apple Notes ingest
+
+`apple-notes:<scope>` is a fourth `ResolvedSource` kind alongside
+`inline`, `url`, and `local-files`. The scope syntax mirrors filesystem
+globs: `apple-notes:[<account-glob>[/<folder-glob>]]`, e.g.
+`apple-notes:Personal/Recipes/**`. `picomatch` (already a project dep)
+handles matching.
+
+The underlying transport is the [`macos-ts`](https://www.npmjs.com/package/macos-ts)
+package, which opens `~/Library/Group Containers/group.com.apple.notes/NoteStore.sqlite`
+directly via `bun:sqlite`, walks Apple's CoreData schema, and decodes
+each note's gzip'd protobuf body to markdown in-process. No
+AppleScript, no `osascript` subprocess, no browser — just a fast local
+SQLite read. macOS-only; non-darwin platforms throw a `HelpfulError`
+at the resolver boundary.
+
+```
+membot add "apple-notes:Personal/Recipes/**"
+  ↓
+source-resolver detects `apple-notes:` prefix
+  ↓
+parseAppleNotesScope → { accountPattern, folderPattern }
+  ↓
+openAppleNotes() opens reader (macos-ts → bun:sqlite)
+  ↓
+enumerateNotes walks accounts × folders × notes, picomatch-filtered
+  ↓
+ResolvedSource { kind: "apple-notes", entries: EnumeratedNote[] }
+  ↓
+ingestAppleNotesEntries: pMap worker pool
+  per note:
+    fast-path unchanged check: source_mtime_ms === note.modifiedAt
+    fetchEnumeratedNote(reader, noteId) → markdown
+    describe → chunk → embed → persist
+  ↓
+persist row: downloader="apple-notes",
+            downloader_args={noteId, accountName, folderName, title},
+            source_type="remote",
+            source_path="apple-notes://note/<noteId>"
+```
+
+`refreshAppleNote` (in `src/refresh/runner.ts`) is a hard branch in
+`refreshOne` that dispatches on `downloader === "apple-notes"`. It
+opens a reader, replays `fetchNoteForRefresh(reader, noteId)`, and
+re-runs describe → chunk → embed → persist. No converter call (the
+markdown is already markdown). A `NoteNotFoundError` becomes a
+`HelpfulError` pointing the user at `--sync`.
+
+`--sync` (on `membot add apple-notes:...`) tombstones every current
+`apple-notes/*` row inside the scope whose `noteId` is missing from
+the live enumeration. Scope-aware so a narrow add doesn't tombstone
+notes outside its filter.
+
+Permissions: requires Full Disk Access for the host process.
+`macos-ts`'s `DatabaseAccessDeniedError` is mapped to a `HelpfulError`
+whose hint names the exact System Settings pane to open. The single
+interactive recovery is the user toggling the permission in
+System Settings — not a flow we control.
+
+Out of scope for v1 (called out in `--help`, skill docs, README):
+attachments, password-protected notes (skipped per-entry), shared-note
+participants, two-way sync, iCloud-only notes not synced down,
+hashtags / pinned state / smart folders, automatic refresh
+(`refresh_frequency_sec` is not set by default).
+
 ## Data model
 
 ```sql

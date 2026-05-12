@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { resolveEmbeddingWorkers } from "../context.ts";
+import { parseAppleNotesScope, syncTombstoneAppleNotes } from "../ingest/apple-notes/index.ts";
 import { withEmbedderPool } from "../ingest/embedder-pool.ts";
 import {
 	countResolvedEntries,
@@ -24,6 +25,7 @@ export const addOperation = defineOperation({
   - a local directory (recursive walk, symlinks followed)
   - a glob pattern (e.g. "docs/**/*.md")
   - a URL (fetched via the per-service downloader registry — Google Docs/Sheets/Slides via export endpoints, GitHub + Linear as rendered HTML, anything else through a generic browser print-to-PDF fallback. All fetches authenticate via the user's logged-in browser session — run \`membot login\` once to sign in.)
+  - "apple-notes:[<account-glob>[/<folder-glob>]]" — import Apple Notes (macOS-only). Examples: \`apple-notes:\` (everything), \`apple-notes:Personal/Recipes\`, \`apple-notes:Personal/Recipes/**\`, \`apple-notes:*/Archive\`. Requires Full Disk Access for your terminal in System Settings → Privacy & Security. Pass \`--sync\` to tombstone rows whose notes have been deleted from Notes.app.
   - "inline:<text>" literal
 Pass any number of args; each is resolved independently and the matched entries are concatenated into one response. PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, Claude vision for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. By default, re-ingesting an unchanged source (same source_sha256 as the current version) is a no-op and reports \`status: "unchanged"\`; pass \`force=true\` to always create a new version. Each newly-ingested file becomes a new version under its own logical_path; existing versions stay queryable via membot_versions. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status.
 
@@ -69,6 +71,12 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 			.boolean()
 			.optional()
 			.describe("Re-ingest even when source bytes are unchanged. Default skips and reports `unchanged`."),
+		sync: z
+			.boolean()
+			.optional()
+			.describe(
+				"For `apple-notes:` sources: after ingest, tombstone any current rows under the same scope whose underlying note has been deleted in Notes.app. No-op for other source kinds.",
+			),
 	}),
 	outputSchema: z.object({
 		ingested: z.array(
@@ -89,6 +97,10 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 		ok: z.number(),
 		unchanged: z.number(),
 		failed: z.number(),
+		tombstoned: z
+			.array(z.string())
+			.optional()
+			.describe("Logical paths tombstoned by `--sync` because the underlying Apple Note was deleted."),
 	}),
 	cli: {
 		positional: ["sources"],
@@ -98,6 +110,9 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 		const parts: string[] = [colors.green(`added ${result.ok}`)];
 		if (result.unchanged > 0) parts.push(colors.dim(`unchanged ${result.unchanged}`));
 		if (result.failed > 0) parts.push(colors.red(`failed ${result.failed}`));
+		if (result.tombstoned && result.tombstoned.length > 0) {
+			parts.push(colors.yellow(`tombstoned ${result.tombstoned.length}`));
+		}
 		const summary = parts.join(", ");
 
 		// In interactive mode, every entry was already streamed to stderr via
@@ -144,14 +159,16 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 		// returns; inside it, every embed() call fans out automatically.
 		const configuredWorkers = resolveEmbeddingWorkers(ctx.config.embedding.workers);
 		const workers = Math.max(1, Math.min(configuredWorkers, total));
+		const shouldSync = input.sync === true;
 		return withEmbedderPool(workers, ctx.config.embedding_model, async () => {
-			const aggregated: IngestResult = {
+			const aggregated: IngestResult & { tombstoned?: string[] } = {
 				ingested: [],
 				total: 0,
 				ok: 0,
 				unchanged: 0,
 				failed: 0,
 			};
+			const tombstoned: string[] = [];
 
 			ctx.progress.start(total, "ingest");
 			const callbacks: IngestCallbacks = {
@@ -207,6 +224,13 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 					aggregated.ok += r.ok;
 					aggregated.unchanged += r.unchanged;
 					aggregated.failed += r.failed;
+
+					if (shouldSync && outcome.resolved.kind === "apple-notes") {
+						const scope = parseAppleNotesScope(outcome.source);
+						const liveIds = new Set<number>(outcome.resolved.entries.map((e) => e.noteId));
+						const syncRes = await syncTombstoneAppleNotes(ctx, scope, liveIds);
+						tombstoned.push(...syncRes.tombstoned);
+					}
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
 					const failed: IngestEntryResult = {
@@ -234,7 +258,10 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 				}
 			}
 
-			const summary = formatSummary(aggregated);
+			if (tombstoned.length > 0) {
+				aggregated.tombstoned = tombstoned;
+			}
+			const summary = formatSummary(aggregated, tombstoned.length);
 			ctx.progress.done(summary);
 			return aggregated;
 		});
@@ -264,9 +291,10 @@ function formatEntryLine(entry: IngestEntryResult): string {
 }
 
 /** Compose the final spinner-success line summarising the whole batch. */
-function formatSummary(r: IngestResult): string {
+function formatSummary(r: IngestResult, tombstoned = 0): string {
 	const parts: string[] = [`added ${r.ok}/${r.total}`];
 	if (r.unchanged > 0) parts.push(`${r.unchanged} unchanged`);
 	if (r.failed > 0) parts.push(`${r.failed} failed`);
+	if (tombstoned > 0) parts.push(`${tombstoned} tombstoned`);
 	return parts.join(", ");
 }

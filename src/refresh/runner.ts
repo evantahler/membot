@@ -5,6 +5,7 @@ import { upsertBlob } from "../db/blobs.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { type FetcherKind, getCurrent, insertVersion, millisIso, updateRefreshStatus } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
+import { fetchNoteForRefresh, openAppleNotes } from "../ingest/apple-notes/index.ts";
 import { chunkDeterministic } from "../ingest/chunker.ts";
 import { convert } from "../ingest/converter/index.ts";
 import { describe } from "../ingest/describer.ts";
@@ -51,6 +52,9 @@ export async function refreshOne(
 	}
 
 	try {
+		if (cur.downloader === "apple-notes") {
+			return await refreshAppleNote(ctx, cur, force, onPhase);
+		}
 		if (cur.source_type === "local") {
 			return await refreshLocal(ctx, cur, force, onPhase);
 		}
@@ -184,6 +188,107 @@ async function refreshRemote(
 		onPhase,
 	);
 	return { logical_path: cur.logical_path, status: "ok", new_version_id: versionId };
+}
+
+/**
+ * Apple Notes refresh: re-fetch the markdown from macos-ts using the
+ * `noteId` persisted in `downloader_args`. There is no fetched-bytes step
+ * — macos-ts hands us markdown directly — so the unchanged-check compares
+ * the source sha256 of the freshly-rendered markdown against the stored
+ * one. `mtime_ms` provides a faster gate: if the note's `modifiedAt` is
+ * unchanged we don't even decode the protobuf body.
+ */
+async function refreshAppleNote(
+	ctx: AppContext,
+	cur: CurrentRow,
+	force: boolean,
+	onPhase?: (sublabel: string) => void,
+): Promise<RefreshOutcome> {
+	const noteId = readNoteId(cur);
+	const reader = openAppleNotes();
+	try {
+		const fetched = fetchNoteForRefresh(reader, noteId);
+		const markdownBytes = new TextEncoder().encode(fetched.markdown);
+		const sha = sha256Hex(markdownBytes);
+		const mtimeMs = fetched.modifiedAt.getTime();
+
+		if (!force && cur.source_sha256 === sha) {
+			await updateRefreshStatus(ctx.db, cur.logical_path, cur.version_id, {
+				refreshed_at: new Date().toISOString(),
+				last_refresh_status: "unchanged",
+			});
+			return { logical_path: cur.logical_path, status: "unchanged" };
+		}
+
+		onPhase?.("describing");
+		const description = await describe(cur.logical_path, "text/markdown", fetched.markdown, ctx.config.llm);
+		onPhase?.("chunking");
+		const chunks = chunkDeterministic(fetched.markdown, ctx.config.chunker);
+		const searchTexts = chunks.map((c) => buildSearchText(cur.logical_path, description, c.content));
+		const embeddings = await embed(searchTexts, ctx.config.embedding_model, {
+			onProgress: (done, total) => onPhase?.(`embedding ${done}/${total}`),
+		});
+
+		const versionId = millisIso(Date.now());
+		await insertVersion(ctx.db, {
+			logical_path: cur.logical_path,
+			version_id: versionId,
+			source_type: "remote",
+			source_path: fetched.sourcePath,
+			source_mtime_ms: mtimeMs,
+			source_sha256: sha,
+			blob_sha256: null,
+			content_sha256: sha,
+			content: fetched.markdown,
+			description,
+			mime_type: "text/markdown",
+			size_bytes: markdownBytes.byteLength,
+			fetcher: "downloader",
+			downloader: "apple-notes",
+			downloader_args: fetched.downloaderArgs,
+			refresh_frequency_sec: cur.refresh_frequency_sec,
+			refreshed_at: new Date().toISOString(),
+			last_refresh_status: "ok",
+			change_note: "refresh: apple-notes updated",
+		});
+
+		onPhase?.("persisting");
+		await insertChunksForVersion(
+			ctx.db,
+			cur.logical_path,
+			versionId,
+			chunks.map((c, i) => ({
+				chunk_index: c.index,
+				chunk_content: c.content,
+				search_text: searchTexts[i] ?? buildSearchText(cur.logical_path, description, c.content),
+				embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
+			})),
+		);
+
+		onPhase?.("indexing");
+		await rebuildFts(ctx.db);
+		return { logical_path: cur.logical_path, status: "ok", new_version_id: versionId };
+	} finally {
+		reader.close();
+	}
+}
+
+/**
+ * Extract the macos-ts noteId from a row's `downloader_args`. Throws a
+ * HelpfulError if the args are malformed — that indicates a row written by
+ * a future membot version we don't understand, not a missing note.
+ */
+function readNoteId(cur: CurrentRow): number {
+	const args = cur.downloader_args ?? {};
+	const raw = (args as Record<string, unknown>).noteId;
+	if (typeof raw !== "number" || !Number.isFinite(raw)) {
+		throw new HelpfulError({
+			kind: "input_error",
+			message: `Apple Notes row ${cur.logical_path} has no usable noteId in downloader_args`,
+			hint: "Re-ingest with `membot add apple-notes:...` to repair provenance, or remove the row with `membot remove`.",
+		});
+	}
+	return raw;
 }
 
 interface PipelineParams {

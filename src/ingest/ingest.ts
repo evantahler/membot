@@ -5,6 +5,8 @@ import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { type FetcherKind, getCurrent, insertVersion, millisIso, type SourceType } from "../db/files.ts";
 import { asHelpful, HelpfulError } from "../errors.ts";
 import { pieFor } from "../output/progress.ts";
+import { type EnumeratedNote, fetchEnumeratedNote, openAppleNotes } from "./apple-notes/index.ts";
+import { disambiguateLogicalPath } from "./apple-notes/logical-path.ts";
 import { chunkDeterministic } from "./chunker.ts";
 import { AsyncMutex, pMap } from "./concurrency.ts";
 import { convert } from "./converter/index.ts";
@@ -88,6 +90,7 @@ export interface IngestCallbacks {
  */
 export function countResolvedEntries(resolved: ResolvedSource): number {
 	if (resolved.kind === "local-files") return resolved.entries.length;
+	if (resolved.kind === "apple-notes") return resolved.entries.length;
 	return 1;
 }
 
@@ -158,6 +161,9 @@ export async function ingestResolved(
 	}
 	if (resolved.kind === "url") {
 		return ingestUrl(resolved.url, input, ctx, refreshSec, force, callbacks);
+	}
+	if (resolved.kind === "apple-notes") {
+		return ingestAppleNotesEntries(resolved, input, ctx, refreshSec, force, callbacks);
 	}
 	return ingestLocalFiles(resolved, input, ctx, refreshSec, force, callbacks);
 }
@@ -461,6 +467,199 @@ async function ingestLocalFiles(
 	}
 
 	return summarize(results);
+}
+
+/**
+ * Ingest notes enumerated from Apple Notes. Each note's markdown comes
+ * straight from macos-ts (already decoded from the gzip'd protobuf body),
+ * so the converter step is skipped entirely. Persisted rows carry
+ * `downloader='apple-notes'` + `downloader_args={noteId,...}` so refresh
+ * can replay deterministically.
+ */
+async function ingestAppleNotesEntries(
+	resolved: Extract<ResolvedSource, { kind: "apple-notes" }>,
+	input: IngestInput,
+	ctx: AppContext,
+	refreshSec: number | null,
+	force: boolean,
+	callbacks?: IngestCallbacks,
+): Promise<IngestResult> {
+	if (resolved.entries.length === 0) {
+		throw new HelpfulError({
+			kind: "input_error",
+			message: `Apple Notes scope ${resolved.raw} matched 0 notes`,
+			hint: `Run \`membot add apple-notes:\` with no scope to import everything, or inspect available folders with the Notes app sidebar.`,
+		});
+	}
+
+	const logicalPaths = assignLogicalPaths(resolved.entries);
+	const configured = Math.min(DEFAULTS.MAX_WORKERS, Math.max(1, ctx.config.ingest.worker_concurrency));
+	const workerCount = Math.max(1, Math.min(configured, resolved.entries.length));
+	callbacks?.onWorkerCount?.(workerCount);
+	const persistMutex = new AsyncMutex();
+	let anyOk = false;
+
+	const reader = openAppleNotes();
+	try {
+		const outcomes = await pMap(resolved.entries, workerCount, async (entry, index, workerId) => {
+			const logicalPath = logicalPaths[index] ?? entry.defaultLogicalPath;
+			const label = `${entry.accountName}/${entry.folderName}/${entry.title || "untitled"}`;
+			const sourcePath = `apple-notes://note/${entry.noteId}`;
+			const result: IngestEntryResult = {
+				source_path: sourcePath,
+				logical_path: logicalPath,
+				version_id: null,
+				status: "ok",
+				mime_type: "text/markdown",
+				size_bytes: 0,
+				chunk_count: null,
+				fetcher: "downloader",
+				source_sha256: "",
+			};
+			callbacks?.onEntryStart?.(label, workerId);
+			const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(label, sublabel, workerId);
+			try {
+				// Fast unchanged check: skip the readNote() call entirely when
+				// the stored row's source_mtime_ms matches the note's
+				// modifiedAt. Notes.app bumps modifiedAt on every edit, so
+				// this is a tight gate that costs zero protobuf decoding.
+				if (!force) {
+					const cur = await getCurrent(ctx.db, logicalPath);
+					const mtimeMs = entry.modifiedAt.getTime();
+					if (cur && cur.source_mtime_ms === mtimeMs) {
+						result.status = "unchanged";
+						result.version_id = cur.version_id;
+						result.source_sha256 = cur.source_sha256 ?? "";
+						result.size_bytes = cur.size_bytes ?? 0;
+						callbacks?.onEntryComplete?.(result, workerId);
+						return result;
+					}
+				}
+
+				onPhase("reading note");
+				const fetched = fetchEnumeratedNote(reader, entry.noteId);
+				const markdownBytes = new TextEncoder().encode(fetched.markdown);
+				const sha = sha256Hex(markdownBytes);
+				result.source_sha256 = sha;
+				result.size_bytes = markdownBytes.byteLength;
+
+				// Second-chance unchanged check: source_sha256 matches even
+				// though modifiedAt bumped (e.g. user added then removed the
+				// same character). Avoids re-embedding.
+				if (!force) {
+					const cur = await getCurrent(ctx.db, logicalPath);
+					if (cur && cur.source_sha256 === sha) {
+						result.status = "unchanged";
+						result.version_id = cur.version_id;
+						callbacks?.onEntryComplete?.(result, workerId);
+						return result;
+					}
+				}
+
+				onPhase("describing");
+				const description = await describe(logicalPath, "text/markdown", fetched.markdown, ctx.config.llm);
+
+				onPhase("chunking");
+				const chunks = chunkDeterministic(fetched.markdown, ctx.config.chunker);
+				const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content));
+
+				let embeddings: number[][];
+				try {
+					embeddings = await embed(searchTexts, ctx.config.embedding_model, {
+						onProgress: (done, total) => onPhase(`embedding ${done}/${total}`),
+					});
+				} catch (err) {
+					throw asHelpful(
+						err,
+						`while embedding chunks for ${logicalPath}`,
+						"Run `bun run prebuild` to apply the transformers WASM patch, or set a different config.embedding_model.",
+					);
+				}
+
+				// Use the enumerated entry's resolved accountName (e.g. "iCloud"
+				// derived from listAccounts()) rather than the raw note row's
+				// often-blank accountName, so --sync can match scopes against it.
+				const downloaderArgs: Record<string, unknown> = {
+					noteId: entry.noteId,
+					accountName: entry.accountName,
+					folderName: entry.folderName,
+					title: entry.title,
+				};
+				const versionId = await persistMutex.lock(async () => {
+					onPhase("persisting");
+					return persistOne(ctx, {
+						logicalPath,
+						sourceType: "remote",
+						sourcePath: fetched.sourcePath,
+						sourceMtimeMs: entry.modifiedAt.getTime(),
+						sourceSha: sha,
+						blobSha: null,
+						mime: "text/markdown",
+						bytes: null,
+						markdown: fetched.markdown,
+						description,
+						chunks,
+						searchTexts,
+						embeddings,
+						fetcher: "downloader",
+						downloader: "apple-notes",
+						downloaderArgs,
+						refreshSec,
+						changeNote: input.change_note ?? null,
+					});
+				});
+				result.version_id = versionId;
+				result.chunk_count = chunks.length;
+				anyOk = true;
+				callbacks?.onChunks?.(chunks.length);
+			} catch (err) {
+				result.status = "failed";
+				result.error = errorMessage(err);
+			}
+			callbacks?.onEntryComplete?.(result, workerId);
+			return result;
+		});
+
+		const results: IngestEntryResult[] = outcomes.map((o) =>
+			o.ok
+				? o.value
+				: {
+						source_path: "",
+						logical_path: "",
+						version_id: null,
+						status: "failed",
+						error: errorMessage(o.error),
+						mime_type: null,
+						size_bytes: 0,
+						chunk_count: null,
+						fetcher: "downloader",
+						source_sha256: "",
+					},
+		);
+
+		if (anyOk) {
+			await rebuildFts(ctx.db);
+		}
+		return summarize(results);
+	} finally {
+		reader.close();
+	}
+}
+
+/**
+ * Resolve logical_path collisions among an enumerated batch. Two notes
+ * with the same default path (e.g. same title in the same folder) get a
+ * deterministic `-<noteId>` suffix so both land in the store under
+ * distinct paths. Returns one logical_path per entry, parallel to the
+ * input array.
+ */
+function assignLogicalPaths(entries: EnumeratedNote[]): string[] {
+	const counts = new Map<string, number>();
+	for (const e of entries) counts.set(e.defaultLogicalPath, (counts.get(e.defaultLogicalPath) ?? 0) + 1);
+	return entries.map((e) => {
+		if ((counts.get(e.defaultLogicalPath) ?? 0) <= 1) return e.defaultLogicalPath;
+		return disambiguateLogicalPath(e.defaultLogicalPath, String(e.noteId).padStart(8, "0"));
+	});
 }
 
 /**

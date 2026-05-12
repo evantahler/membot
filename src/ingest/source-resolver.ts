@@ -3,6 +3,13 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import picomatch from "picomatch";
 import { asHelpful, HelpfulError } from "../errors.ts";
+import {
+	APPLE_NOTES_PREFIX,
+	type EnumeratedNote,
+	enumerateNotes,
+	openAppleNotes,
+	parseAppleNotesScope,
+} from "./apple-notes/index.ts";
 
 /**
  * Expand a leading `~` or `~/` to the user's home directory. The shell does
@@ -20,7 +27,8 @@ function expandHome(p: string): string {
 export type ResolvedSource =
 	| { kind: "inline"; text: string; logicalHint: string | null }
 	| { kind: "url"; url: string; logicalHint: string | null }
-	| { kind: "local-files"; entries: ResolvedLocalEntry[]; basePath: string; filtered?: boolean };
+	| { kind: "local-files"; entries: ResolvedLocalEntry[]; basePath: string; filtered?: boolean }
+	| { kind: "apple-notes"; raw: string; entries: EnumeratedNote[] };
 
 export interface ResolvedLocalEntry {
 	/** Absolute filesystem path (post-realpath). */
@@ -96,6 +104,9 @@ export function expandUserPattern(p: string): string[] {
 export async function resolveSource(source: string, options: ResolveOptions = {}): Promise<ResolvedSource> {
 	if (source.startsWith("inline:")) {
 		return { kind: "inline", text: source.slice("inline:".length), logicalHint: null };
+	}
+	if (source.startsWith(APPLE_NOTES_PREFIX)) {
+		return resolveAppleNotes(source);
 	}
 	if (source.startsWith("http://") || source.startsWith("https://")) {
 		return { kind: "url", url: source, logicalHint: null };
@@ -187,6 +198,23 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 		message: `${source} is neither a file, directory, nor URL`,
 		hint: `Pass a file path, directory, glob (e.g. "docs/**/*.md"), URL, or "inline:<text>".`,
 	});
+}
+
+/**
+ * Resolve an `apple-notes:` scope by opening the live NoteStore.sqlite,
+ * enumerating every matching note, then closing the reader. The reader is
+ * reopened later inside `ingestAppleNotes` for the actual fetch — two
+ * cheap opens beats keeping a connection alive across the async boundary.
+ */
+function resolveAppleNotes(source: string): ResolvedSource {
+	const scope = parseAppleNotesScope(source);
+	const reader = openAppleNotes();
+	try {
+		const entries = enumerateNotes(scope, reader);
+		return { kind: "apple-notes", raw: source, entries };
+	} finally {
+		reader.close();
+	}
 }
 
 /** Crude glob detector — matches what picomatch treats as a pattern. */
