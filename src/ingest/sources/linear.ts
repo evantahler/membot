@@ -1,11 +1,26 @@
+import { z } from "zod";
 import { HelpfulError } from "../../errors.ts";
 import { sha256Hex } from "../local-reader.ts";
-import type { DownloadedRemote, Downloader } from "./index.ts";
+import { defaultUrlHint, pluginConfig, registerSource } from "./registry.ts";
+import { type BatchFetcher, type DownloadedRemote, defineSourcePlugin } from "./types.ts";
 
 const ISSUE_PATH = /^\/([^/]+)\/issue\/([A-Z]+-\d+)(?:$|\/|#|\?)/;
 const PROJECT_PATH = /^\/([^/]+)\/project\/([^/?#]+)/;
-
 const GRAPHQL_ENDPOINT = "https://api.linear.app/graphql";
+
+const linearConfigSchema = z.object({
+	api_key: z.string().meta({ secret: true }).default(""),
+});
+
+interface LinearArgs extends Record<string, unknown> {
+	kind: "issue" | "project";
+	workspace: string;
+	identifier?: string;
+	slug?: string;
+	slug_id?: string;
+}
+
+type LinearConfig = z.infer<typeof linearConfigSchema>;
 
 /**
  * Linear's web app uses a sophisticated cookie + signed-request scheme
@@ -15,14 +30,19 @@ const GRAPHQL_ENDPOINT = "https://api.linear.app/graphql";
  * `api.linear.app/graphql` with a personal API key — set up once via
  * `membot config set downloaders.linear.api_key <KEY>` after creating
  * the key at https://linear.app/settings/api.
- *
- * The API gives us the structured issue/project payload (title, body,
- * comments, status, …) directly; we render it to markdown
- * deterministically rather than scraping the rendered DOM.
  */
-export const linearDownloader: Downloader = {
+const linearPlugin = defineSourcePlugin<LinearConfig, LinearArgs>({
 	name: "linear",
-	description: "Linear (linear.app/<workspace>/issue/<KEY> and /project/<slug>) — uses the Linear API.",
+	description: "Linear issues & projects — uses the Linear GraphQL API with a personal access key.",
+	examples: ["https://linear.app/<workspace>/issue/<KEY>", "https://linear.app/<workspace>/project/<slug>"],
+	notes:
+		"Requires a personal API key from https://linear.app/settings/api. Set it via `membot config set downloaders.linear.api_key <KEY>`.",
+	match: {
+		kind: "url",
+		matches: (url) =>
+			url.hostname === "linear.app" && (ISSUE_PATH.test(url.pathname) || PROJECT_PATH.test(url.pathname)),
+	},
+	config: { key: "linear", schema: linearConfigSchema },
 	logins: [
 		{
 			kind: "api_key",
@@ -33,56 +53,77 @@ export const linearDownloader: Downloader = {
 		},
 	],
 	requiresApiKey: true,
-	matches(url) {
-		return url.hostname === "linear.app" && (ISSUE_PATH.test(url.pathname) || PROJECT_PATH.test(url.pathname));
+	async enumerate(source) {
+		const url = new URL(source);
+		const cursor = parseLinearUrl(url);
+		return [{ source: url.toString(), logicalPathHint: defaultUrlHint(url), cursor }];
 	},
-	async download(url, ctx): Promise<DownloadedRemote> {
-		const apiKey = ctx.config.downloaders.linear.api_key.trim();
-		if (apiKey === "") {
-			throw new HelpfulError({
-				kind: "auth_error",
-				message: `Linear API key not configured.`,
-				hint: "Create a personal API key at https://linear.app/settings/api, then run `membot config set downloaders.linear.api_key <KEY>`.",
-			});
-		}
-
-		const issueMatch = url.pathname.match(ISSUE_PATH);
-		const projectMatch = url.pathname.match(PROJECT_PATH);
-		let markdown: string;
-		let downloaderArgs: Record<string, unknown>;
-
-		if (issueMatch) {
-			const identifier = issueMatch[2] as string;
-			ctx.onProgress?.(`querying issue ${identifier}`);
-			const issue = await fetchIssue(identifier, apiKey, url);
-			markdown = renderIssue(issue);
-			downloaderArgs = { kind: "issue", workspace: issueMatch[1], identifier };
-		} else if (projectMatch) {
-			const slug = projectMatch[2] as string;
-			const slugId = extractProjectSlugId(slug);
-			ctx.onProgress?.(`querying project ${slugId}`);
-			const project = await fetchProject(slugId, apiKey, url);
-			markdown = renderProject(project);
-			downloaderArgs = { kind: "project", workspace: projectMatch[1], slug, slug_id: slugId };
-		} else {
-			throw new HelpfulError({
-				kind: "input_error",
-				message: `not a Linear issue/project URL: ${url.toString()}`,
-				hint: "Pass a URL like https://linear.app/<workspace>/issue/<KEY> or .../project/<slug>.",
-			});
-		}
-
-		const bytes = new TextEncoder().encode(markdown);
+	rehydrateEntry(source, args) {
+		const url = new URL(source);
+		return { source: url.toString(), logicalPathHint: defaultUrlHint(url), cursor: args };
+	},
+	async openBatchFetcher(): Promise<BatchFetcher<LinearArgs>> {
 		return {
-			bytes,
-			sha256: sha256Hex(bytes),
-			mimeType: "text/markdown",
-			downloader: "linear",
-			downloaderArgs,
-			sourceUrl: url.toString(),
+			async fetch(entry, ctx): Promise<DownloadedRemote> {
+				const cfg = pluginConfig(ctx, linearPlugin);
+				const apiKey = cfg.api_key.trim();
+				if (apiKey === "") {
+					throw new HelpfulError({
+						kind: "auth_error",
+						message: `Linear API key not configured.`,
+						hint: "Create a personal API key at https://linear.app/settings/api, then run `membot config set downloaders.linear.api_key <KEY>`.",
+					});
+				}
+				const url = new URL(entry.source);
+				const args = entry.cursor;
+				let markdown: string;
+				if (args.kind === "issue") {
+					const identifier = args.identifier as string;
+					ctx.onProgress?.(`querying issue ${identifier}`);
+					const issue = await fetchIssue(identifier, apiKey, url);
+					markdown = renderIssue(issue);
+				} else {
+					const slugId = args.slug_id as string;
+					ctx.onProgress?.(`querying project ${slugId}`);
+					const project = await fetchProject(slugId, apiKey, url);
+					markdown = renderProject(project);
+				}
+				const bytes = new TextEncoder().encode(markdown);
+				return {
+					bytes,
+					sha256: sha256Hex(bytes),
+					mimeType: "text/markdown",
+					downloader: "linear",
+					downloaderArgs: args,
+					sourceUrl: url.toString(),
+				};
+			},
+			async close() {},
 		};
 	},
-};
+});
+
+function parseLinearUrl(url: URL): LinearArgs {
+	const issueMatch = url.pathname.match(ISSUE_PATH);
+	if (issueMatch) {
+		return { kind: "issue", workspace: issueMatch[1] as string, identifier: issueMatch[2] as string };
+	}
+	const projectMatch = url.pathname.match(PROJECT_PATH);
+	if (projectMatch) {
+		const slug = projectMatch[2] as string;
+		return {
+			kind: "project",
+			workspace: projectMatch[1] as string,
+			slug,
+			slug_id: extractProjectSlugId(slug),
+		};
+	}
+	throw new HelpfulError({
+		kind: "input_error",
+		message: `not a Linear issue/project URL: ${url.toString()}`,
+		hint: "Pass a URL like https://linear.app/<workspace>/issue/<KEY> or .../project/<slug>.",
+	});
+}
 
 interface LinearUser {
 	name?: string | null;
@@ -174,11 +215,6 @@ async function fetchProject(slugId: string, apiKey: string, url: URL): Promise<L
 	return project;
 }
 
-/**
- * The trailing token on a Linear project URL is `<name>-<slugId>`,
- * where `slugId` is a 12-char hex suffix. Linear's API matches by
- * `slugId` exactly, so we slice the suffix off here.
- */
 function extractProjectSlugId(slug: string): string {
 	const match = slug.match(/-([0-9a-f]{8,})$/i);
 	return match ? (match[1] as string) : slug;
@@ -187,10 +223,7 @@ function extractProjectSlugId(slug: string): string {
 async function graphql<T>(apiKey: string, query: string, variables: Record<string, unknown>, url: URL): Promise<T> {
 	const response = await fetch(GRAPHQL_ENDPOINT, {
 		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: apiKey,
-		},
+		headers: { "Content-Type": "application/json", Authorization: apiKey },
 		body: JSON.stringify({ query, variables }),
 	});
 	if (!response.ok) {
@@ -289,3 +322,8 @@ function userLabel(user: LinearUser): string {
 	if (user.email) return `${name} <${user.email}>`;
 	return name;
 }
+
+registerSource(linearPlugin);
+
+export type { LinearConfig };
+export { linearConfigSchema, linearPlugin };

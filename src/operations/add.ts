@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { resolveEmbeddingWorkers } from "../context.ts";
-import { parseAppleNotesScope, syncTombstoneAppleNotes } from "../ingest/apple-notes/index.ts";
 import { withEmbedderPool } from "../ingest/embedder-pool.ts";
 import {
 	countResolvedEntries,
@@ -10,6 +9,8 @@ import {
 	ingestResolved,
 } from "../ingest/ingest.ts";
 import { type ResolvedSource, resolveSource } from "../ingest/source-resolver.ts";
+import "../ingest/sources/index.ts"; // populate registry for description rendering
+import { renderSourceList } from "../ingest/sources/registry.ts";
 import { colors, formatBytes } from "../output/formatter.ts";
 import { pieFor } from "../output/progress.ts";
 import { isInteractive } from "../output/tty.ts";
@@ -24,14 +25,19 @@ export const addOperation = defineOperation({
   - a local file path
   - a local directory (recursive walk, symlinks followed)
   - a glob pattern (e.g. "docs/**/*.md")
-  - a URL (fetched via the per-service downloader registry — Google Docs/Sheets/Slides via export endpoints, GitHub + Linear as rendered HTML, anything else through a generic browser print-to-PDF fallback. All fetches authenticate via the user's logged-in browser session — run \`membot login\` once to sign in.)
-  - "apple-notes:[<account-glob>[/<folder-glob>]]" — import Apple Notes (macOS-only). Examples: \`apple-notes:\` (everything), \`apple-notes:Personal/Recipes\`, \`apple-notes:Personal/Recipes/**\`, \`apple-notes:*/Archive\`. Requires Full Disk Access for your terminal in System Settings → Privacy & Security. Pass \`--sync\` to tombstone rows whose notes have been deleted from Notes.app.
+  - a URL or scheme-prefixed source matching one of the registered source plugins (see below)
   - "inline:<text>" literal
-Pass any number of args; each is resolved independently and the matched entries are concatenated into one response. PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, Claude vision for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. By default, re-ingesting an unchanged source (same source_sha256 as the current version) is a no-op and reports \`status: "unchanged"\`; pass \`force=true\` to always create a new version. Each newly-ingested file becomes a new version under its own logical_path; existing versions stay queryable via membot_versions. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status.
+
+Registered source plugins:
+${renderSourceList()}
+
+Browser-auth plugins ([browser]) require \`membot login\` once to sign in. API-key plugins ([api_key]) require a credential in config — see \`membot login\` for the setup command. Plugins are inspectable at runtime with \`membot sources\` / the \`membot_sources\` MCP tool.
+
+Pass any number of args; each is resolved independently and the matched entries are concatenated into one response. PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, Claude vision for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. By default, re-ingesting an unchanged source (same source_sha256 as the current version) is a no-op and reports \`status: "unchanged"\`; pass \`force=true\` to always create a new version. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status. Pass \`--sync\` for plugins that support it (e.g. apple-notes) to tombstone rows whose entries have been deleted upstream.
 
 When \`logical_path\` is omitted, it is derived from the source so files with the same basename in different projects do not collide:
   - Local sources use the entry's absolute filesystem path with the leading "/" stripped (e.g. "/Users/me/projA/README.md" → "Users/me/projA/README.md").
-  - URLs use "remotes/{host}/{path}" with slashes preserved (e.g. "https://github.com/u/p/blob/main/README.md" → "remotes/github.com/u/p/blob/main/README.md"). Query strings and fragments are dropped from the logical_path; the full URL is still stored on the row for refresh.
+  - URLs use "remotes/{host}/{path}" with slashes preserved (e.g. "https://github.com/u/p/blob/main/README.md" → "remotes/github.com/u/p/blob/main/README.md"). Query strings and fragments are dropped; the full URL is still stored on the row for refresh.
   - "inline:<text>" defaults to "inline/{timestamp}.md".
 
 Pass \`logical_path\` to override. For a multi-source / directory / glob walk it is treated as a PREFIX — each entry is placed at "{prefix}/{path-relative-to-walk-base}". Re-running \`membot_add\` on the same source resolves to the same logical_path; if bytes are unchanged the call is a no-op (status \`unchanged\`), otherwise a new version is created.`,
@@ -142,6 +148,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 					include: rest.include,
 					exclude: rest.exclude,
 					followSymlinks,
+					pluginOverride: rest.downloader,
 				});
 				outcomes.push({ source, resolved });
 			} catch (err) {
@@ -225,10 +232,8 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 					aggregated.unchanged += r.unchanged;
 					aggregated.failed += r.failed;
 
-					if (shouldSync && outcome.resolved.kind === "apple-notes") {
-						const scope = parseAppleNotesScope(outcome.source);
-						const liveIds = new Set<number>(outcome.resolved.entries.map((e) => e.noteId));
-						const syncRes = await syncTombstoneAppleNotes(ctx, scope, liveIds);
+					if (shouldSync && outcome.resolved.kind === "plugin" && outcome.resolved.plugin.sync) {
+						const syncRes = await outcome.resolved.plugin.sync({ db: ctx.db, logger: ctx.logger }, outcome.source);
 						tombstoned.push(...syncRes.tombstoned);
 					}
 				} catch (err) {

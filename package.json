@@ -1,6 +1,6 @@
 {
 	"name": "membot",
-	"version": "0.14.0",
+	"version": "0.15.0",
 	"description": "Versioned context store with hybrid search for AI agents. Stdio + HTTP MCP server and CLI.",
 	"type": "module",
 	"exports": {
@@ -27,7 +27,9 @@
 		"lint": "biome ci . && tsc --noEmit",
 		"format": "biome check --write .",
 		"prebuild": "bash scripts/apply-patches.sh",
-		"build": "bun build --compile --minify --sourcemap --external '@duckdb/*' --external 'playwright*' --external 'macos-ts' ./src/cli.ts --outfile dist/membot"
+		"build": "bun build --compile --minify --sourcemap --external '@duckdb/*' --external 'playwright*' --external 'macos-ts' ./src/cli.ts --outfile dist/membot",
+		"docs:sources": "bun run scripts/generate-source-docs.ts",
+		"docs:sources:check": "bun run scripts/generate-source-docs.ts --check"
 	},
 	"keywords": [
 		"mcp",

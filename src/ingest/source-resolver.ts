@@ -3,13 +3,8 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import picomatch from "picomatch";
 import { asHelpful, HelpfulError } from "../errors.ts";
-import {
-	APPLE_NOTES_PREFIX,
-	type EnumeratedNote,
-	enumerateNotes,
-	openAppleNotes,
-	parseAppleNotesScope,
-} from "./apple-notes/index.ts";
+import { findSourceByName, findSourceForInput, listSources } from "./sources/registry.ts";
+import type { Entry, SourcePlugin } from "./sources/types.ts";
 
 /**
  * Expand a leading `~` or `~/` to the user's home directory. The shell does
@@ -26,9 +21,13 @@ function expandHome(p: string): string {
 
 export type ResolvedSource =
 	| { kind: "inline"; text: string; logicalHint: string | null }
-	| { kind: "url"; url: string; logicalHint: string | null }
-	| { kind: "local-files"; entries: ResolvedLocalEntry[]; basePath: string; filtered?: boolean }
-	| { kind: "apple-notes"; raw: string; entries: EnumeratedNote[] };
+	| {
+			kind: "plugin";
+			plugin: SourcePlugin;
+			raw: string;
+			entries: Entry[];
+	  }
+	| { kind: "local-files"; entries: ResolvedLocalEntry[]; basePath: string; filtered?: boolean };
 
 export interface ResolvedLocalEntry {
 	/** Absolute filesystem path (post-realpath). */
@@ -46,6 +45,13 @@ export interface ResolveOptions {
 	include?: string;
 	exclude?: string;
 	followSymlinks?: boolean;
+	/**
+	 * Force a specific source plugin by name when the input matches a URL.
+	 * Bypasses URL-based matching so e.g. `--downloader generic-web` wins
+	 * over the more-specific google-docs plugin. Has no effect on scheme
+	 * sources (apple-notes:) or local files.
+	 */
+	pluginOverride?: string;
 }
 
 const DEFAULT_EXCLUDES = ["**/node_modules/**", "**/.git/**", "**/.DS_Store", "**/dist/**", "**/.cache/**"];
@@ -105,11 +111,23 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 	if (source.startsWith("inline:")) {
 		return { kind: "inline", text: source.slice("inline:".length), logicalHint: null };
 	}
-	if (source.startsWith(APPLE_NOTES_PREFIX)) {
-		return resolveAppleNotes(source);
+	if (options.pluginOverride) {
+		const named = findSourceByName(options.pluginOverride);
+		if (!named) {
+			const available = listSources()
+				.map((p) => p.name)
+				.join(", ");
+			throw new HelpfulError({
+				kind: "input_error",
+				message: `unknown source plugin '${options.pluginOverride}'`,
+				hint: `Pick one of: ${available}.`,
+			});
+		}
+		return await resolveViaPlugin(named, source);
 	}
-	if (source.startsWith("http://") || source.startsWith("https://")) {
-		return { kind: "url", url: source, logicalHint: null };
+	const plugin = findSourceForInput(source);
+	if (plugin) {
+		return await resolveViaPlugin(plugin, source);
 	}
 
 	source = expandHome(source);
@@ -201,20 +219,15 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 }
 
 /**
- * Resolve an `apple-notes:` scope by opening the live NoteStore.sqlite,
- * enumerating every matching note, then closing the reader. The reader is
- * reopened later inside `ingestAppleNotes` for the actual fetch — two
- * cheap opens beats keeping a connection alive across the async boundary.
+ * Resolve a plugin-matched source (URL or scheme prefix). The plugin's
+ * own `enumerate` is the source of truth — URL plugins yield one entry,
+ * scheme plugins like apple-notes yield many. The plugin owns whatever
+ * resources (sqlite reader, browser cookies) it needs to open and close
+ * during enumeration.
  */
-function resolveAppleNotes(source: string): ResolvedSource {
-	const scope = parseAppleNotesScope(source);
-	const reader = openAppleNotes();
-	try {
-		const entries = enumerateNotes(scope, reader);
-		return { kind: "apple-notes", raw: source, entries };
-	} finally {
-		reader.close();
-	}
+async function resolveViaPlugin(plugin: SourcePlugin, source: string): Promise<ResolvedSource> {
+	const entries = await plugin.enumerate(source);
+	return { kind: "plugin", plugin, raw: source, entries };
 }
 
 /** Crude glob detector — matches what picomatch treats as a pattern. */

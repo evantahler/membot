@@ -59,7 +59,7 @@ export class BrowserPool {
 	 * Lazy-init the persistent context. The first call launches
 	 * chromium against `userDataDir` (creating it if needed); subsequent
 	 * calls reuse the same context so cookies, IDB, and inflight
-	 * navigation state stay shared across downloaders within one run.
+	 * navigation state stay shared across plugins within one run.
 	 */
 	private async ensureContext(): Promise<BrowserContext> {
 		if (this.context) return this.context;
@@ -81,7 +81,7 @@ export class BrowserPool {
 		return this.context;
 	}
 
-	/** Return the request context for downloaders that just need authenticated HTTP. */
+	/** Return the request context for plugins that just need authenticated HTTP. */
 	async request(): Promise<APIRequestContext> {
 		const ctx = await this.ensureContext();
 		return ctx.request;
@@ -111,7 +111,7 @@ export class BrowserPool {
 
 	/**
 	 * Return the cookies stored in the persistent profile for a given
-	 * URL/origin (or all cookies when omitted). Used by downloaders that
+	 * URL/origin (or all cookies when omitted). Used by plugins that
 	 * call services with their own HTTP client (e.g. Node's built-in
 	 * `fetch`) — they read the cookies once here and pass them via a
 	 * `Cookie` header. Bypasses Playwright's APIRequestContext, which
@@ -165,10 +165,10 @@ export class BrowserPool {
  * Resolve `maybeRelative` against `base` and return a `URL`, or `null`
  * if neither parses. Playwright's `APIResponse.url()` sometimes hands
  * back a path-only string (`"/"`) instead of an absolute URL after a
- * same-origin redirect — every downloader that wants to inspect the
+ * same-origin redirect — every plugin that wants to inspect the
  * final URL goes through this helper so the relative-URL handling
  * lives in one place. Login-redirect detection itself is each
- * downloader's responsibility — it's the only code that knows which
+ * plugin's responsibility — it's the only code that knows which
  * host its export endpoint redirects to when the session is missing.
  */
 export function safeResolveUrl(maybeRelative: string, base: string): URL | null {

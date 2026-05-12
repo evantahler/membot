@@ -41,9 +41,27 @@ membot add "inline:Decision: use X because Y"                     # literal text
 membot add ./docs --refresh-frequency 24h                         # auto-refresh every day
 ```
 
-Remote URLs go through per-service downloaders. Google needs cookies
-captured by `membot login` (one-time browser sign-in); GitHub and
-Linear need API keys set via
+Remote URLs go through a source-plugin registry. Each plugin owns its
+URL match, auth strategy, and rendering. The set below is auto-generated
+from the live registry — call `membot sources` (or the `membot_sources`
+MCP tool) to inspect it at runtime.
+
+<!-- AUTO-GENERATED:sources -->
+
+| Plugin | Auth | Examples | Notes |
+| --- | --- | --- | --- |
+| **google-docs**<br>Google Docs — exports as .docx via the user's logged-in browser session. | browser — `membot login` | `https://docs.google.com/document/d/<DOC_ID>/edit` |  |
+| **google-sheets**<br>Google Sheets — exports every tab as .xlsx, rendered to markdown tables locally. | browser — `membot login` | `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit` |  |
+| **google-slides**<br>Google Slides — exports as PDF for layout-faithful conversion. | browser — `membot login` | `https://docs.google.com/presentation/d/<SLIDES_ID>/edit` |  |
+| **github**<br>GitHub issues & PRs — uses the GitHub REST API (with optional token for private repos). | `api_key` — `membot config set downloaders.github.api_key <PAT>` | `https://github.com/<owner>/<repo>/issues/<n>`<br>`https://github.com/<owner>/<repo>/pull/<n>` | Public repos work unauthenticated at 60 req/hr. For private repos or higher limits, configure a token: `membot config set downloaders.github.api_key <PAT>` or export `GITHUB_TOKEN`. |
+| **linear**<br>Linear issues & projects — uses the Linear GraphQL API with a personal access key. | `api_key` — `membot config set downloaders.linear.api_key <KEY>` | `https://linear.app/<workspace>/issue/<KEY>`<br>`https://linear.app/<workspace>/project/<slug>` | Requires a personal API key from https://linear.app/settings/api. Set it via `membot config set downloaders.linear.api_key <KEY>`. |
+| **apple-notes** _(darwin only)_<br>Apple Notes (macOS) — scope-driven import via NoteStore.sqlite. Markdown comes straight from the protobuf body. | none | `apple-notes:`<br>`apple-notes:Personal/Recipes`<br>`apple-notes:*/Archive`<br>`apple-notes:Personal/Recipes/**` | Requires Full Disk Access for your terminal in System Settings → Privacy & Security. Password-protected notes and Recently Deleted are skipped. Pass `--sync` to tombstone rows whose notes have been deleted. |
+| **generic-web**<br>Catch-all for any other http(s) URL — HEAD/GET, render HTML via headless browser, else stream bytes. | none | `https://example.com/some-page`<br>`https://example.com/some-file.pdf` |  |
+
+<!-- /AUTO-GENERATED:sources -->
+
+Browser-auth plugins need cookies captured by `membot login`
+(one-time browser sign-in). API-key plugins need a credential set via
 `membot config set downloaders.<svc>.api_key`. If a fetch fails with
 an auth error, the `HelpfulError` will tell you exactly which command
 to run. Fetches are non-interactive — they never open a browser

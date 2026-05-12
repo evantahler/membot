@@ -1,32 +1,45 @@
+import { z } from "zod";
 import { HelpfulError } from "../../errors.ts";
 import { sha256Hex } from "../local-reader.ts";
-import type { DownloadedRemote, Downloader } from "./index.ts";
+import { defaultUrlHint, pluginConfig, registerSource } from "./registry.ts";
+import { type BatchFetcher, type DownloadedRemote, defineSourcePlugin } from "./types.ts";
 
 const ISSUE_OR_PR = /^\/([^/]+)\/([^/]+)\/(issues|pull)\/(\d+)(?:$|\/|#|\?)/;
-
 const API_BASE = "https://api.github.com";
+
+const githubConfigSchema = z.object({
+	api_key: z.string().meta({ secret: true }).default(""),
+});
+
+type GithubConfig = z.infer<typeof githubConfigSchema>;
+
+interface GithubArgs extends Record<string, unknown> {
+	owner: string;
+	repo: string;
+	kind: "issues" | "pull";
+	number: number;
+}
 
 /**
  * GitHub issues and PRs via the REST API. The user sets a personal
  * access token once via `membot config set downloaders.github.api_key
- * <PAT>` (or via the `GITHUB_TOKEN` env var, which `gh auth token`
- * happens to populate), and we fetch the issue/PR + every comment as
- * structured JSON, then render to markdown.
+ * <PAT>` (or via the `GITHUB_TOKEN` env var). We fetch the issue/PR +
+ * every comment as structured JSON, then render to markdown.
  *
- * Why API instead of rendering github.com HTML: the rendered page
- * works for public, network-cooperative cases but stalls when GitHub
- * shows interstitials (rate-limit, abuse, login challenges) and
- * captures hundreds of KB of GitHub chrome that the embedder doesn't
- * care about. The API gives us the exact body and comment thread in
- * a few KB.
- *
- * Public repos: the `api_key` is optional — we'll send unauthenticated
- * requests if it's blank, which works for public content but gets
- * rate-limited at 60 req/hr. Private repos require the token.
+ * Public repos: the `api_key` is optional — unauthenticated requests
+ * work but get rate-limited at 60 req/hr. Private repos require it.
  */
-export const githubDownloader: Downloader = {
+const githubPlugin = defineSourcePlugin<GithubConfig, GithubArgs>({
 	name: "github",
-	description: "GitHub issues + PRs (github.com/<owner>/<repo>/(issues|pull)/<n>) — uses the GitHub REST API.",
+	description: "GitHub issues & PRs — uses the GitHub REST API (with optional token for private repos).",
+	examples: ["https://github.com/<owner>/<repo>/issues/<n>", "https://github.com/<owner>/<repo>/pull/<n>"],
+	notes:
+		"Public repos work unauthenticated at 60 req/hr. For private repos or higher limits, configure a token: `membot config set downloaders.github.api_key <PAT>` or export `GITHUB_TOKEN`.",
+	match: {
+		kind: "url",
+		matches: (url) => url.hostname === "github.com" && ISSUE_OR_PR.test(url.pathname),
+	},
+	config: { key: "github", schema: githubConfigSchema },
 	logins: [
 		{
 			kind: "api_key",
@@ -37,38 +50,63 @@ export const githubDownloader: Downloader = {
 		},
 	],
 	requiresApiKey: false,
-	matches(url) {
-		return url.hostname === "github.com" && ISSUE_OR_PR.test(url.pathname);
+	async enumerate(source) {
+		const url = new URL(source);
+		const cursor = parseIssueUrl(url);
+		return [{ source: url.toString(), logicalPathHint: defaultUrlHint(url), cursor }];
 	},
-	async download(url, ctx): Promise<DownloadedRemote> {
-		const args = parseIssueUrl(url);
-		const owner = args.owner as string;
-		const repo = args.repo as string;
-		const number = args.number as number;
-
-		const token = (ctx.config.downloaders.github.api_key || process.env.GITHUB_TOKEN || "").trim();
-		ctx.onProgress?.("fetching issue");
-		const issue = await getJson<GithubIssue>(`/repos/${owner}/${repo}/issues/${number}`, token, url);
-		ctx.onProgress?.("fetching comments");
-		const comments = await getJson<GithubComment[]>(
-			`/repos/${owner}/${repo}/issues/${number}/comments?per_page=100`,
-			token,
-			url,
-		);
-
-		const isPullRequest = !!issue.pull_request;
-		const markdown = renderIssue(issue, comments, isPullRequest);
-		const bytes = new TextEncoder().encode(markdown);
+	rehydrateEntry(source, args) {
+		const url = new URL(source);
+		return { source: url.toString(), logicalPathHint: defaultUrlHint(url), cursor: args };
+	},
+	async openBatchFetcher(): Promise<BatchFetcher<GithubArgs>> {
 		return {
-			bytes,
-			sha256: sha256Hex(bytes),
-			mimeType: "text/markdown",
-			downloader: "github",
-			downloaderArgs: args,
-			sourceUrl: url.toString(),
+			async fetch(entry, ctx): Promise<DownloadedRemote> {
+				const cfg = pluginConfig(ctx, githubPlugin);
+				const token = (cfg.api_key || process.env.GITHUB_TOKEN || "").trim();
+				const { owner, repo, number } = entry.cursor;
+				const url = new URL(entry.source);
+				ctx.onProgress?.("fetching issue");
+				const issue = await getJson<GithubIssue>(`/repos/${owner}/${repo}/issues/${number}`, token, url);
+				ctx.onProgress?.("fetching comments");
+				const comments = await getJson<GithubComment[]>(
+					`/repos/${owner}/${repo}/issues/${number}/comments?per_page=100`,
+					token,
+					url,
+				);
+				const isPullRequest = !!issue.pull_request;
+				const markdown = renderIssue(issue, comments, isPullRequest);
+				const bytes = new TextEncoder().encode(markdown);
+				return {
+					bytes,
+					sha256: sha256Hex(bytes),
+					mimeType: "text/markdown",
+					downloader: "github",
+					downloaderArgs: entry.cursor,
+					sourceUrl: url.toString(),
+				};
+			},
+			async close() {},
 		};
 	},
-};
+});
+
+function parseIssueUrl(url: URL): GithubArgs {
+	const match = url.pathname.match(ISSUE_OR_PR);
+	if (!match) {
+		throw new HelpfulError({
+			kind: "input_error",
+			message: `not a GitHub issue/PR URL: ${url.toString()}`,
+			hint: "Pass a URL like https://github.com/<owner>/<repo>/issues/<n> or .../pull/<n>.",
+		});
+	}
+	return {
+		owner: match[1] as string,
+		repo: match[2] as string,
+		kind: match[3] as "issues" | "pull",
+		number: Number(match[4]),
+	};
+}
 
 interface GithubIssue {
 	number: number;
@@ -127,18 +165,6 @@ async function getJson<T>(path: string, token: string, url: URL): Promise<T> {
 	return (await response.json()) as T;
 }
 
-function parseIssueUrl(url: URL): Record<string, unknown> {
-	const match = url.pathname.match(ISSUE_OR_PR);
-	if (!match) {
-		throw new HelpfulError({
-			kind: "input_error",
-			message: `not a GitHub issue/PR URL: ${url.toString()}`,
-			hint: "Pass a URL like https://github.com/<owner>/<repo>/issues/<n> or .../pull/<n>.",
-		});
-	}
-	return { owner: match[1], repo: match[2], kind: match[3], number: Number(match[4]) };
-}
-
 function renderIssue(issue: GithubIssue, comments: GithubComment[], isPr: boolean): string {
 	const lines: string[] = [];
 	const kind = isPr ? "PR" : "Issue";
@@ -176,3 +202,8 @@ function renderIssue(issue: GithubIssue, comments: GithubComment[], isPr: boolea
 	}
 	return lines.join("\n").trim();
 }
+
+registerSource(githubPlugin);
+
+export type { GithubConfig };
+export { githubConfigSchema, githubPlugin };

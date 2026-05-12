@@ -8,6 +8,7 @@ import { readOperation } from "./read.ts";
 import { refreshOperation } from "./refresh.ts";
 import { removeOperation } from "./remove.ts";
 import { searchOperation } from "./search.ts";
+import { sourcesOperation } from "./sources.ts";
 import { statsOperation } from "./stats.ts";
 import { treeOperation } from "./tree.ts";
 import type { Operation } from "./types.ts";
@@ -37,4 +38,5 @@ export const OPERATIONS: Operation<any, any>[] = [
 	removeOperation,
 	refreshOperation,
 	pruneOperation,
+	sourcesOperation,
 ];

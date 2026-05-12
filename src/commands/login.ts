@@ -4,8 +4,9 @@ import Mustache from "mustache";
 import { FILES } from "../constants.ts";
 import { buildContext, closeContext } from "../context.ts";
 import { HelpfulError } from "../errors.ts";
-import { BrowserPool } from "../ingest/downloaders/browser.ts";
-import { collectLoginEntries } from "../ingest/downloaders/index.ts";
+import "../ingest/sources/index.ts"; // populate registry via side-effect imports
+import { BrowserPool } from "../ingest/sources/browser.ts";
+import { collectLoginEntries } from "../ingest/sources/registry.ts";
 import { logger } from "../output/logger.ts";
 import LOGIN_PAGE_TEMPLATE from "./login-page.mustache" with { type: "text" };
 

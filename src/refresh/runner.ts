@@ -5,15 +5,16 @@ import { upsertBlob } from "../db/blobs.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { type FetcherKind, getCurrent, insertVersion, millisIso, updateRefreshStatus } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
-import { fetchNoteForRefresh, openAppleNotes } from "../ingest/apple-notes/index.ts";
 import { chunkDeterministic } from "../ingest/chunker.ts";
 import { convert } from "../ingest/converter/index.ts";
 import { describe } from "../ingest/describer.ts";
-import { BrowserPool } from "../ingest/downloaders/browser.ts";
 import { embed } from "../ingest/embedder.ts";
-import { fetchRemoteByDownloader } from "../ingest/fetcher.ts";
 import { mimeFromPath, readLocalFile, sha256Hex } from "../ingest/local-reader.ts";
 import { buildSearchText } from "../ingest/search-text.ts";
+import { BrowserPool } from "../ingest/sources/browser.ts";
+import { findSourceByName, findSourceForInput } from "../ingest/sources/registry.ts";
+import type { PluginCtx, SourcePlugin } from "../ingest/sources/types.ts";
+import { logger } from "../output/logger.ts";
 
 export interface RefreshOutcome {
 	logical_path: string;
@@ -52,9 +53,6 @@ export async function refreshOne(
 	}
 
 	try {
-		if (cur.downloader === "apple-notes") {
-			return await refreshAppleNote(ctx, cur, force, onPhase);
-		}
 		if (cur.source_type === "local") {
 			return await refreshLocal(ctx, cur, force, onPhase);
 		}
@@ -132,12 +130,16 @@ async function refreshLocal(
 }
 
 /**
- * Remote refresh: replay the persisted downloader against the original
- * URL. Each downloader is deterministic (no LLM, no agent loop), so a
- * row with `downloader='google-docs'` always re-runs the Google Docs
- * downloader; rows from older membot versions whose `downloader` is
- * NULL fall back to URL-based dispatch (the registry's `findDownloader`
- * picks the right handler from the URL itself).
+ * Remote refresh: replay the persisted plugin against the original
+ * source. Each plugin's `fetch` is deterministic (no LLM, no agent loop),
+ * so a row with `downloader='google-docs'` always re-runs the Google
+ * Docs plugin; rows from older membot versions whose `downloader` is
+ * NULL fall back to URL-based dispatch.
+ *
+ * Apple-notes-shaped rows (markdown directly, no blob) work through the
+ * same code path: the plugin's `fetch` returns `mimeType='text/markdown'`
+ * with bytes that are the markdown body. `runPipelineForRefresh` notices
+ * `text/markdown` and skips the blob upsert + bytes-to-markdown conversion.
  */
 async function refreshRemote(
 	ctx: AppContext,
@@ -152,67 +154,44 @@ async function refreshRemote(
 			hint: "Inspect with `membot info` and consider re-ingesting.",
 		});
 	}
+	const plugin = pickPluginForRefresh(cur);
 	const userDataDir = join(ctx.dataDir, FILES.BROWSER_PROFILE);
-	const pool = new BrowserPool({ userDataDir });
-	let fetched: Awaited<ReturnType<typeof fetchRemoteByDownloader>>;
+	const pool = new BrowserPool({ userDataDir, headless: !plugin.requireHeaded });
 	try {
-		fetched = await fetchRemoteByDownloader(cur.downloader, cur.source_path, pool, ctx.config);
-	} finally {
-		await pool.dispose();
-	}
+		const entry = plugin.rehydrateEntry(cur.source_path, (cur.downloader_args ?? {}) as Record<string, unknown>);
+		const pluginCtx: PluginCtx = {
+			pool,
+			logger,
+			config: ctx.config,
+			onProgress: onPhase,
+		};
+		// Cheap pre-fetch gate (apple-notes mtime). When it fires we
+		// short-circuit before any IO; the row's refresh status flips to
+		// `unchanged` without touching content.
+		if (!force && plugin.probeUnchanged) {
+			if (
+				plugin.probeUnchanged(entry, {
+					source_mtime_ms: cur.source_mtime_ms,
+					source_sha256: cur.source_sha256,
+				})
+			) {
+				await updateRefreshStatus(ctx.db, cur.logical_path, cur.version_id, {
+					refreshed_at: new Date().toISOString(),
+					last_refresh_status: "unchanged",
+				});
+				return { logical_path: cur.logical_path, status: "unchanged" };
+			}
+		}
 
-	if (!force && cur.source_sha256 === fetched.sha256) {
-		await updateRefreshStatus(ctx.db, cur.logical_path, cur.version_id, {
-			refreshed_at: new Date().toISOString(),
-			last_refresh_status: "unchanged",
-		});
-		return { logical_path: cur.logical_path, status: "unchanged" };
-	}
+		const fetcher = await plugin.openBatchFetcher(pluginCtx);
+		let fetched: Awaited<ReturnType<typeof fetcher.fetch>>;
+		try {
+			fetched = await fetcher.fetch(entry, pluginCtx);
+		} finally {
+			await fetcher.close();
+		}
 
-	const versionId = await runPipelineForRefresh(
-		ctx,
-		{
-			logicalPath: cur.logical_path,
-			bytes: fetched.bytes,
-			mime: fetched.mimeType,
-			source: cur.source_path,
-			sourceType: "remote",
-			sourcePath: cur.source_path,
-			sourceMtimeMs: null,
-			sourceSha: fetched.sha256,
-			fetcher: "downloader",
-			downloader: fetched.downloader,
-			downloaderArgs: fetched.downloaderArgs,
-			refreshSec: cur.refresh_frequency_sec,
-		},
-		onPhase,
-	);
-	return { logical_path: cur.logical_path, status: "ok", new_version_id: versionId };
-}
-
-/**
- * Apple Notes refresh: re-fetch the markdown from macos-ts using the
- * `noteId` persisted in `downloader_args`. There is no fetched-bytes step
- * — macos-ts hands us markdown directly — so the unchanged-check compares
- * the source sha256 of the freshly-rendered markdown against the stored
- * one. `mtime_ms` provides a faster gate: if the note's `modifiedAt` is
- * unchanged we don't even decode the protobuf body.
- */
-async function refreshAppleNote(
-	ctx: AppContext,
-	cur: CurrentRow,
-	force: boolean,
-	onPhase?: (sublabel: string) => void,
-): Promise<RefreshOutcome> {
-	const noteId = readNoteId(cur);
-	const reader = openAppleNotes();
-	try {
-		const fetched = fetchNoteForRefresh(reader, noteId);
-		const markdownBytes = new TextEncoder().encode(fetched.markdown);
-		const sha = sha256Hex(markdownBytes);
-		const mtimeMs = fetched.modifiedAt.getTime();
-
-		if (!force && cur.source_sha256 === sha) {
+		if (!force && cur.source_sha256 === fetched.sha256) {
 			await updateRefreshStatus(ctx.db, cur.logical_path, cur.version_id, {
 				refreshed_at: new Date().toISOString(),
 				last_refresh_status: "unchanged",
@@ -220,75 +199,50 @@ async function refreshAppleNote(
 			return { logical_path: cur.logical_path, status: "unchanged" };
 		}
 
-		onPhase?.("describing");
-		const description = await describe(cur.logical_path, "text/markdown", fetched.markdown, ctx.config.llm);
-		onPhase?.("chunking");
-		const chunks = chunkDeterministic(fetched.markdown, ctx.config.chunker);
-		const searchTexts = chunks.map((c) => buildSearchText(cur.logical_path, description, c.content));
-		const embeddings = await embed(searchTexts, ctx.config.embedding_model, {
-			onProgress: (done, total) => onPhase?.(`embedding ${done}/${total}`),
-		});
-
-		const versionId = millisIso(Date.now());
-		await insertVersion(ctx.db, {
-			logical_path: cur.logical_path,
-			version_id: versionId,
-			source_type: "remote",
-			source_path: fetched.sourcePath,
-			source_mtime_ms: mtimeMs,
-			source_sha256: sha,
-			blob_sha256: null,
-			content_sha256: sha,
-			content: fetched.markdown,
-			description,
-			mime_type: "text/markdown",
-			size_bytes: markdownBytes.byteLength,
-			fetcher: "downloader",
-			downloader: "apple-notes",
-			downloader_args: fetched.downloaderArgs,
-			refresh_frequency_sec: cur.refresh_frequency_sec,
-			refreshed_at: new Date().toISOString(),
-			last_refresh_status: "ok",
-			change_note: "refresh: apple-notes updated",
-		});
-
-		onPhase?.("persisting");
-		await insertChunksForVersion(
-			ctx.db,
-			cur.logical_path,
-			versionId,
-			chunks.map((c, i) => ({
-				chunk_index: c.index,
-				chunk_content: c.content,
-				search_text: searchTexts[i] ?? buildSearchText(cur.logical_path, description, c.content),
-				embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
-			})),
+		const versionId = await runPipelineForRefresh(
+			ctx,
+			{
+				logicalPath: cur.logical_path,
+				bytes: fetched.bytes,
+				mime: fetched.mimeType,
+				source: cur.source_path,
+				sourceType: "remote",
+				sourcePath: cur.source_path,
+				sourceMtimeMs: entry.mtimeMs ?? null,
+				sourceSha: fetched.sha256,
+				fetcher: "downloader",
+				downloader: fetched.downloader,
+				downloaderArgs: fetched.downloaderArgs,
+				refreshSec: cur.refresh_frequency_sec,
+			},
+			onPhase,
 		);
-
-		onPhase?.("indexing");
-		await rebuildFts(ctx.db);
 		return { logical_path: cur.logical_path, status: "ok", new_version_id: versionId };
 	} finally {
-		reader.close();
+		await pool.dispose();
 	}
 }
 
 /**
- * Extract the macos-ts noteId from a row's `downloader_args`. Throws a
- * HelpfulError if the args are malformed — that indicates a row written by
- * a future membot version we don't understand, not a missing note.
+ * Look up the plugin to refresh with. Prefers the persisted `downloader`
+ * name (deterministic replay), falls back to URL match (handles rows
+ * from older versions whose `downloader` is NULL or names a plugin no
+ * longer registered).
  */
-function readNoteId(cur: CurrentRow): number {
-	const args = cur.downloader_args ?? {};
-	const raw = (args as Record<string, unknown>).noteId;
-	if (typeof raw !== "number" || !Number.isFinite(raw)) {
-		throw new HelpfulError({
-			kind: "input_error",
-			message: `Apple Notes row ${cur.logical_path} has no usable noteId in downloader_args`,
-			hint: "Re-ingest with `membot add apple-notes:...` to repair provenance, or remove the row with `membot remove`.",
-		});
+function pickPluginForRefresh(cur: CurrentRow): SourcePlugin {
+	if (cur.downloader) {
+		const named = findSourceByName(cur.downloader);
+		if (named) return named;
 	}
-	return raw;
+	if (cur.source_path) {
+		const matched = findSourceForInput(cur.source_path);
+		if (matched) return matched;
+	}
+	throw new HelpfulError({
+		kind: "input_error",
+		message: `no source plugin matches ${cur.source_path ?? "(missing source_path)"} (persisted downloader: ${cur.downloader ?? "null"})`,
+		hint: "Re-ingest the row with `membot add` to pick a fresh plugin.",
+	});
 }
 
 interface PipelineParams {
@@ -317,17 +271,29 @@ async function runPipelineForRefresh(
 	p: PipelineParams,
 	onPhase?: (sublabel: string) => void,
 ): Promise<string> {
-	onPhase?.("storing blob");
-	await upsertBlob(ctx.db, {
-		sha256: p.sourceSha,
-		mime_type: p.mime,
-		size_bytes: p.bytes.byteLength,
-		bytes: p.bytes,
-	});
+	// Plugins that produce markdown directly (linear, github, apple-notes)
+	// arrive here with `mime='text/markdown'`. Skip the blob upsert + the
+	// pass-through `convert()` round-trip for those — the bytes ARE the
+	// markdown. Binary plugins (google-docs, generic-web) take the full path.
+	const isMarkdownDirect = p.mime === "text/markdown";
+	if (!isMarkdownDirect) {
+		onPhase?.("storing blob");
+		await upsertBlob(ctx.db, {
+			sha256: p.sourceSha,
+			mime_type: p.mime,
+			size_bytes: p.bytes.byteLength,
+			bytes: p.bytes,
+		});
+	}
 
-	onPhase?.("converting");
-	const conversion = await convert(p.bytes, p.mime, p.source, ctx.config.llm, ctx.config.converters);
-	const markdown = conversion.markdown;
+	let markdown: string;
+	if (isMarkdownDirect) {
+		markdown = new TextDecoder().decode(p.bytes);
+	} else {
+		onPhase?.("converting");
+		const conversion = await convert(p.bytes, p.mime, p.source, ctx.config.llm, ctx.config.converters);
+		markdown = conversion.markdown;
+	}
 	onPhase?.("describing");
 	const description = await describe(p.logicalPath, p.mime, markdown, ctx.config.llm);
 	onPhase?.("chunking");
@@ -346,7 +312,7 @@ async function runPipelineForRefresh(
 		source_path: p.sourcePath,
 		source_mtime_ms: p.sourceMtimeMs,
 		source_sha256: p.sourceSha,
-		blob_sha256: p.sourceSha,
+		blob_sha256: isMarkdownDirect ? null : p.sourceSha,
 		content_sha256: contentSha,
 		content: markdown,
 		description,
