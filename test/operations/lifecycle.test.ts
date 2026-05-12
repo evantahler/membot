@@ -198,9 +198,9 @@ describe("operations end-to-end lifecycle", () => {
 	}, 60_000);
 
 	test("prune --before 0s --dry-run=false drops non-current rows", async () => {
-		const dry = await pruneOperation.handler({ before: "0s", dry_run: true }, ctx);
+		const dry = await pruneOperation.handler({ before: "0s", dry_run: true, strip_blob_bytes: false }, ctx);
 		expect(dry.removed_versions).toBeGreaterThan(0);
-		const real = await pruneOperation.handler({ before: "0s", dry_run: false }, ctx);
+		const real = await pruneOperation.handler({ before: "0s", dry_run: false, strip_blob_bytes: false }, ctx);
 		expect(real.removed_versions).toBeGreaterThan(0);
 		// After prune, only current versions and tombstones remain
 		const versions = await versionsOperation.handler({ logical_path: authPath }, ctx);

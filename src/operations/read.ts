@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AppContext } from "../context.ts";
 import { readBlob } from "../db/blobs.ts";
 import { getCurrent, getVersion } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
@@ -33,6 +34,11 @@ export const readOperation = defineOperation({
 		description: z.string().nullable().optional(),
 		bytes_base64: z.string().optional(),
 		blob_available: z.boolean(),
+		bytes_skipped: z
+			.boolean()
+			.describe(
+				"True when the blobs row exists but its bytes were intentionally not persisted (config blobs.max_size_bytes / blobs.skip_mime_types). Distinct from blob_available=false caused by an inline write (no blobs row at all).",
+			),
 	}),
 	cli: { positional: ["logical_path"] },
 	console_formatter: (result) => {
@@ -65,8 +71,15 @@ export const readOperation = defineOperation({
 			if (!blob) {
 				throw new HelpfulError({
 					kind: "not_found",
-					message: `no blob bytes available for ${path}@${row.version_id}`,
-					hint: "Inline writes do not have an underlying blob. Use the markdown surrogate (default) instead.",
+					message: `no blob row for ${path}@${row.version_id}`,
+					hint: "Inline writes have no underlying blob. Use the markdown surrogate (omit bytes=true).",
+				});
+			}
+			if (blob.bytes === null) {
+				throw new HelpfulError({
+					kind: "not_found",
+					message: `blob bytes for ${path}@${row.version_id} were not persisted (${blob.mime_type}, ${blob.size_bytes} bytes)`,
+					hint: "Bytes were skipped at ingest because the source exceeded blobs.max_size_bytes or matched blobs.skip_mime_types. Raise the limit (`membot config set blobs.max_size_bytes ...`) and re-ingest from the source to capture them, or use the markdown surrogate (omit bytes=true).",
 				});
 			}
 			return {
@@ -77,10 +90,12 @@ export const readOperation = defineOperation({
 				version_is_current: isCurrent,
 				bytes_base64: Buffer.from(blob.bytes).toString("base64"),
 				blob_available: true,
+				bytes_skipped: false,
 			};
 		}
 
 		const content = sliceLines(row.content ?? "", input.offset, input.limit);
+		const blobAvailability = await checkBlobAvailability(ctx, row.blob_sha256);
 		return {
 			logical_path: row.logical_path,
 			version_id: row.version_id,
@@ -89,10 +104,30 @@ export const readOperation = defineOperation({
 			version_is_current: isCurrent,
 			content,
 			description: row.description,
-			blob_available: !!row.blob_sha256,
+			blob_available: blobAvailability.available,
+			bytes_skipped: blobAvailability.skipped,
 		};
 	},
 });
+
+/**
+ * Resolve the three-way state of a file's bytes: no blobs row (inline
+ * write), row but `bytes IS NULL` (intentionally skipped at ingest), or
+ * row with bytes (available). Cheap query — only used for the meta-only
+ * read path; `bytes=true` does a full readBlob anyway.
+ */
+async function checkBlobAvailability(
+	ctx: AppContext,
+	blobSha: string | null,
+): Promise<{ available: boolean; skipped: boolean }> {
+	if (!blobSha) return { available: false, skipped: false };
+	const row = await ctx.db.queryGet<{ has_bytes: boolean }>(
+		`SELECT bytes IS NOT NULL AS has_bytes FROM blobs WHERE sha256 = ?1`,
+		blobSha,
+	);
+	if (!row) return { available: false, skipped: false };
+	return { available: row.has_bytes, skipped: !row.has_bytes };
+}
 
 /** Return the requested 1-based line range (offset..offset+limit-1) or the full body. */
 function sliceLines(text: string, offset?: number, limit?: number): string {
