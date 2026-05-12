@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { expandUserPattern, isGlob, resolveSource } from "../../src/ingest/source-resolver.ts";
+import "../../src/ingest/sources/index.ts";
 
 describe("resolveSource", () => {
 	let tmp: string;
@@ -26,10 +27,14 @@ describe("resolveSource", () => {
 		if (r.kind === "inline") expect(r.text).toBe("hello world");
 	});
 
-	test("URL source", async () => {
+	test("URL source resolves via the generic-web plugin into a single entry", async () => {
 		const r = await resolveSource("https://example.com/x");
-		expect(r.kind).toBe("url");
-		if (r.kind === "url") expect(r.url).toBe("https://example.com/x");
+		expect(r.kind).toBe("plugin");
+		if (r.kind === "plugin") {
+			expect(r.plugin.name).toBe("generic-web");
+			expect(r.entries).toHaveLength(1);
+			expect(r.entries[0]?.source).toBe("https://example.com/x");
+		}
 	});
 
 	test("single file source carries the absolute realpath", async () => {

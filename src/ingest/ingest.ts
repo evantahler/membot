@@ -1,13 +1,13 @@
-import { DEFAULTS } from "../constants.ts";
+import { join } from "node:path";
+import { DEFAULTS, FILES } from "../constants.ts";
 import type { AppContext } from "../context.ts";
 import { upsertBlob } from "../db/blobs.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { type FetcherKind, getCurrent, insertVersion, millisIso, type SourceType } from "../db/files.ts";
 import { asHelpful, HelpfulError } from "../errors.ts";
 import { formatBytes } from "../output/formatter.ts";
+import { logger } from "../output/logger.ts";
 import { pieFor } from "../output/progress.ts";
-import { type EnumeratedNote, fetchEnumeratedNote, openAppleNotes } from "./apple-notes/index.ts";
-import { disambiguateLogicalPath } from "./apple-notes/logical-path.ts";
 import type { SkipReason } from "./blob-policy.ts";
 import { shouldPersistBlobBytes } from "./blob-policy.ts";
 import { chunkDeterministic } from "./chunker.ts";
@@ -15,10 +15,11 @@ import { AsyncMutex, pMap } from "./concurrency.ts";
 import { convert } from "./converter/index.ts";
 import { describe } from "./describer.ts";
 import { embed } from "./embedder.ts";
-import { fetchRemote } from "./fetcher.ts";
 import { readLocalFile, sha256Hex } from "./local-reader.ts";
 import { buildSearchText } from "./search-text.ts";
 import { type ResolvedLocalEntry, type ResolvedSource, resolveSource } from "./source-resolver.ts";
+import { BrowserPool } from "./sources/browser.ts";
+import type { Entry, PluginCtx } from "./sources/types.ts";
 
 /**
  * Log a single line explaining why a blob's bytes were not persisted.
@@ -112,7 +113,7 @@ export interface IngestCallbacks {
  */
 export function countResolvedEntries(resolved: ResolvedSource): number {
 	if (resolved.kind === "local-files") return resolved.entries.length;
-	if (resolved.kind === "apple-notes") return resolved.entries.length;
+	if (resolved.kind === "plugin") return resolved.entries.length;
 	return 1;
 }
 
@@ -181,11 +182,8 @@ export async function ingestResolved(
 	if (resolved.kind === "inline") {
 		return ingestInline(resolved.text, input, ctx, refreshSec, callbacks);
 	}
-	if (resolved.kind === "url") {
-		return ingestUrl(resolved.url, input, ctx, refreshSec, force, callbacks);
-	}
-	if (resolved.kind === "apple-notes") {
-		return ingestAppleNotesEntries(resolved, input, ctx, refreshSec, force, callbacks);
+	if (resolved.kind === "plugin") {
+		return ingestPluginEntries(resolved, input, ctx, refreshSec, force, callbacks);
 	}
 	return ingestLocalFiles(resolved, input, ctx, refreshSec, force, callbacks);
 }
@@ -244,82 +242,240 @@ async function ingestInline(
 	return summarize([result]);
 }
 
-/** Ingest one URL (source_type='remote'). */
-async function ingestUrl(
-	url: string,
+/**
+ * Run the source-plugin pipeline against one resolved source. Single-entry
+ * URL plugins land here as a 1-element pMap; scheme plugins like
+ * `apple-notes:` enumerate many entries and parallelise across the worker
+ * pool. The plugin owns the batch fetcher (sqlite reader, browser pool
+ * config, etc.); the host owns convert / describe / chunk / embed /
+ * persist (which is shared with local-files).
+ *
+ * Each worker runs end-to-end for one entry: probeUnchanged (optional) →
+ * fetch → sha-gate → convert (skip for `text/markdown`) → describe →
+ * chunk → embed → persist. The persist step is serialised through one
+ * AsyncMutex because all workers share one DuckDB connection. One FTS
+ * rebuild fires after the pool drains.
+ */
+async function ingestPluginEntries(
+	resolved: Extract<ResolvedSource, { kind: "plugin" }>,
 	input: IngestInput,
 	ctx: AppContext,
 	refreshSec: number | null,
 	force: boolean,
 	callbacks?: IngestCallbacks,
 ): Promise<IngestResult> {
-	const logicalPath = input.logical_path ?? defaultLogicalForUrl(url);
-	callbacks?.onEntryStart?.(url);
-	const result: IngestEntryResult = {
-		source_path: url,
-		logical_path: logicalPath,
-		version_id: null,
-		status: "ok",
-		mime_type: null,
-		size_bytes: 0,
-		chunk_count: null,
-		fetcher: "downloader",
-		source_sha256: "",
-	};
+	const { plugin, raw, entries } = resolved;
+	if (entries.length === 0) {
+		throw new HelpfulError({
+			kind: "input_error",
+			message: `source ${raw} matched 0 entries via plugin '${plugin.name}'`,
+			hint: `Inspect the source and re-run; for apple-notes use \`apple-notes:\` for everything.`,
+		});
+	}
+
+	const isMulti = entries.length > 1;
+	const configured = Math.min(DEFAULTS.MAX_WORKERS, Math.max(1, ctx.config.ingest.worker_concurrency));
+	const workerCount = Math.max(1, Math.min(configured, entries.length));
+	callbacks?.onWorkerCount?.(workerCount);
+
+	const userDataDir = join(ctx.dataDir, FILES.BROWSER_PROFILE);
+	const pool = new BrowserPool({ userDataDir, headless: !plugin.requireHeaded });
+	const persistMutex = new AsyncMutex();
+	let anyOk = false;
 
 	try {
-		callbacks?.onEntryProgress?.(url, "fetching");
-		const fetched = await fetchRemote(
-			url,
-			ctx.config,
-			{
-				downloaderName: input.downloader,
-				onProgress: (sublabel) => callbacks?.onEntryProgress?.(url, sublabel),
-			},
-			ctx.dataDir,
-		);
-		result.mime_type = fetched.mimeType;
-		result.size_bytes = fetched.bytes.byteLength;
-		result.fetcher = "downloader";
-		result.source_sha256 = fetched.sha256;
+		const fetcher = await plugin.openBatchFetcher({
+			pool,
+			logger,
+			config: ctx.config,
+		});
+		try {
+			const outcomes = await pMap(entries, workerCount, async (entry, _index, workerId) => {
+				const logicalPath = pickPluginLogicalPath(input.logical_path, entry, isMulti);
+				const label = labelForEntry(entry);
+				const result: IngestEntryResult = {
+					source_path: entry.source,
+					logical_path: logicalPath,
+					version_id: null,
+					status: "ok",
+					mime_type: null,
+					size_bytes: 0,
+					chunk_count: null,
+					fetcher: "downloader",
+					source_sha256: "",
+				};
+				callbacks?.onEntryStart?.(label, workerId);
+				const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(label, sublabel, workerId);
+				try {
+					// Cheap pre-fetch gate (apple-notes mtime). When it fires
+					// we skip fetch + decode + describe + embed entirely.
+					if (!force && plugin.probeUnchanged) {
+						const cur = await getCurrent(ctx.db, logicalPath);
+						if (
+							cur &&
+							plugin.probeUnchanged(entry, {
+								source_mtime_ms: cur.source_mtime_ms,
+								source_sha256: cur.source_sha256,
+							})
+						) {
+							result.status = "unchanged";
+							result.version_id = cur.version_id;
+							result.source_sha256 = cur.source_sha256 ?? "";
+							result.size_bytes = cur.size_bytes ?? 0;
+							result.mime_type = cur.mime_type;
+							callbacks?.onEntryComplete?.(result, workerId);
+							return result;
+						}
+					}
 
-		if (!force) {
-			const cur = await getCurrent(ctx.db, logicalPath);
-			if (cur && cur.source_sha256 === fetched.sha256) {
-				result.status = "unchanged";
-				result.version_id = cur.version_id;
-				callbacks?.onEntryComplete?.(result);
-				return summarize([result]);
+					onPhase("fetching");
+					const pluginCtx: PluginCtx = {
+						pool,
+						logger,
+						config: ctx.config,
+						onProgress: onPhase,
+					};
+					const fetched = await fetcher.fetch(entry, pluginCtx);
+					result.mime_type = fetched.mimeType;
+					result.size_bytes = fetched.bytes.byteLength;
+					result.source_sha256 = fetched.sha256;
+
+					// Second-chance unchanged check on the fetched sha — catches
+					// the case where the source bumped a "modified" signal but
+					// the bytes are byte-identical.
+					if (!force) {
+						const cur = await getCurrent(ctx.db, logicalPath);
+						if (cur && cur.source_sha256 === fetched.sha256) {
+							result.status = "unchanged";
+							result.version_id = cur.version_id;
+							callbacks?.onEntryComplete?.(result, workerId);
+							return result;
+						}
+					}
+
+					// Plugins that already produce markdown (linear, github,
+					// apple-notes) tag mimeType='text/markdown'; convert()
+					// passes those through unchanged. Anything else (Google
+					// Docs .docx, Slides .pdf, raw fetched bytes) gets the
+					// real conversion pipeline.
+					onPhase("converting");
+					const conversion = await convert(
+						fetched.bytes,
+						fetched.mimeType,
+						fetched.sourceUrl,
+						ctx.config.llm,
+						ctx.config.converters,
+					);
+					const markdown = conversion.markdown;
+
+					onPhase("describing");
+					const description = await describe(logicalPath, fetched.mimeType, markdown, ctx.config.llm);
+					onPhase("chunking");
+					const chunks = chunkDeterministic(markdown, ctx.config.chunker);
+					const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content));
+
+					let embeddings: number[][];
+					try {
+						embeddings = await embed(searchTexts, ctx.config.embedding_model, {
+							onProgress: (done, total) => onPhase(`embedding ${done}/${total}`),
+						});
+					} catch (err) {
+						throw asHelpful(
+							err,
+							`while embedding chunks for ${logicalPath}`,
+							"Run `bun run prebuild` to apply the transformers WASM patch, or set a different config.embedding_model.",
+						);
+					}
+
+					const versionId = await persistMutex.lock(async () => {
+						onPhase("persisting");
+						return persistOne(ctx, {
+							logicalPath,
+							sourceType: "remote",
+							sourcePath: fetched.sourceUrl,
+							sourceMtimeMs: entry.mtimeMs ?? null,
+							sourceSha: fetched.sha256,
+							// Plugins that produce markdown directly don't carry an
+							// underlying binary blob — leave blob_sha256 NULL so the
+							// blobs table doesn't get a row pointing at non-bytes.
+							blobSha: fetched.mimeType === "text/markdown" ? null : fetched.sha256,
+							mime: fetched.mimeType,
+							bytes: fetched.mimeType === "text/markdown" ? null : fetched.bytes,
+							markdown,
+							description,
+							chunks,
+							searchTexts,
+							embeddings,
+							fetcher: "downloader",
+							downloader: fetched.downloader,
+							downloaderArgs: fetched.downloaderArgs,
+							refreshSec,
+							changeNote: input.change_note ?? null,
+						});
+					});
+					result.version_id = versionId;
+					result.chunk_count = chunks.length;
+					anyOk = true;
+					callbacks?.onChunks?.(chunks.length);
+				} catch (err) {
+					result.status = "failed";
+					result.error = errorMessage(err);
+				}
+				callbacks?.onEntryComplete?.(result, workerId);
+				return result;
+			});
+
+			const results: IngestEntryResult[] = outcomes.map((o) =>
+				o.ok
+					? o.value
+					: {
+							source_path: "",
+							logical_path: "",
+							version_id: null,
+							status: "failed",
+							error: errorMessage(o.error),
+							mime_type: null,
+							size_bytes: 0,
+							chunk_count: null,
+							fetcher: "downloader",
+							source_sha256: "",
+						},
+			);
+
+			if (anyOk) {
+				await rebuildFts(ctx.db);
 			}
+			return summarize(results);
+		} finally {
+			await fetcher.close();
 		}
-
-		const persisted = await pipelineForBytes(
-			ctx,
-			{
-				logicalPath,
-				bytes: fetched.bytes,
-				mime: fetched.mimeType,
-				source: url,
-				sourceType: "remote",
-				sourcePath: url,
-				sourceMtimeMs: null,
-				sourceSha: fetched.sha256,
-				fetcher: "downloader",
-				downloader: fetched.downloader,
-				downloaderArgs: fetched.downloaderArgs,
-				refreshSec,
-				changeNote: input.change_note ?? null,
-			},
-			(sublabel) => callbacks?.onEntryProgress?.(url, sublabel),
-		);
-		result.version_id = persisted.versionId;
-		result.chunk_count = persisted.chunkCount;
-	} catch (err) {
-		result.status = "failed";
-		result.error = errorMessage(err);
+	} finally {
+		await pool.dispose();
 	}
-	callbacks?.onEntryComplete?.(result);
-	return summarize([result]);
+}
+
+/**
+ * Pick the logical_path for one plugin-emitted entry. Mirrors the
+ * local-files logic: explicit `logical_path` wins, otherwise the plugin's
+ * `logicalPathHint`; multi-entry inputs treat an explicit `logical_path`
+ * as a prefix and join with the hint's tail.
+ */
+function pickPluginLogicalPath(explicit: string | undefined, entry: Entry, isMulti: boolean): string {
+	if (!explicit) return normalizeLogicalPath(entry.logicalPathHint);
+	if (!isMulti) return normalizeLogicalPath(explicit);
+	const prefix = explicit.endsWith("/") ? explicit.slice(0, -1) : explicit;
+	return normalizeLogicalPath(`${prefix}/${entry.logicalPathHint.replaceAll("\\", "/")}`);
+}
+
+/**
+ * Human-readable label for the progress spinner — falls back to the
+ * source URI when the plugin didn't expose anything friendlier in the
+ * cursor.
+ */
+function labelForEntry(entry: Entry): string {
+	const t = entry.cursor.title;
+	if (typeof t === "string" && t.trim() !== "") return t;
+	return entry.logicalPathHint || entry.source;
 }
 
 /** Ingest a list of local files (source_type='local'). One transaction per entry. */
@@ -492,199 +648,6 @@ async function ingestLocalFiles(
 }
 
 /**
- * Ingest notes enumerated from Apple Notes. Each note's markdown comes
- * straight from macos-ts (already decoded from the gzip'd protobuf body),
- * so the converter step is skipped entirely. Persisted rows carry
- * `downloader='apple-notes'` + `downloader_args={noteId,...}` so refresh
- * can replay deterministically.
- */
-async function ingestAppleNotesEntries(
-	resolved: Extract<ResolvedSource, { kind: "apple-notes" }>,
-	input: IngestInput,
-	ctx: AppContext,
-	refreshSec: number | null,
-	force: boolean,
-	callbacks?: IngestCallbacks,
-): Promise<IngestResult> {
-	if (resolved.entries.length === 0) {
-		throw new HelpfulError({
-			kind: "input_error",
-			message: `Apple Notes scope ${resolved.raw} matched 0 notes`,
-			hint: `Run \`membot add apple-notes:\` with no scope to import everything, or inspect available folders with the Notes app sidebar.`,
-		});
-	}
-
-	const logicalPaths = assignLogicalPaths(resolved.entries);
-	const configured = Math.min(DEFAULTS.MAX_WORKERS, Math.max(1, ctx.config.ingest.worker_concurrency));
-	const workerCount = Math.max(1, Math.min(configured, resolved.entries.length));
-	callbacks?.onWorkerCount?.(workerCount);
-	const persistMutex = new AsyncMutex();
-	let anyOk = false;
-
-	const reader = openAppleNotes();
-	try {
-		const outcomes = await pMap(resolved.entries, workerCount, async (entry, index, workerId) => {
-			const logicalPath = logicalPaths[index] ?? entry.defaultLogicalPath;
-			const label = `${entry.accountName}/${entry.folderName}/${entry.title || "untitled"}`;
-			const sourcePath = `apple-notes://note/${entry.noteId}`;
-			const result: IngestEntryResult = {
-				source_path: sourcePath,
-				logical_path: logicalPath,
-				version_id: null,
-				status: "ok",
-				mime_type: "text/markdown",
-				size_bytes: 0,
-				chunk_count: null,
-				fetcher: "downloader",
-				source_sha256: "",
-			};
-			callbacks?.onEntryStart?.(label, workerId);
-			const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(label, sublabel, workerId);
-			try {
-				// Fast unchanged check: skip the readNote() call entirely when
-				// the stored row's source_mtime_ms matches the note's
-				// modifiedAt. Notes.app bumps modifiedAt on every edit, so
-				// this is a tight gate that costs zero protobuf decoding.
-				if (!force) {
-					const cur = await getCurrent(ctx.db, logicalPath);
-					const mtimeMs = entry.modifiedAt.getTime();
-					if (cur && cur.source_mtime_ms === mtimeMs) {
-						result.status = "unchanged";
-						result.version_id = cur.version_id;
-						result.source_sha256 = cur.source_sha256 ?? "";
-						result.size_bytes = cur.size_bytes ?? 0;
-						callbacks?.onEntryComplete?.(result, workerId);
-						return result;
-					}
-				}
-
-				onPhase("reading note");
-				const fetched = fetchEnumeratedNote(reader, entry.noteId);
-				const markdownBytes = new TextEncoder().encode(fetched.markdown);
-				const sha = sha256Hex(markdownBytes);
-				result.source_sha256 = sha;
-				result.size_bytes = markdownBytes.byteLength;
-
-				// Second-chance unchanged check: source_sha256 matches even
-				// though modifiedAt bumped (e.g. user added then removed the
-				// same character). Avoids re-embedding.
-				if (!force) {
-					const cur = await getCurrent(ctx.db, logicalPath);
-					if (cur && cur.source_sha256 === sha) {
-						result.status = "unchanged";
-						result.version_id = cur.version_id;
-						callbacks?.onEntryComplete?.(result, workerId);
-						return result;
-					}
-				}
-
-				onPhase("describing");
-				const description = await describe(logicalPath, "text/markdown", fetched.markdown, ctx.config.llm);
-
-				onPhase("chunking");
-				const chunks = chunkDeterministic(fetched.markdown, ctx.config.chunker);
-				const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content));
-
-				let embeddings: number[][];
-				try {
-					embeddings = await embed(searchTexts, ctx.config.embedding_model, {
-						onProgress: (done, total) => onPhase(`embedding ${done}/${total}`),
-					});
-				} catch (err) {
-					throw asHelpful(
-						err,
-						`while embedding chunks for ${logicalPath}`,
-						"Run `bun run prebuild` to apply the transformers WASM patch, or set a different config.embedding_model.",
-					);
-				}
-
-				// Use the enumerated entry's resolved accountName (e.g. "iCloud"
-				// derived from listAccounts()) rather than the raw note row's
-				// often-blank accountName, so --sync can match scopes against it.
-				const downloaderArgs: Record<string, unknown> = {
-					noteId: entry.noteId,
-					accountName: entry.accountName,
-					folderName: entry.folderName,
-					title: entry.title,
-				};
-				const versionId = await persistMutex.lock(async () => {
-					onPhase("persisting");
-					return persistOne(ctx, {
-						logicalPath,
-						sourceType: "remote",
-						sourcePath: fetched.sourcePath,
-						sourceMtimeMs: entry.modifiedAt.getTime(),
-						sourceSha: sha,
-						blobSha: null,
-						mime: "text/markdown",
-						bytes: null,
-						markdown: fetched.markdown,
-						description,
-						chunks,
-						searchTexts,
-						embeddings,
-						fetcher: "downloader",
-						downloader: "apple-notes",
-						downloaderArgs,
-						refreshSec,
-						changeNote: input.change_note ?? null,
-					});
-				});
-				result.version_id = versionId;
-				result.chunk_count = chunks.length;
-				anyOk = true;
-				callbacks?.onChunks?.(chunks.length);
-			} catch (err) {
-				result.status = "failed";
-				result.error = errorMessage(err);
-			}
-			callbacks?.onEntryComplete?.(result, workerId);
-			return result;
-		});
-
-		const results: IngestEntryResult[] = outcomes.map((o) =>
-			o.ok
-				? o.value
-				: {
-						source_path: "",
-						logical_path: "",
-						version_id: null,
-						status: "failed",
-						error: errorMessage(o.error),
-						mime_type: null,
-						size_bytes: 0,
-						chunk_count: null,
-						fetcher: "downloader",
-						source_sha256: "",
-					},
-		);
-
-		if (anyOk) {
-			await rebuildFts(ctx.db);
-		}
-		return summarize(results);
-	} finally {
-		reader.close();
-	}
-}
-
-/**
- * Resolve logical_path collisions among an enumerated batch. Two notes
- * with the same default path (e.g. same title in the same folder) get a
- * deterministic `-<noteId>` suffix so both land in the store under
- * distinct paths. Returns one logical_path per entry, parallel to the
- * input array.
- */
-function assignLogicalPaths(entries: EnumeratedNote[]): string[] {
-	const counts = new Map<string, number>();
-	for (const e of entries) counts.set(e.defaultLogicalPath, (counts.get(e.defaultLogicalPath) ?? 0) + 1);
-	return entries.map((e) => {
-		if ((counts.get(e.defaultLogicalPath) ?? 0) <= 1) return e.defaultLogicalPath;
-		return disambiguateLogicalPath(e.defaultLogicalPath, String(e.noteId).padStart(8, "0"));
-	});
-}
-
-/**
  * Per-file persist payload. All inputs are precomputed by the worker; this
  * helper just executes the transactional DB writes.
  */
@@ -772,74 +735,6 @@ async function persistOne(ctx: AppContext, p: PersistOneParams): Promise<string>
 		throw err;
 	}
 	return versionId;
-}
-
-interface PipelineParams {
-	logicalPath: string;
-	bytes: Uint8Array;
-	mime: string;
-	source: string;
-	sourceType: SourceType;
-	sourcePath: string | null;
-	sourceMtimeMs: number | null;
-	sourceSha: string;
-	fetcher: FetcherKind;
-	downloader: string | null;
-	downloaderArgs: Record<string, unknown> | null;
-	refreshSec: number | null;
-	changeNote: string | null;
-}
-
-/**
- * Run the bytes-in / version-out pipeline: store the blob, convert to
- * markdown, describe, chunk, embed, and write a new files row + chunks
- * rows under a fresh version_id. Returns the version_id so callers can
- * report it back. The optional `onEmbedProgress` is forwarded to the
- * embedder so callers can drive a spinner during the slow phase.
- */
-async function pipelineForBytes(
-	ctx: AppContext,
-	p: PipelineParams,
-	onPhase?: (sublabel: string) => void,
-): Promise<{ versionId: string; chunkCount: number }> {
-	onPhase?.("storing blob");
-	const policy = shouldPersistBlobBytes(p.mime, p.bytes.byteLength, ctx.config.blobs);
-	await upsertBlob(ctx.db, {
-		sha256: p.sourceSha,
-		mime_type: p.mime,
-		size_bytes: p.bytes.byteLength,
-		bytes: policy.persist ? p.bytes : null,
-	});
-	if (!policy.persist) {
-		logSkippedBlobBytes(ctx, p.logicalPath, p.mime, p.bytes.byteLength, policy.reason);
-	}
-
-	onPhase?.("converting");
-	const conversion = await convert(p.bytes, p.mime, p.source, ctx.config.llm, ctx.config.converters);
-	const markdown = conversion.markdown;
-	const contentSha = sha256Hex(new TextEncoder().encode(markdown));
-
-	return persistVersion(
-		ctx,
-		{
-			logicalPath: p.logicalPath,
-			sourceType: p.sourceType,
-			sourcePath: p.sourcePath,
-			sourceMtimeMs: p.sourceMtimeMs,
-			sourceSha: p.sourceSha,
-			blobSha: p.sourceSha,
-			mime: p.mime,
-			bytes: p.bytes,
-			markdown,
-			contentSha,
-			fetcher: p.fetcher,
-			downloader: p.downloader,
-			downloaderArgs: p.downloaderArgs,
-			refreshSec: p.refreshSec,
-			changeNote: p.changeNote,
-		},
-		onPhase,
-	);
 }
 
 interface PersistParams {

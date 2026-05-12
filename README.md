@@ -45,6 +45,24 @@ membot config set downloaders.linear.api_key <KEY>
 
 Public GitHub repos work without a token (rate-limited at 60 req/hr). Linear always needs a key.
 
+### Supported sources
+
+The set of URL patterns and scheme prefixes `membot add` accepts is driven by a plugin registry. Run `membot sources` to inspect the live set on your install. The table below is auto-generated from the registry — adding a new plugin updates it here automatically.
+
+<!-- AUTO-GENERATED:sources -->
+
+| Plugin | Auth | Examples | Notes |
+| --- | --- | --- | --- |
+| **google-docs**<br>Google Docs — exports as .docx via the user's logged-in browser session. | browser — `membot login` | `https://docs.google.com/document/d/<DOC_ID>/edit` |  |
+| **google-sheets**<br>Google Sheets — exports every tab as .xlsx, rendered to markdown tables locally. | browser — `membot login` | `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit` |  |
+| **google-slides**<br>Google Slides — exports as PDF for layout-faithful conversion. | browser — `membot login` | `https://docs.google.com/presentation/d/<SLIDES_ID>/edit` |  |
+| **github**<br>GitHub issues & PRs — uses the GitHub REST API (with optional token for private repos). | `api_key` — `membot config set downloaders.github.api_key <PAT>` | `https://github.com/<owner>/<repo>/issues/<n>`<br>`https://github.com/<owner>/<repo>/pull/<n>` | Public repos work unauthenticated at 60 req/hr. For private repos or higher limits, configure a token: `membot config set downloaders.github.api_key <PAT>` or export `GITHUB_TOKEN`. |
+| **linear**<br>Linear issues & projects — uses the Linear GraphQL API with a personal access key. | `api_key` — `membot config set downloaders.linear.api_key <KEY>` | `https://linear.app/<workspace>/issue/<KEY>`<br>`https://linear.app/<workspace>/project/<slug>` | Requires a personal API key from https://linear.app/settings/api. Set it via `membot config set downloaders.linear.api_key <KEY>`. |
+| **apple-notes** _(darwin only)_<br>Apple Notes (macOS) — scope-driven import via NoteStore.sqlite. Markdown comes straight from the protobuf body. | none | `apple-notes:`<br>`apple-notes:Personal/Recipes`<br>`apple-notes:*/Archive`<br>`apple-notes:Personal/Recipes/**` | Requires Full Disk Access for your terminal in System Settings → Privacy & Security. Password-protected notes and Recently Deleted are skipped. Pass `--sync` to tombstone rows whose notes have been deleted. |
+| **generic-web**<br>Catch-all for any other http(s) URL — HEAD/GET, render HTML via headless browser, else stream bytes. | none | `https://example.com/some-page`<br>`https://example.com/some-file.pdf` |  |
+
+<!-- /AUTO-GENERATED:sources -->
+
 ### Apple Notes (macOS)
 
 `apple-notes:` reads `NoteStore.sqlite` directly via [`macos-ts`](https://www.npmjs.com/package/macos-ts) — no AppleScript, no browser. Grant **Full Disk Access** to your terminal/editor in System Settings → Privacy & Security → Full Disk Access (one time). The scope after the colon supports the same glob syntax as filesystem paths:

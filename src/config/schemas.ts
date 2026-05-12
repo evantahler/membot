@@ -1,6 +1,10 @@
 import { availableParallelism } from "node:os";
 import { z } from "zod";
 import { DEFAULTS, defaultMembotHome, EMBEDDING_DIMENSION, EMBEDDING_MODEL } from "../constants.ts";
+// Side-effect import: populate the source-plugin registry so
+// `buildDownloadersConfigSchema()` can see every plugin's slice.
+import "../ingest/sources/index.ts";
+import { buildDownloadersConfigSchema } from "../ingest/sources/registry.ts";
 
 /**
  * Compute the default ingest worker count: one fewer than the available CPUs
@@ -102,18 +106,13 @@ export const SearchConfigSchema = z.object({
 		),
 });
 
-export const LinearDownloaderConfigSchema = z.object({
-	api_key: z.string().meta({ secret: true }).default(""),
-});
-
-export const GithubDownloaderConfigSchema = z.object({
-	api_key: z.string().meta({ secret: true }).default(""),
-});
-
-export const DownloadersConfigSchema = z.object({
-	linear: LinearDownloaderConfigSchema.default(() => LinearDownloaderConfigSchema.parse({})),
-	github: GithubDownloaderConfigSchema.default(() => GithubDownloaderConfigSchema.parse({})),
-});
+/**
+ * Downloader config is composed from every registered source plugin's
+ * `config.schema`. Adding a new api-key plugin is a one-file change —
+ * the plugin file declares its slice and the schema appears here
+ * automatically. See `buildDownloadersConfigSchema` for the assembly.
+ */
+export const DownloadersConfigSchema = buildDownloadersConfigSchema();
 
 export const DbLockRetryConfigSchema = z.object({
 	max_attempts: z.number().int().positive().default(30),
@@ -131,7 +130,7 @@ export const MembotConfigSchema = z.object({
 	blobs: BlobsConfigSchema.default(() => BlobsConfigSchema.parse({})),
 	ingest: IngestConfigSchema.default(() => IngestConfigSchema.parse({})),
 	llm: LlmConfigSchema.default(() => LlmConfigSchema.parse({})),
-	downloaders: DownloadersConfigSchema.default(() => DownloadersConfigSchema.parse({})),
+	downloaders: DownloadersConfigSchema,
 	search: SearchConfigSchema.default(() => SearchConfigSchema.parse({})),
 	daemon: DaemonConfigSchema.default(() => DaemonConfigSchema.parse({})),
 	db_lock_retry: DbLockRetryConfigSchema.default(() => DbLockRetryConfigSchema.parse({})),
@@ -146,6 +145,4 @@ export type BlobsConfig = z.infer<typeof BlobsConfigSchema>;
 export type IngestConfig = z.infer<typeof IngestConfigSchema>;
 export type LlmConfig = z.infer<typeof LlmConfigSchema>;
 export type DownloadersConfig = z.infer<typeof DownloadersConfigSchema>;
-export type LinearDownloaderConfig = z.infer<typeof LinearDownloaderConfigSchema>;
-export type GithubDownloaderConfig = z.infer<typeof GithubDownloaderConfigSchema>;
 export type SearchConfig = z.infer<typeof SearchConfigSchema>;

@@ -1,5 +1,5 @@
 import { HelpfulError } from "../../errors.ts";
-import type { DownloaderCtx } from "./index.ts";
+import type { PluginCtx } from "./types.ts";
 
 const USER_AGENT =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
@@ -20,7 +20,7 @@ const USER_AGENT =
  */
 export async function fetchWithBrowserCookies(
 	exportUrl: string,
-	ctx: DownloaderCtx,
+	ctx: PluginCtx,
 	serviceName: string,
 	sourceUrl: URL,
 ): Promise<Buffer> {
@@ -83,4 +83,16 @@ export async function fetchWithBrowserCookies(
 		message: `${serviceName} bounced through too many redirects for ${sourceUrl.toString()}.`,
 		hint: "Re-run the command; if the failure persists, open the URL in your browser to investigate.",
 	});
+}
+
+const GOOGLE_LOGIN: import("./types.ts").BrowserLoginEntry = {
+	kind: "browser",
+	name: "Google",
+	url: "https://accounts.google.com/signin",
+	description: "covers Docs, Sheets, and Slides",
+};
+
+/** Shared login entry referenced by all three Google plugins; dedupe is by URL. */
+export function googleLoginEntry(): import("./types.ts").BrowserLoginEntry {
+	return GOOGLE_LOGIN;
 }

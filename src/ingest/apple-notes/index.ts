@@ -1,6 +1,6 @@
-import type { AppContext } from "../../context.ts";
 import { listCurrent, tombstone } from "../../db/files.ts";
 import { HelpfulError } from "../../errors.ts";
+import type { SyncCtx } from "../sources/types.ts";
 import { buildAppleNotesLogicalPath } from "./logical-path.ts";
 import { assertAppleNotesPlatform, mapAppleNotesError } from "./platform.ts";
 import { type AppleNotesReader, openNoteReader } from "./reader.ts";
@@ -184,7 +184,7 @@ export interface SyncResult {
  * carry account/folder/noteId metadata are skipped defensively.
  */
 export async function syncTombstoneAppleNotes(
-	ctx: AppContext,
+	ctx: SyncCtx,
 	scope: AppleNotesScope,
 	liveNoteIds: ReadonlySet<number>,
 ): Promise<SyncResult> {
