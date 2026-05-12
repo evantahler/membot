@@ -84,11 +84,23 @@ export class EmbedderPool {
 	 * `acquire()` synchronously handing out distinct workers when N concurrent
 	 * dispatches race against N idle workers, so every worker receives exactly
 	 * one warmup. No-op when not yet spawned or when disposed.
+	 *
+	 * The first batch is awaited serially so that on a cold model cache only
+	 * one worker downloads the weights. `@huggingface/transformers` has no
+	 * inter-process coordination — a fan-out warmup against an empty cache
+	 * triggers N concurrent downloads and N writers into the same cache files,
+	 * which both wastes bandwidth and risks corruption. Once the first worker
+	 * finishes loading, the cache is populated; the remaining workers fan out
+	 * in parallel and hit the cache.
 	 */
 	async warmup(): Promise<void> {
 		if (this.disposed || !this.spawned) return;
 		logger.info(`embedder-pool: warming up ${this.workers.length} workers`);
-		await Promise.all(Array.from({ length: this.workers.length }, () => this.dispatchBatch(["warmup"], this.model)));
+		await this.dispatchBatch(["warmup"], this.model);
+		if (this.workers.length <= 1 || this.disposed) return;
+		await Promise.all(
+			Array.from({ length: this.workers.length - 1 }, () => this.dispatchBatch(["warmup"], this.model)),
+		);
 	}
 
 	/**
