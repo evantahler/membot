@@ -66,7 +66,7 @@ Requires **Full Disk Access** for your terminal/editor in System Settings → Pr
 
 Pass `--sync` to reconcile deletions: after ingest, any current row inside the scope whose underlying note no longer exists in Notes.app is tombstoned. Without `--sync`, deletes are not detected.
 
-Each entry becomes a new version under its own `logical_path`. PDFs/DOCX/HTML are converted to markdown; images get vision captions; original bytes are kept and reachable via `membot read --bytes`.
+Each entry becomes a new version under its own `logical_path`. PDFs/DOCX/HTML are converted to markdown; images get vision captions; original bytes are kept and reachable via `membot read --bytes` — except for sources that exceed `blobs.max_size_bytes` (default 25 MB) or whose mime matches `blobs.skip_mime_types` (default `video/*`, `audio/*`). The metadata row is still inserted (so refresh and dedupe still work) but `read --bytes` will fail with a hint pointing at the config knob; raise the limit and re-ingest to capture the bytes.
 
 The default `logical_path` mirrors the source path so files with the same basename in different projects don't collide:
 
@@ -158,7 +158,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 | `membot mv <old> <new>`               | Rename a logical_path (history preserved)                                      |
 | `membot rm <paths...>`                | Tombstone one or more logical_paths or globs (e.g. `"docs/**/*.md"`); pass `-r` / `--recursive` to remove a directory prefix; history kept |
 | `membot refresh [path]`               | Re-read source; create new version only if bytes changed                       |
-| `membot prune --before <ts>`          | Permanently drop non-current versions older than cutoff (irreversible)         |
+| `membot prune --before <ts>`          | Permanently drop non-current versions older than cutoff (irreversible). Add `--strip-blob-bytes` to retroactively NULL out bytes for blobs that exceed current `blobs.max_size_bytes` / `blobs.skip_mime_types`. |
 | `membot serve`                        | Start MCP server (stdio default, `--http <port>` for HTTP)                     |
 | `membot logs`                         | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`); `--follow`, `--lines <N>`, `--raw` for JSON |
 | `membot reindex`                      | Rebuild the FTS keyword index over current chunks                              |

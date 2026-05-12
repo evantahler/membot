@@ -24,7 +24,17 @@ on-disk tree of stored content.
 - **One mental model for every artifact.** Markdown, PDF, image,
   audio, anything — converts to a markdown surrogate that flows
   through the same chunk → embed → FTS pipeline. Original bytes live
-  in `blobs`, reachable via `membot_read bytes=true`.
+  in `blobs`, reachable via `membot_read bytes=true` — except when
+  ingest deliberately skipped persisting them (config
+  `blobs.max_size_bytes`, default 25 MB; `blobs.skip_mime_types`,
+  default `video/*` / `audio/*`). The `blobs` row itself is always
+  written (sha256, mime, size, downloader provenance) so dedupe,
+  refresh, and conversion-at-ingest-time still work; only the `bytes`
+  column is left NULL. Single predicate `shouldPersistBlobBytes` in
+  `src/ingest/blob-policy.ts` is the source of truth, consulted by
+  both fresh ingest and `membot prune --strip-blob-bytes` (which
+  retroactively NULLs bytes on rows that would fail the current
+  policy).
 - **Two surfaces, one source of truth.** Each user-facing capability
   is a single `Operation` in `src/operations/` with zod input + output
   schemas; the CLI (commander) and MCP server both consume that —
@@ -223,7 +233,7 @@ CREATE TABLE blobs (
   sha256     TEXT PRIMARY KEY,
   mime_type  TEXT NOT NULL,
   size_bytes BIGINT NOT NULL,
-  bytes      BLOB NOT NULL,
+  bytes      BLOB,                                       -- nullable: ingest may skip persisting bytes (config blobs.max_size_bytes / blobs.skip_mime_types)
   created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
