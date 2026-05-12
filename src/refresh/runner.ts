@@ -6,6 +6,7 @@ import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { type FetcherKind, getCurrent, insertVersion, millisIso, updateRefreshStatus } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
 import { fetchNoteForRefresh, openAppleNotes } from "../ingest/apple-notes/index.ts";
+import { shouldPersistBlobBytes } from "../ingest/blob-policy.ts";
 import { chunkDeterministic } from "../ingest/chunker.ts";
 import { convert } from "../ingest/converter/index.ts";
 import { describe } from "../ingest/describer.ts";
@@ -318,12 +319,18 @@ async function runPipelineForRefresh(
 	onPhase?: (sublabel: string) => void,
 ): Promise<string> {
 	onPhase?.("storing blob");
+	const policy = shouldPersistBlobBytes(p.mime, p.bytes.byteLength, ctx.config.blobs);
 	await upsertBlob(ctx.db, {
 		sha256: p.sourceSha,
 		mime_type: p.mime,
 		size_bytes: p.bytes.byteLength,
-		bytes: p.bytes,
+		bytes: policy.persist ? p.bytes : null,
 	});
+	if (!policy.persist) {
+		ctx.logger.info(
+			`refresh: skipping blob bytes for ${p.logicalPath} (${policy.reason === "mime" ? `mime '${p.mime}' matches blobs.skip_mime_types` : `size exceeds blobs.max_size_bytes`})`,
+		);
+	}
 
 	onPhase?.("converting");
 	const conversion = await convert(p.bytes, p.mime, p.source, ctx.config.llm, ctx.config.converters);

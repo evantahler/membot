@@ -4,9 +4,12 @@ import { upsertBlob } from "../db/blobs.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
 import { type FetcherKind, getCurrent, insertVersion, millisIso, type SourceType } from "../db/files.ts";
 import { asHelpful, HelpfulError } from "../errors.ts";
+import { formatBytes } from "../output/formatter.ts";
 import { pieFor } from "../output/progress.ts";
 import { type EnumeratedNote, fetchEnumeratedNote, openAppleNotes } from "./apple-notes/index.ts";
 import { disambiguateLogicalPath } from "./apple-notes/logical-path.ts";
+import type { SkipReason } from "./blob-policy.ts";
+import { shouldPersistBlobBytes } from "./blob-policy.ts";
 import { chunkDeterministic } from "./chunker.ts";
 import { AsyncMutex, pMap } from "./concurrency.ts";
 import { convert } from "./converter/index.ts";
@@ -16,6 +19,25 @@ import { fetchRemote } from "./fetcher.ts";
 import { readLocalFile, sha256Hex } from "./local-reader.ts";
 import { buildSearchText } from "./search-text.ts";
 import { type ResolvedLocalEntry, type ResolvedSource, resolveSource } from "./source-resolver.ts";
+
+/**
+ * Log a single line explaining why a blob's bytes were not persisted.
+ * The same hint lands in the operation log so users can grep for it and
+ * know which config knob would change the outcome on re-ingest.
+ */
+function logSkippedBlobBytes(
+	ctx: AppContext,
+	logicalPath: string,
+	mime: string,
+	size: number,
+	reason: SkipReason | null,
+): void {
+	const why =
+		reason === "mime"
+			? `mime '${mime}' matches blobs.skip_mime_types`
+			: `size ${formatBytes(size)} exceeds blobs.max_size_bytes`;
+	ctx.logger.info(`skipping blob bytes for ${logicalPath} (${why}); metadata kept, refresh + dedupe still work`);
+}
 
 export interface IngestInput {
 	source: string;
@@ -698,12 +720,16 @@ async function persistOne(ctx: AppContext, p: PersistOneParams): Promise<string>
 	await ctx.db.exec("BEGIN TRANSACTION");
 	try {
 		if (p.bytes) {
+			const policy = shouldPersistBlobBytes(p.mime, p.bytes.byteLength, ctx.config.blobs);
 			await upsertBlob(ctx.db, {
 				sha256: p.sourceSha,
 				mime_type: p.mime,
 				size_bytes: p.bytes.byteLength,
-				bytes: p.bytes,
+				bytes: policy.persist ? p.bytes : null,
 			});
+			if (!policy.persist) {
+				logSkippedBlobBytes(ctx, p.logicalPath, p.mime, p.bytes.byteLength, policy.reason);
+			}
 		}
 		await insertVersion(ctx.db, {
 			logical_path: p.logicalPath,
@@ -777,12 +803,16 @@ async function pipelineForBytes(
 	onPhase?: (sublabel: string) => void,
 ): Promise<{ versionId: string; chunkCount: number }> {
 	onPhase?.("storing blob");
+	const policy = shouldPersistBlobBytes(p.mime, p.bytes.byteLength, ctx.config.blobs);
 	await upsertBlob(ctx.db, {
 		sha256: p.sourceSha,
 		mime_type: p.mime,
 		size_bytes: p.bytes.byteLength,
-		bytes: p.bytes,
+		bytes: policy.persist ? p.bytes : null,
 	});
+	if (!policy.persist) {
+		logSkippedBlobBytes(ctx, p.logicalPath, p.mime, p.bytes.byteLength, policy.reason);
+	}
 
 	onPhase?.("converting");
 	const conversion = await convert(p.bytes, p.mime, p.source, ctx.config.llm, ctx.config.converters);

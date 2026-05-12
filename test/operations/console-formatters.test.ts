@@ -321,6 +321,7 @@ describe("read.console_formatter", () => {
 				content: "hello",
 				description: null,
 				blob_available: false,
+				bytes_skipped: false,
 			}) ?? "";
 		const visible = STRIP(out);
 		expect(visible).toContain("docs/a.md");
@@ -340,6 +341,7 @@ describe("read.console_formatter", () => {
 				version_is_current: false,
 				bytes_base64: "AAAA",
 				blob_available: true,
+				bytes_skipped: false,
 			}) ?? "";
 		expect(STRIP(out)).toContain("[historical]");
 		expect(STRIP(out)).toContain("4 base64 chars");
@@ -475,6 +477,8 @@ describe("prune.console_formatter", () => {
 				cutoff: "2025-01-01T00:00:00Z",
 				removed_versions: 5,
 				removed_orphan_blobs: 0,
+				stripped_blob_bytes: 0,
+				reclaimed_bytes: 0,
 				dry_run: true,
 			}) ?? "";
 		const visible = STRIP(out);
@@ -488,6 +492,8 @@ describe("prune.console_formatter", () => {
 				cutoff: "2025-01-01T00:00:00Z",
 				removed_versions: 1,
 				removed_orphan_blobs: 2,
+				stripped_blob_bytes: 0,
+				reclaimed_bytes: 0,
 				dry_run: false,
 			}) ?? "";
 		const visible = STRIP(out);
