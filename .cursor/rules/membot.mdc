@@ -60,7 +60,7 @@ during ingest or refresh.
 | `apple-notes:*/Inbox`                        | a folder named `Inbox` in any account                |
 | `apple-notes:**/Archive/**`                  | anything under any folder named `Archive`            |
 
-Each note's body is rendered to markdown by `macos-ts` (no LLM round-trip). Notes land at `apple-notes/<account>/<folder>/<title>.md` (slug-cased; collisions get a deterministic `-<noteId>` suffix). Password-protected notes are skipped with a per-entry warning. Attachments and shared-note participants are out of scope for v1.
+Each note's body is rendered to markdown by `macos-ts` (no LLM round-trip). Notes land at `apple-notes/<account>/<folder>/<title>.md` (slug-cased; collisions get a deterministic `-<noteId>` suffix). Password-protected notes are skipped with a per-entry warning. **`Recently Deleted` is excluded from wildcard scopes** — name it explicitly (e.g. `apple-notes:iCloud/Recently Deleted`) to include the trash. Attachments and shared-note participants are out of scope for v1.
 
 Requires **Full Disk Access** for your terminal/editor in System Settings → Privacy & Security → Full Disk Access. The error message names the exact pane to open.
 

@@ -59,7 +59,7 @@ membot add "apple-notes:**/Archive/**"             # anything under any "Archive
 membot add "apple-notes:Personal" --sync           # also tombstone rows for notes deleted in Notes.app
 ```
 
-Each note's body is rendered to markdown by `macos-ts` (decoded from the gzip'd protobuf), then flows through the standard chunk → embed → search pipeline. Notes land at `apple-notes/<account>/<folder>/<title>.md`. Refresh re-fetches via the persisted `noteId` and skips re-embedding when `modifiedAt` is unchanged.
+Each note's body is rendered to markdown by `macos-ts` (decoded from the gzip'd protobuf), then flows through the standard chunk → embed → search pipeline. Notes land at `apple-notes/<account>/<folder>/<title>.md`. Refresh re-fetches via the persisted `noteId` and skips re-embedding when `modifiedAt` is unchanged. `Recently Deleted` is excluded from wildcard scopes — name it explicitly (`apple-notes:iCloud/Recently Deleted`) to include the trash.
 
 Out of scope for v1: attachments, password-protected notes (skipped per-entry), shared-note participants, two-way sync, iCloud-only notes not synced to this Mac.
 

@@ -55,6 +55,27 @@ export function appleNotesSourceUri(noteId: number): string {
 }
 
 /**
+ * Folders Apple treats as system-managed trash/recycle areas. We skip
+ * these on wildcard scopes — sweeping `apple-notes:` into the store
+ * would otherwise drag in everything the user deleted in the last 30
+ * days, which is almost never what they want. Users who explicitly
+ * name a system folder in their scope (e.g.
+ * `apple-notes:iCloud/Recently Deleted`) get it back.
+ */
+const SYSTEM_FOLDERS: readonly string[] = ["Recently Deleted"];
+
+function isSystemFolder(folderName: string): boolean {
+	return SYSTEM_FOLDERS.includes(folderName);
+}
+
+function scopeIncludesSystemFolder(scope: AppleNotesScope, folderName: string): boolean {
+	// "Explicit" = the literal folder name appears as a substring in the
+	// folder pattern. Catches `apple-notes:iCloud/Recently Deleted` and
+	// `apple-notes:**/Recently Deleted/**`, skips the wildcard-only forms.
+	return scope.folderPattern.includes(folderName);
+}
+
+/**
  * Walk the scope and yield every note that matches. macos-ts is fast
  * enough that buffering the full list is fine even for thousands of notes
  * — the heavy work happens in the embed step downstream. Password-protected
@@ -79,6 +100,7 @@ export function enumerateNotes(scope: AppleNotesScope, reader: AppleNotesReader)
 	for (const folder of reader.listFolders()) {
 		if (folder.noteCount === 0) continue;
 		if (!matchFolder(folder.name)) continue;
+		if (isSystemFolder(folder.name) && !scopeIncludesSystemFolder(scope, folder.name)) continue;
 		// listNotesIn with an empty account → no account filter applied,
 		// so a folder name that exists in multiple accounts (e.g. "Inbox")
 		// returns the superset; we dedupe via seenNoteIds and resolve each

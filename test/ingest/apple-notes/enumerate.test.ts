@@ -90,10 +90,11 @@ const FIXTURE: FakeNote[] = [
 	{ id: 3, title: "Q1 Plan", folderName: "Meetings", accountName: "Work" },
 	{ id: 4, title: "Locked Secret", folderName: "Inbox", accountName: "Personal", isPasswordProtected: true },
 	{ id: 5, title: "Idea", folderName: "Inbox", accountName: "Work" },
+	{ id: 6, title: "Old Trash", folderName: "Recently Deleted", accountName: "Personal" },
 ];
 
 describe("enumerateNotes", () => {
-	test("bare scope matches every non-locked note", () => {
+	test("bare scope matches every non-locked, non-trash note", () => {
 		const reader = buildFakeReader(FIXTURE);
 		const result = enumerateNotes(parseAppleNotesScope("apple-notes:"), reader);
 		expect(result.map((n) => n.noteId).sort()).toEqual([1, 2, 3, 5]);
@@ -115,6 +116,25 @@ describe("enumerateNotes", () => {
 		const reader = buildFakeReader(FIXTURE);
 		const result = enumerateNotes(parseAppleNotesScope("apple-notes:*/Inbox"), reader);
 		expect(result.map((n) => n.noteId).sort()).toEqual([5]);
+	});
+
+	test("wildcard scopes skip Recently Deleted by default", () => {
+		const reader = buildFakeReader(FIXTURE);
+		const result = enumerateNotes(parseAppleNotesScope("apple-notes:"), reader);
+		// Note 6 is in "Recently Deleted"; should be filtered.
+		expect(result.map((n) => n.noteId).sort()).toEqual([1, 2, 3, 5]);
+	});
+
+	test("explicit Recently Deleted scope includes the trash folder", () => {
+		const reader = buildFakeReader(FIXTURE);
+		const result = enumerateNotes(parseAppleNotesScope("apple-notes:Personal/Recently Deleted"), reader);
+		expect(result.map((n) => n.noteId)).toEqual([6]);
+	});
+
+	test("**/Recently Deleted/** includes the trash folder", () => {
+		const reader = buildFakeReader(FIXTURE);
+		const result = enumerateNotes(parseAppleNotesScope("apple-notes:**/Recently Deleted/**"), reader);
+		expect(result.map((n) => n.noteId)).toEqual([6]);
 	});
 
 	test("default logical_path is slugged", () => {
