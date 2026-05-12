@@ -34,6 +34,9 @@ membot add https://docs.google.com/document/d/<ID>/edit           # Google Docs/
 membot add https://github.com/<owner>/<repo>/issues/<n>           # GitHub issues + PRs (with comments)
 membot add https://linear.app/<workspace>/issue/<KEY>             # Linear issues + projects
 membot add https://example.com/spec.pdf                           # any other URL (browser print-to-PDF fallback)
+membot add "apple-notes:"                                         # all Apple Notes (macOS-only)
+membot add "apple-notes:Personal/Recipes"                         # one folder
+membot add "apple-notes:Personal/Recipes/**" --sync               # one folder + nested; tombstone deleted notes
 membot add "inline:Decision: use X because Y"                     # literal text
 membot add ./docs --refresh-frequency 24h                         # auto-refresh every day
 ```
@@ -45,6 +48,23 @@ Linear need API keys set via
 an auth error, the `HelpfulError` will tell you exactly which command
 to run. Fetches are non-interactive — they never open a browser
 during ingest or refresh.
+
+**Apple Notes** (`apple-notes:` scheme, macOS-only) reads `NoteStore.sqlite` directly via `macos-ts` — no AppleScript, no browser, just a fast local SQLite read. The scope syntax is `apple-notes:[<account-glob>[/<folder-glob>]]` and supports the same `*`/`**`/`?` wildcards as filesystem globs:
+
+| Source                                       | Matches                                              |
+| -------------------------------------------- | ---------------------------------------------------- |
+| `apple-notes:`                               | all notes, all accounts, all folders                 |
+| `apple-notes:Personal`                       | all notes in the `Personal` account                  |
+| `apple-notes:Personal/Recipes`               | exactly the `Recipes` folder                         |
+| `apple-notes:Personal/Recipes/**`            | `Recipes` and any nested subfolders                  |
+| `apple-notes:*/Inbox`                        | a folder named `Inbox` in any account                |
+| `apple-notes:**/Archive/**`                  | anything under any folder named `Archive`            |
+
+Each note's body is rendered to markdown by `macos-ts` (no LLM round-trip). Notes land at `apple-notes/<account>/<folder>/<title>.md` (slug-cased; collisions get a deterministic `-<noteId>` suffix). Password-protected notes are skipped with a per-entry warning. **`Recently Deleted` is excluded from wildcard scopes** — name it explicitly (e.g. `apple-notes:iCloud/Recently Deleted`) to include the trash. Attachments and shared-note participants are out of scope for v1.
+
+Requires **Full Disk Access** for your terminal/editor in System Settings → Privacy & Security → Full Disk Access. The error message names the exact pane to open.
+
+Pass `--sync` to reconcile deletions: after ingest, any current row inside the scope whose underlying note no longer exists in Notes.app is tombstoned. Without `--sync`, deletes are not detected.
 
 Each entry becomes a new version under its own `logical_path`. PDFs/DOCX/HTML are converted to markdown; images get vision captions; original bytes are kept and reachable via `membot read --bytes`.
 
@@ -125,7 +145,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 
 | Command                               | Purpose                                                                        |
 | ------------------------------------- | ------------------------------------------------------------------------------ |
-| `membot add <sources...>`             | Ingest one or more files, directories, globs, URLs, or `inline:<text>`. Skips unchanged sources; pass `--force` to re-ingest |
+| `membot add <sources...>`             | Ingest one or more files, directories, globs, URLs, `apple-notes:<scope>`, or `inline:<text>`. Skips unchanged sources; pass `--force` to re-ingest. For `apple-notes:` sources, `--sync` tombstones rows whose underlying note has been deleted in Notes.app |
 | `membot ls [prefix]`                  | List current files (size, mime, refresh status)                                |
 | `membot tree [prefix]`                | Render the synthesised logical-path tree (`--max-depth`, `--max-items` cap output) |
 | `membot read <path>`                  | Read current markdown surrogate (or `--bytes` for original)                    |
@@ -158,6 +178,8 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 - **"refresh failed: auth"** for a Google URL → cookies expired. Run `membot login` to refresh the browser session.
 - **"refresh failed: auth"** for a GitHub URL → set the PAT via `membot config set downloaders.github.api_key <PAT>` (or export `GITHUB_TOKEN`).
 - **"refresh failed: auth"** for a Linear URL → set the personal API key via `membot config set downloaders.linear.api_key <KEY>` (create one at `linear.app/settings/api`).
+- **"Cannot read the Apple Notes database — Full Disk Access required"** → System Settings → Privacy & Security → Full Disk Access → toggle on for your terminal/editor (Terminal, iTerm, Warp, Cursor, VSCode, Conductor). Restart the app and re-run. Open the pane directly: `open 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'`.
+- **"Apple Note ... no longer exists"** on refresh → the note was deleted in Notes.app. Reconcile with `membot add apple-notes: --sync` or drop the row with `membot rm <path>`.
 - **Search returns nothing** → Confirm the file ingested with `membot info <path>`; if needed, run `membot reindex` to rebuild the FTS keyword index.
 - **Stale results after manual DB edits** → `membot reindex`.
 - **Two paths point at the same content** → `membot mv` doesn't merge; tombstone one with `membot rm`.

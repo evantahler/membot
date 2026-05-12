@@ -45,6 +45,24 @@ membot config set downloaders.linear.api_key <KEY>
 
 Public GitHub repos work without a token (rate-limited at 60 req/hr). Linear always needs a key.
 
+### Apple Notes (macOS)
+
+`apple-notes:` reads `NoteStore.sqlite` directly via [`macos-ts`](https://www.npmjs.com/package/macos-ts) — no AppleScript, no browser. Grant **Full Disk Access** to your terminal/editor in System Settings → Privacy & Security → Full Disk Access (one time). The scope after the colon supports the same glob syntax as filesystem paths:
+
+```bash
+membot add "apple-notes:"                          # all notes
+membot add "apple-notes:Personal"                  # one account
+membot add "apple-notes:Personal/Recipes"          # one folder
+membot add "apple-notes:Personal/Recipes/**"       # one folder + nested subfolders
+membot add "apple-notes:*/Inbox"                   # folder name "Inbox" in any account
+membot add "apple-notes:**/Archive/**"             # anything under any "Archive" folder
+membot add "apple-notes:Personal" --sync           # also tombstone rows for notes deleted in Notes.app
+```
+
+Each note's body is rendered to markdown by `macos-ts` (decoded from the gzip'd protobuf), then flows through the standard chunk → embed → search pipeline. Notes land at `apple-notes/<account>/<folder>/<title>.md`. Refresh re-fetches via the persisted `noteId` and skips re-embedding when `modifiedAt` is unchanged. `Recently Deleted` is excluded from wildcard scopes — name it explicitly (`apple-notes:iCloud/Recently Deleted`) to include the trash.
+
+Out of scope for v1: attachments, password-protected notes (skipped per-entry), shared-note participants, two-way sync, iCloud-only notes not synced to this Mac.
+
 ## Quick start
 
 ```bash
@@ -54,6 +72,7 @@ membot add https://docs.google.com/document/d/.. # Google Docs / Sheets / Slides
 membot add https://github.com/o/r/issues/123     # GitHub issues + PRs (with comments)
 membot add https://linear.app/w/issue/ABC-12     # Linear issues + projects
 membot add https://example.com/spec.pdf          # any other URL (browser print-to-PDF fallback)
+membot add "apple-notes:Personal/Recipes"        # Apple Notes (macOS-only); see "Apple Notes" below
 membot add a.md b.md "docs/**/*.md"              # any number of files / globs in one call
 membot ls                                        # list current files
 membot search "how does refresh work?"           # hybrid search
@@ -78,7 +97,7 @@ The skill files describe the discover → ingest → search → read → write w
 
 | Command                         | Description                                                                       |
 | ------------------------------- | --------------------------------------------------------------------------------- |
-| `membot add <sources...>`       | Ingest one or more files, directories, globs, URLs, or `inline:<text>`. Default `logical_path` mirrors the source (absolute path for local files, `remotes/{host}/{path}` for URLs) so files with the same basename in different projects don't collide. Pass `-p <path>` to override or set a prefix. Skips unchanged source bytes; pass `--force` to re-ingest. |
+| `membot add <sources...>`       | Ingest one or more files, directories, globs, URLs, `apple-notes:<scope>` (macOS), or `inline:<text>`. Default `logical_path` mirrors the source (absolute path for local files, `remotes/{host}/{path}` for URLs, `apple-notes/<account>/<folder>/<title>.md` for notes) so files with the same basename in different projects don't collide. Pass `-p <path>` to override or set a prefix. Skips unchanged source bytes; pass `--force` to re-ingest. For `apple-notes:` sources, pass `--sync` to tombstone rows whose underlying note was deleted in Notes.app. |
 | `membot ls [prefix]`            | List current files (size, mime, refresh status)                                   |
 | `membot tree [prefix]`          | Render the synthesised logical-path tree (`--max-depth`, `--max-items` cap output) |
 | `membot read <path>`            | Read the markdown surrogate (or `--bytes` for original bytes, base64)             |
