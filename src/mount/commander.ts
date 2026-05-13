@@ -13,7 +13,7 @@ import { applySchemaToCommand, toKebab } from "./zod-to-cli.ts";
  *   1. accepts positional + flag args inferred from the zod input schema
  *   2. validates with the same schema
  *   3. starts a spinner, runs the handler, prints the formatted result
- *   4. catches `HelpfulError` and renders it (color text on TTY, JSON on stderr otherwise)
+ *   4. catches `HelpfulError` and renders it (color text on stderr for a TTY, JSON on stdout in --json mode)
  */
 export function mountAsCommanderCommand<I extends z.ZodObject, O extends z.ZodTypeAny>(
 	program: Command,
@@ -111,7 +111,9 @@ function parseOutput<I extends z.ZodObject, O extends z.ZodTypeAny>(op: Operatio
 /**
  * Render an error caught at the mount boundary. Wraps unknown errors via
  * `asHelpful()` so the output shape (kind/message/hint) is uniform regardless
- * of where the throw came from.
+ * of where the throw came from. In `--json` mode the structured payload goes
+ * to stdout (same stream as successful results); in human mode it goes to
+ * stderr alongside other log output.
  */
 export function renderCliError(err: unknown): void {
 	const helpful = isHelpfulError(err)
@@ -133,7 +135,7 @@ export function renderCliError(err: unknown): void {
 				details: helpful.details,
 			},
 		};
-		process.stderr.write(`${JSON.stringify(payload)}\n`);
+		process.stdout.write(`${JSON.stringify(payload)}\n`);
 		return;
 	}
 

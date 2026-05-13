@@ -23,7 +23,7 @@ Versioning:
     version_id (a timestamp). Older versions stay queryable via the
     \`version\` parameter on membot_read / membot_info / membot_versions / membot_diff.
   - All other tools default to the current (latest, non-tombstoned) version.
-  - membot_delete is a tombstone — history is preserved unless membot_prune runs.
+  - membot_remove is a tombstone — history is preserved unless membot_prune runs.
 
 Refresh:
   - Each row has source metadata. membot_refresh re-reads the source, hashes

@@ -16,7 +16,7 @@
         "fast-xml-parser": "^5.7.3",
         "gray-matter": "^4.0.3",
         "jszip": "^3.10.1",
-        "macos-ts": "^0.10.7",
+        "macos-ts": "^0.11.0",
         "mammoth": "^1.8.0",
         "mustache": "^4.2.0",
         "nanospinner": "^1.2.2",
@@ -33,9 +33,6 @@
         "@biomejs/biome": "^2.4.14",
         "@types/bun": "latest",
         "@types/mustache": "^4.2.6",
-        "typescript": "^6",
-      },
-      "peerDependencies": {
         "typescript": "^6",
       },
     },
@@ -433,7 +430,7 @@
 
     "lop": ["lop@0.4.2", "", { "dependencies": { "duck": "^0.1.12", "option": "~0.2.1", "underscore": "^1.13.1" } }, "sha512-RefILVDQ4DKoRZsJ4Pj22TxE3omDO47yFpkIBoDKzkqPRISs5U1cnAdg/5583YPkWPaLIYHOKRMQSvjFsO26cw=="],
 
-    "macos-ts": ["macos-ts@0.10.7", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.29.0", "protobufjs": "^8.0.1" }, "peerDependencies": { "typescript": "^5" }, "bin": { "macos-mcp": "src/mcp-server.ts" } }, "sha512-JIYZRVnuKdELtQFGrwM+2zgA5+aaG0DVkzOfWJ7bCg3MfMpvQiq+6fmpwJ7iRfuS1avbFtDooLqHyFi6x7/1hA=="],
+    "macos-ts": ["macos-ts@0.11.0", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.29.0", "protobufjs": "^8.0.1" }, "bin": { "macos-mcp": "src/mcp-server.ts" } }, "sha512-IJYAeZa/dTzCSys6cUE9RvpLRF7cKCTZEbAruZBBNzGt4+a5EHVEdZE9gpAJeIO3wEBRr3TNHxKwDLd4WPlL6w=="],
 
     "make-dir": ["make-dir@3.1.0", "", { "dependencies": { "semver": "^6.0.0" } }, "sha512-g3FeP20LNwhALb/6Cz6Dd4F2ngze0jz7tbzrD2wAV+o9FeNHe4rL+yK2md0J/fiSf1sa1ADhXqi5+oVwOM/eGw=="],
 

@@ -8,7 +8,7 @@ import { colors } from "../output/formatter.ts";
 import { defineOperation } from "./types.ts";
 
 export const removeOperation = defineOperation({
-	name: "membot_delete",
+	name: "membot_remove",
 	cliName: "rm",
 	bashEquivalent: "rm",
 	description: `Tombstone one or more logical_paths so they no longer appear in membot_list / membot_tree / membot_search. Each \`paths\` arg is independently treated as either a literal logical_path or a glob pattern (e.g. "docs/**/*.md"); globs are matched against current logical_paths in the DB, not the filesystem. A literal arg that matches no exact file but is a prefix of existing paths (a "directory") is rejected unless \`recursive\` is true, in which case every path beneath it is tombstoned. The union of matches is deduplicated, then tombstoned one at a time — partial failures are reported per-entry without aborting the rest. An input arg that matches zero current files is an error (the response includes which arg). Old versions remain queryable via membot_versions and membot_read with an explicit version. Use membot_prune to permanently drop history.`,
