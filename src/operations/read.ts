@@ -5,6 +5,7 @@ import { getCurrent, getVersion } from "../db/files.ts";
 import { HelpfulError } from "../errors.ts";
 import { normalizeLogicalPath } from "../ingest/ingest.ts";
 import { colors } from "../output/formatter.ts";
+import { renderForTty } from "../output/markdown.ts";
 import { defineOperation } from "./types.ts";
 
 export const readOperation = defineOperation({
@@ -23,6 +24,12 @@ export const readOperation = defineOperation({
 			),
 		offset: z.number().optional().describe("1-based start line (text mode only)"),
 		limit: z.number().optional().describe("Number of lines to return (text mode only)"),
+		raw: z
+			.boolean()
+			.default(false)
+			.describe(
+				"CLI: skip ANSI markdown rendering on a TTY and output the raw text. No effect on MCP responses (which always return raw markdown).",
+			),
 	}),
 	outputSchema: z.object({
 		logical_path: z.string(),
@@ -41,7 +48,7 @@ export const readOperation = defineOperation({
 			),
 	}),
 	cli: { positional: ["logical_path"] },
-	console_formatter: (result) => {
+	console_formatter: (result, input) => {
 		const tag = result.version_is_current ? colors.green("[current]") : colors.yellow("[historical]");
 		const head = `${colors.cyan(result.logical_path)} ${colors.dim(`@ ${result.version_id}`)} ${tag}`;
 		const meta = colors.dim(
@@ -50,7 +57,7 @@ export const readOperation = defineOperation({
 		if (result.bytes_base64 !== undefined) {
 			return `${head}\n${meta}\n${colors.dim(`(${result.bytes_base64.length} base64 chars; pipe with --json for the full payload)`)}`;
 		}
-		const body = result.content ?? "";
+		const body = renderForTty(result.content ?? "", input?.raw ?? false);
 		return `${head}\n${meta}\n\n${body}`;
 	},
 	handler: async (input, ctx) => {

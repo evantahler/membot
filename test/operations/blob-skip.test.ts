@@ -72,7 +72,7 @@ describe("blob-skip ingest + read + retroactive strip", () => {
 	}, 180_000);
 
 	test("meta-only read reports bytes_skipped=true and blob_available=false", async () => {
-		const out = await readOperation.handler({ logical_path: bigPath, bytes: false }, ctx);
+		const out = await readOperation.handler({ logical_path: bigPath, bytes: false, raw: false }, ctx);
 		expect(out.bytes_skipped).toBe(true);
 		expect(out.blob_available).toBe(false);
 		// Surrogate content (the markdown body) is still readable
@@ -81,7 +81,7 @@ describe("blob-skip ingest + read + retroactive strip", () => {
 
 	test("read bytes=true on a skipped blob throws HelpfulError pointing at config", async () => {
 		try {
-			await readOperation.handler({ logical_path: bigPath, bytes: true }, ctx);
+			await readOperation.handler({ logical_path: bigPath, bytes: true, raw: false }, ctx);
 			throw new Error("expected throw");
 		} catch (err) {
 			expect(err).toBeInstanceOf(HelpfulError);
