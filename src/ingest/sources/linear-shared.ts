@@ -128,9 +128,17 @@ export async function graphql<T>(
 	});
 	const ref = typeof url === "string" ? url : url.toString();
 	if (!response.ok) {
+		// Pull whatever the server sent — GraphQL 400s usually carry parse /
+		// validation errors that are useless without the body. Best-effort:
+		// don't fail the error path itself when the body isn't JSON.
+		let detail = "";
+		try {
+			const text = await response.text();
+			detail = text.length > 0 ? ` — ${text.slice(0, 500)}` : "";
+		} catch {}
 		throw new HelpfulError({
 			kind: response.status === 401 || response.status === 403 ? "auth_error" : "network_error",
-			message: `Linear GraphQL returned ${response.status} ${response.statusText} for ${ref}.`,
+			message: `Linear GraphQL returned ${response.status} ${response.statusText} for ${ref}${detail}.`,
 			hint:
 				response.status === 401 || response.status === 403
 					? "Re-create the API key at https://linear.app/settings/api and run `membot config set downloaders.linear.api_key <KEY>`."

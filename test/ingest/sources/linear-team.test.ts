@@ -97,13 +97,14 @@ describe("linearTeamPlugin.enumerate", () => {
 									id: "team-1",
 									key: "ENG",
 									organization: { urlKey: "arcade" },
-									children: { nodes: [] },
 								},
 							],
 						},
 					},
 				}),
-			ProjectsForTeams: (vars) => {
+			SubTeams: () =>
+				jsonResponse({ data: { teams: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } }),
+			ProjectsForTeam: (vars) => {
 				if (!vars.after) {
 					return jsonResponse({
 						data: {
@@ -171,11 +172,11 @@ describe("linearTeamPlugin.enumerate", () => {
 		expect(entries[2]?.cursor.kind).toBe("project");
 		expect(entries[3]?.logicalPathHint).toBe("linear/arcade/issues/ENG-2.md");
 
-		const projectsCalls = stub.calls.filter((c) => c.body.query.includes("ProjectsForTeams"));
+		const projectsCalls = stub.calls.filter((c) => c.body.query.includes("ProjectsForTeam"));
 		expect(projectsCalls).toHaveLength(2);
 		expect(projectsCalls[0]?.body.variables.after).toBeNull();
 		expect(projectsCalls[1]?.body.variables.after).toBe("p-cursor-1");
-		expect(projectsCalls[0]?.body.variables.teamIds).toEqual(["team-1"]);
+		expect(projectsCalls[0]?.body.variables.teamId).toBe("team-1");
 	});
 
 	test("includes one level of sub-team projects (deduped)", async () => {
@@ -189,39 +190,49 @@ describe("linearTeamPlugin.enumerate", () => {
 									id: "team-parent",
 									key: "ENG",
 									organization: { urlKey: "arcade" },
-									children: {
-										nodes: [
-											{ id: "team-child-1", key: "ENG_PLATFORM" },
-											{ id: "team-child-2", key: "ENG_INFRA" },
-										],
-									},
 								},
 							],
 						},
 					},
 				}),
-			ProjectsForTeams: () =>
+			SubTeams: () =>
 				jsonResponse({
+					data: {
+						teams: {
+							pageInfo: { hasNextPage: false, endCursor: null },
+							nodes: [
+								{ id: "team-child-1", key: "ENG_PLATFORM" },
+								{ id: "team-child-2", key: "ENG_INFRA" },
+							],
+						},
+					},
+				}),
+			ProjectsForTeam: (vars) => {
+				const teamId = vars.teamId as string;
+				// Parent + child-1 both see project p1 (shared); child-2 has p2 only.
+				if (teamId === "team-parent" || teamId === "team-child-1") {
+					return jsonResponse({
+						data: {
+							projects: {
+								pageInfo: { hasNextPage: false, endCursor: null },
+								nodes: [
+									{
+										id: "p1",
+										name: "Shared",
+										slugId: "shared-abc12345",
+										url: "https://linear.app/arcade/project/shared-abc12345",
+										updatedAt: "2026-01-01T00:00:00Z",
+									},
+								],
+							},
+						},
+					});
+				}
+				return jsonResponse({
 					data: {
 						projects: {
 							pageInfo: { hasNextPage: false, endCursor: null },
 							nodes: [
-								// Same project id appears twice (shared by parent + sub-team) — dedupe.
-								{
-									id: "p1",
-									name: "Shared",
-									slugId: "shared-abc12345",
-									url: "https://linear.app/arcade/project/shared-abc12345",
-									updatedAt: "2026-01-01T00:00:00Z",
-								},
-								{
-									id: "p1",
-									name: "Shared",
-									slugId: "shared-abc12345",
-									url: "https://linear.app/arcade/project/shared-abc12345",
-									updatedAt: "2026-01-01T00:00:00Z",
-								},
-								// Sub-team-only project.
 								{
 									id: "p2",
 									name: "Platform only",
@@ -232,7 +243,8 @@ describe("linearTeamPlugin.enumerate", () => {
 							],
 						},
 					},
-				}),
+				});
+			},
 			IssuesForProject: () =>
 				jsonResponse({
 					data: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } },
@@ -241,14 +253,18 @@ describe("linearTeamPlugin.enumerate", () => {
 		restoreFetch = stub.restore;
 
 		const entries = await linearTeamPlugin.enumerate("linear-team:ENG", { config: configWithKey, logger });
-		// 2 distinct projects (after dedupe) + 0 issues = 2 entries.
+		// 2 distinct projects (p1 deduped across parent + child-1) + 0 issues = 2 entries.
 		expect(entries).toHaveLength(2);
 		expect(entries.map((e) => e.logicalPathHint).sort()).toEqual([
 			"linear/arcade/projects/platform-def67890.md",
 			"linear/arcade/projects/shared-abc12345.md",
 		]);
-		const projectsCalls = stub.calls.filter((c) => c.body.query.includes("ProjectsForTeams"));
-		expect(projectsCalls[0]?.body.variables.teamIds).toEqual(["team-parent", "team-child-1", "team-child-2"]);
+		const projectsCalls = stub.calls.filter((c) => c.body.query.includes("ProjectsForTeam"));
+		expect(projectsCalls.map((c) => c.body.variables.teamId).sort()).toEqual([
+			"team-child-1",
+			"team-child-2",
+			"team-parent",
+		]);
 	});
 
 	test("raises auth_error when api_key is missing", async () => {
@@ -395,13 +411,14 @@ describe("linearTeamPlugin.sync", () => {
 									id: "team-1",
 									key: "ENG",
 									organization: { urlKey: "arcade" },
-									children: { nodes: [] },
 								},
 							],
 						},
 					},
 				}),
-			ProjectsForTeams: () =>
+			SubTeams: () =>
+				jsonResponse({ data: { teams: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } }),
+			ProjectsForTeam: () =>
 				jsonResponse({
 					data: {
 						projects: {

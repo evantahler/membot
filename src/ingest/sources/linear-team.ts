@@ -49,7 +49,6 @@ interface TeamRef {
 
 interface TeamNode extends TeamRef {
 	organization: { urlKey: string } | null;
-	children: { nodes: TeamRef[] };
 }
 
 interface ProjectNode {
@@ -78,13 +77,26 @@ const TEAM_BY_KEY_QUERY = `query TeamByKey($key: String!) {
     nodes {
       id key
       organization { urlKey }
-      children { nodes { id key } }
     }
   }
 }`;
 
-const PROJECTS_FOR_TEAMS_QUERY = `query ProjectsForTeams($teamIds: [ID!]!, $after: String) {
-  projects(filter: { accessibleTeams: { some: { id: { in: $teamIds } } } },
+/**
+ * Sub-team lookup via the `parent` filter — confirmed to exist on Linear's
+ * TeamFilter. We avoid `Team.children` because not every Linear schema
+ * version exposes that connection field, and the parent-filter form works
+ * uniformly. Pagination shouldn't be needed in practice (teams rarely have
+ * more than 100 direct children), but we paginate defensively.
+ */
+const SUB_TEAMS_QUERY = `query SubTeams($parentId: ID!, $after: String) {
+  teams(filter: { parent: { id: { eq: $parentId } } }, first: 100, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes { id key }
+  }
+}`;
+
+const PROJECTS_FOR_TEAM_QUERY = `query ProjectsForTeam($teamId: ID!, $after: String) {
+  projects(filter: { accessibleTeams: { some: { id: { eq: $teamId } } } },
            first: 50, after: $after) {
     pageInfo { hasNextPage endCursor }
     nodes { id name slugId url updatedAt }
@@ -137,52 +149,54 @@ const linearTeamPlugin = defineSourcePlugin<LinearConfig, LinearTeamArgs>({
 
 		const entries: Entry<LinearTeamArgs>[] = [];
 		const seenProjects = new Set<string>();
-		for await (const project of paginate(
-			apiKey,
-			PROJECTS_FOR_TEAMS_QUERY,
-			{ teamIds },
-			source,
-			(data: { projects: { pageInfo: PageInfo; nodes: ProjectNode[] } }) => data.projects,
-		)) {
-			// A project shared by parent and a sub-team comes back twice from
-			// the `in`-filtered query — dedupe so we don't double-ingest.
-			if (seenProjects.has(project.id)) continue;
-			seenProjects.add(project.id);
-
-			const projectArgs: LinearTeamProjectArgs = {
-				kind: "project",
-				team,
-				workspace,
-				slug: project.slugId,
-				slug_id: project.slugId,
-				project_id: project.id,
-			};
-			entries.push({
-				source: project.url,
-				logicalPathHint: linearProjectPath(workspace, project.slugId),
-				mtimeMs: Date.parse(project.updatedAt),
-				cursor: projectArgs,
-			});
-
-			for await (const issue of paginate(
+		for (const teamId of teamIds) {
+			for await (const project of paginate(
 				apiKey,
-				ISSUES_FOR_PROJECT_QUERY,
-				{ projectId: project.id },
+				PROJECTS_FOR_TEAM_QUERY,
+				{ teamId },
 				source,
-				(data: { issues: { pageInfo: PageInfo; nodes: IssueNode[] } }) => data.issues,
+				(data: { projects: { pageInfo: PageInfo; nodes: ProjectNode[] } }) => data.projects,
 			)) {
-				const issueArgs: LinearTeamIssueArgs = {
-					kind: "issue",
+				// A project shared across parent + sub-team comes back from
+				// multiple per-team queries — dedupe so we don't double-ingest.
+				if (seenProjects.has(project.id)) continue;
+				seenProjects.add(project.id);
+
+				const projectArgs: LinearTeamProjectArgs = {
+					kind: "project",
 					team,
 					workspace,
-					identifier: issue.identifier,
+					slug: project.slugId,
+					slug_id: project.slugId,
+					project_id: project.id,
 				};
 				entries.push({
-					source: issue.url,
-					logicalPathHint: linearIssuePath(workspace, issue.identifier),
-					mtimeMs: Date.parse(issue.updatedAt),
-					cursor: issueArgs,
+					source: project.url,
+					logicalPathHint: linearProjectPath(workspace, project.slugId),
+					mtimeMs: Date.parse(project.updatedAt),
+					cursor: projectArgs,
 				});
+
+				for await (const issue of paginate(
+					apiKey,
+					ISSUES_FOR_PROJECT_QUERY,
+					{ projectId: project.id },
+					source,
+					(data: { issues: { pageInfo: PageInfo; nodes: IssueNode[] } }) => data.issues,
+				)) {
+					const issueArgs: LinearTeamIssueArgs = {
+						kind: "issue",
+						team,
+						workspace,
+						identifier: issue.identifier,
+					};
+					entries.push({
+						source: issue.url,
+						logicalPathHint: linearIssuePath(workspace, issue.identifier),
+						mtimeMs: Date.parse(issue.updatedAt),
+						cursor: issueArgs,
+					});
+				}
 			}
 		}
 		const subTeamSuffix = childKeys.length > 0 ? ` (incl. sub-teams: ${childKeys.join(", ")})` : "";
@@ -243,24 +257,26 @@ const linearTeamPlugin = defineSourcePlugin<LinearConfig, LinearTeamArgs>({
 		const liveIssueIdentifiers = new Set<string>();
 		const liveProjectSlugIds = new Set<string>();
 		const seenProjects = new Set<string>();
-		for await (const project of paginate(
-			apiKey,
-			PROJECTS_FOR_TEAMS_QUERY,
-			{ teamIds },
-			source,
-			(data: { projects: { pageInfo: PageInfo; nodes: ProjectNode[] } }) => data.projects,
-		)) {
-			if (seenProjects.has(project.id)) continue;
-			seenProjects.add(project.id);
-			liveProjectSlugIds.add(project.slugId);
-			for await (const issue of paginate(
+		for (const teamId of teamIds) {
+			for await (const project of paginate(
 				apiKey,
-				ISSUES_FOR_PROJECT_QUERY,
-				{ projectId: project.id },
+				PROJECTS_FOR_TEAM_QUERY,
+				{ teamId },
 				source,
-				(data: { issues: { pageInfo: PageInfo; nodes: IssueNode[] } }) => data.issues,
+				(data: { projects: { pageInfo: PageInfo; nodes: ProjectNode[] } }) => data.projects,
 			)) {
-				liveIssueIdentifiers.add(issue.identifier);
+				if (seenProjects.has(project.id)) continue;
+				seenProjects.add(project.id);
+				liveProjectSlugIds.add(project.slugId);
+				for await (const issue of paginate(
+					apiKey,
+					ISSUES_FOR_PROJECT_QUERY,
+					{ projectId: project.id },
+					source,
+					(data: { issues: { pageInfo: PageInfo; nodes: IssueNode[] } }) => data.issues,
+				)) {
+					liveIssueIdentifiers.add(issue.identifier);
+				}
 			}
 		}
 
@@ -320,11 +336,14 @@ export function parseLinearTeamScope(source: string): { team: string } {
 }
 
 /**
- * Resolve the team by key and pull in its direct sub-teams' ids. Linear's
+ * Resolve the team by key and pull in its direct sub-teams. Linear's
  * `accessibleTeams` filter isn't transitive across parent/child, so to
- * cover projects owned only by sub-teams we widen the team-id set up
- * front and let the projects query use `id: { in: [...] }`. Walks one
- * level only — recurse here if we ever see deeper team trees in the wild.
+ * cover projects owned only by sub-teams we discover children via the
+ * `parent` filter and run the projects query against each team id
+ * separately (deduping the union at the call site).
+ *
+ * Walks one level only — recurse here if we ever see deeper team trees
+ * in the wild.
  */
 async function resolveTeamHierarchy(
 	apiKey: string,
@@ -348,8 +367,18 @@ async function resolveTeamHierarchy(
 			hint: "Open an issue in the membot repo with the team key — Linear's API didn't return the expected organization metadata.",
 		});
 	}
-	const childKeys = teamNode.children.nodes.map((c) => c.key);
-	const teamIds = [teamNode.id, ...teamNode.children.nodes.map((c) => c.id)];
+	const children: TeamRef[] = [];
+	for await (const child of paginate(
+		apiKey,
+		SUB_TEAMS_QUERY,
+		{ parentId: teamNode.id },
+		ref,
+		(data: { teams: { pageInfo: PageInfo; nodes: TeamRef[] } }) => data.teams,
+	)) {
+		children.push(child);
+	}
+	const teamIds = [teamNode.id, ...children.map((c) => c.id)];
+	const childKeys = children.map((c) => c.key);
 	return { workspace, teamIds, childKeys };
 }
 
