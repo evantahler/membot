@@ -11,6 +11,7 @@ import { readOperation } from "./operations/read.ts";
 import { refreshOperation } from "./operations/refresh.ts";
 import { removeOperation } from "./operations/remove.ts";
 import { searchOperation } from "./operations/search.ts";
+import { sourcesOperation } from "./operations/sources.ts";
 import { statsOperation } from "./operations/stats.ts";
 import { treeOperation } from "./operations/tree.ts";
 import type { Operation } from "./operations/types.ts";
@@ -174,6 +175,13 @@ export class MembotClient {
 		input: z.input<typeof pruneOperation.inputSchema>,
 	): Promise<z.output<typeof pruneOperation.outputSchema>> {
 		return this.run(pruneOperation, input);
+	}
+
+	/** List every registered source plugin — what each one claims, what auth it needs, examples. */
+	async sources(
+		input: z.input<typeof sourcesOperation.inputSchema> = {},
+	): Promise<z.output<typeof sourcesOperation.outputSchema>> {
+		return this.run(sourcesOperation, input);
 	}
 
 	/**
