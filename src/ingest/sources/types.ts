@@ -1,7 +1,6 @@
 import type { z } from "zod";
 import type { MembotConfig } from "../../config/schemas.ts";
 import type { logger as Logger } from "../../output/logger.ts";
-import type { BrowserPool } from "./browser.ts";
 
 /**
  * The shape every source fetch produces. `downloader` + `downloaderArgs`
@@ -18,13 +17,11 @@ export interface DownloadedRemote {
 }
 
 /**
- * Per-call context passed to every plugin method. `pool` is a shared
- * BrowserPool managed by the orchestrator (only some plugins need it).
- * `onProgress` is the spinner sublabel hook — plugins call it with short
- * status strings during multi-step fetches.
+ * Per-call context passed to every plugin method. `onProgress` is the
+ * spinner sublabel hook — plugins call it with short status strings
+ * during multi-step fetches.
  */
 export interface PluginCtx {
-	pool: BrowserPool;
 	logger: typeof Logger;
 	config: MembotConfig;
 	onProgress?: (sublabel: string) => void;
@@ -63,7 +60,7 @@ export interface ProbeContext {
 }
 
 /**
- * One open batch (BrowserPool, sqlite reader, GraphQL client, …) shared
+ * One open batch (sqlite reader, GraphQL client, …) shared
  * across many fetches in a single ingest run. The orchestrator opens one
  * per source via `plugin.openBatchFetcher`, runs N fetches against it,
  * then closes it. URL plugins don't need this and return a trivial
@@ -84,15 +81,24 @@ export interface SyncCtx {
 	logger: typeof Logger;
 }
 
-export type LoginEntry = BrowserLoginEntry | ApiKeyLoginEntry;
+export type LoginEntry = CliToolLoginEntry | ApiKeyLoginEntry;
 
-export interface BrowserLoginEntry {
-	kind: "browser";
+/**
+ * A login that's driven by a bundled external CLI (currently just
+ * `gws` for Google). `membot login` runs `setupCommand` interactively
+ * for these entries — the user's actual browser opens, the CLI handles
+ * the OAuth dance, and the resulting refresh token lives wherever the
+ * CLI keeps it (`~/.config/gws/...` for gws). Multiple plugins can
+ * share the same login by declaring the same `setupCommand` — the
+ * registry dedupes on that string.
+ */
+export interface CliToolLoginEntry {
+	kind: "cli_tool";
 	/** Display name (e.g. "Google"). */
 	name: string;
-	/** Login URL the button opens. */
-	url: string;
-	/** Optional one-liner shown next to the button. */
+	/** Shell command `membot login` runs to drive the interactive auth flow. */
+	setupCommand: string;
+	/** Optional one-liner shown next to the login step. */
 	description?: string;
 }
 
@@ -113,8 +119,7 @@ export interface ApiKeyLoginEntry {
  *  - `url`: the source parses as an http(s) URL and the plugin's
  *    `matches(url)` returns true.
  *  - `scheme`: the source starts with `prefix` (e.g. `apple-notes:`).
- *    Scheme matchers are tried before URL matchers so a scheme-shaped
- *    source never accidentally falls through to generic-web.
+ *    Scheme matchers are tried before URL matchers.
  */
 export type SourceMatch = { kind: "url"; matches: (url: URL) => boolean } | { kind: "scheme"; prefix: string };
 
@@ -122,7 +127,8 @@ export type SourceMatch = { kind: "url"; matches: (url: URL) => boolean } | { ki
  * Plugin config-slice declaration. Used to assemble
  * `MembotConfigSchema.downloaders` at startup. Only plugins with their own
  * persisted settings (api_key, base_url overrides, etc.) declare this —
- * browser-cookie plugins like Google Docs have `logins` but no config slice.
+ * CLI-tool-auth plugins like Google Docs have `logins` but no config slice
+ * (credentials live wherever the bundled CLI keeps them).
  */
 export interface PluginConfigSlice<C extends Record<string, unknown> = Record<string, unknown>> {
 	/** Key under `config.downloaders`. Plugin's slice lives at `config.downloaders[key]`. */
@@ -169,18 +175,11 @@ export interface SourcePlugin<
 
 	/**
 	 * Per-plugin slice of `config.downloaders`. Required for plugins with
-	 * runtime settings (api_key); omit for browser-cookie plugins that
-	 * just rely on `membot login`.
+	 * runtime settings (api_key); omit for plugins whose credentials live
+	 * outside membot (e.g. the Google plugins rely on the bundled `gws`
+	 * CLI, which keeps tokens in its own config dir).
 	 */
 	config?: PluginConfigSlice<C>;
-
-	/**
-	 * The plugin authenticates via a config-stored credential, not browser
-	 * cookies. The fetcher uses this to skip the auto-login browser prompt
-	 * on `auth_error` (opening a browser doesn't help when the missing
-	 * credential is in a config file or env var).
-	 */
-	requiresApiKey?: boolean;
 
 	/**
 	 * Restrict registration to specific Node platforms. apple-notes is
@@ -190,20 +189,14 @@ export interface SourcePlugin<
 	platform?: NodeJS.Platform[];
 
 	/**
-	 * Force the BrowserPool into headed mode for this plugin's fetches.
-	 * Used for SPAs that detect headless Chromium and refuse to hydrate.
-	 */
-	requireHeaded?: boolean;
-
-	/**
 	 * Walk the source and produce one entry per ingestable thing. URL
 	 * plugins typically return a single entry whose `source` is the URL.
 	 * Scheme plugins like `apple-notes:` enumerate many notes per call.
 	 *
 	 * Runs in the resolve phase before the host builds a full PluginCtx,
-	 * so this method has no access to the browser pool or runtime config.
-	 * Plugins that need network/credentials for enumeration should defer
-	 * that work into `openBatchFetcher.fetch` instead.
+	 * so this method has no access to runtime config. Plugins that need
+	 * network/credentials for enumeration should defer that work into
+	 * `openBatchFetcher.fetch` instead.
 	 */
 	enumerate: (source: string) => Promise<Entry<A>[]>;
 

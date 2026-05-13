@@ -6,8 +6,9 @@ The `membot` npm package ships both the `membot` CLI binary and a TypeScript SDK
 
 ```bash
 bun add membot
-bunx playwright install chromium    # one-time, only if you ingest URLs
 ```
+
+The package's `postinstall` step also downloads the bundled `gws` binary into `~/.membot/bin/gws` — required only if you ingest Google Docs/Sheets/Slides. Other sources (GitHub, Linear, local files, Apple Notes) work without it.
 
 The SDK is Bun-only (the runtime depends on `Bun.Worker`, native DuckDB bindings, and bundled WASM patches). Don't try to run it under Node.
 

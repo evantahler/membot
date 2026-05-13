@@ -49,7 +49,6 @@ const githubPlugin = defineSourcePlugin<GithubConfig, GithubArgs>({
 			description: "create a fine-grained token with repo:read access (or use GITHUB_TOKEN env var)",
 		},
 	],
-	requiresApiKey: false,
 	async enumerate(source) {
 		const url = new URL(source);
 		const cursor = parseIssueUrl(url);

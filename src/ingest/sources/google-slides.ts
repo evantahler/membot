@@ -1,24 +1,26 @@
 import { HelpfulError } from "../../errors.ts";
+import { gwsExport } from "../gws.ts";
 import { sha256Hex } from "../local-reader.ts";
-import { fetchWithBrowserCookies, googleLoginEntry } from "./google-shared.ts";
+import { googleLoginEntry } from "./google-shared.ts";
 import { defaultUrlHint, registerSource } from "./registry.ts";
 import { type BatchFetcher, type DownloadedRemote, defineSourcePlugin } from "./types.ts";
 
 const SLIDE_PATH = /^\/presentation\/d\/([a-zA-Z0-9_-]+)/;
+const PDF_MIME = "application/pdf";
 
 interface GoogleSlidesArgs extends Record<string, unknown> {
 	slides_id: string;
 }
 
 /**
- * Download a Google Slides deck as a PDF via the canonical export
- * endpoint. PDF preserves layout and text-on-slides faithfully; the
- * existing `convertPdf` pipeline (unpdf) extracts the speaker text +
- * bullets without losing slide ordering.
+ * Download a Google Slides deck as a PDF via the bundled `gws` CLI.
+ * PDF preserves layout and text-on-slides faithfully; the existing
+ * `convertPdf` pipeline extracts speaker text + bullets without losing
+ * slide ordering.
  */
 const googleSlidesPlugin = defineSourcePlugin<Record<string, unknown>, GoogleSlidesArgs>({
 	name: "google-slides",
-	description: "Google Slides — exports as PDF for layout-faithful conversion.",
+	description: "Google Slides — exports as PDF via the bundled gws CLI, for layout-faithful conversion.",
 	examples: ["https://docs.google.com/presentation/d/<SLIDES_ID>/edit"],
 	match: {
 		kind: "url",
@@ -44,13 +46,13 @@ const googleSlidesPlugin = defineSourcePlugin<Record<string, unknown>, GoogleSli
 		return {
 			async fetch(entry, ctx): Promise<DownloadedRemote> {
 				const url = new URL(entry.source);
-				const exportUrl = `https://docs.google.com/presentation/d/${entry.cursor.slides_id}/export/pdf`;
-				const body = await fetchWithBrowserCookies(exportUrl, ctx, "Google Slides", url);
+				ctx.onProgress?.("downloading from google slides");
+				const body = await gwsExport({ fileId: entry.cursor.slides_id, mimeType: PDF_MIME });
 				const bytes = new Uint8Array(body);
 				return {
 					bytes,
 					sha256: sha256Hex(body),
-					mimeType: "application/pdf",
+					mimeType: PDF_MIME,
 					downloader: "google-slides",
 					downloaderArgs: { slides_id: entry.cursor.slides_id },
 					sourceUrl: url.toString(),

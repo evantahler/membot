@@ -5,7 +5,7 @@ import { findSourceByName, findSourceForInput, listSources } from "../../src/ing
 describe("source plugin registry", () => {
 	test("listSources surfaces every registered plugin with non-empty descriptions and examples", () => {
 		const all = listSources();
-		expect(all.length).toBeGreaterThanOrEqual(6);
+		expect(all.length).toBeGreaterThanOrEqual(5);
 		for (const p of all) {
 			expect(p.name.length).toBeGreaterThan(0);
 			expect(p.description.length).toBeGreaterThan(20);
@@ -13,7 +13,7 @@ describe("source plugin registry", () => {
 			expect(p.examples.length).toBeGreaterThan(0);
 		}
 		const names = all.map((p) => p.name);
-		for (const expected of ["google-docs", "google-sheets", "google-slides", "github", "linear", "generic-web"]) {
+		for (const expected of ["google-docs", "google-sheets", "google-slides", "github", "linear"]) {
 			expect(names).toContain(expected);
 		}
 	});
@@ -54,9 +54,9 @@ describe("source plugin registry", () => {
 		expect(p?.name).toBe("github");
 	});
 
-	test("findSourceForInput: GitHub repo root → generic-web (no specific handler)", () => {
+	test("findSourceForInput: GitHub repo root → null (no catch-all anymore)", () => {
 		const p = findSourceForInput("https://github.com/owner/repo");
-		expect(p?.name).toBe("generic-web");
+		expect(p).toBeNull();
 	});
 
 	test("findSourceForInput: Linear issue URL → linear", () => {
@@ -69,9 +69,9 @@ describe("source plugin registry", () => {
 		expect(p?.name).toBe("linear");
 	});
 
-	test("findSourceForInput: arbitrary URL → generic-web catch-all", () => {
+	test("findSourceForInput: arbitrary URL → null (we no longer ship generic-web)", () => {
 		const p = findSourceForInput("https://example.com/some/page");
-		expect(p?.name).toBe("generic-web");
+		expect(p).toBeNull();
 	});
 
 	test("findSourceForInput: scheme prefix (apple-notes:) wins on darwin", () => {
@@ -81,16 +81,6 @@ describe("source plugin registry", () => {
 			expect(p?.name).toBe("apple-notes");
 		} else {
 			expect(p).toBeNull();
-		}
-	});
-
-	test("generic-web matches http and https only", () => {
-		const generic = findSourceByName("generic-web");
-		expect(generic?.match.kind).toBe("url");
-		if (generic?.match.kind === "url") {
-			expect(generic.match.matches(new URL("http://example.com"))).toBe(true);
-			expect(generic.match.matches(new URL("https://example.com"))).toBe(true);
-			expect(generic.match.matches(new URL("file:///etc/hosts"))).toBe(false);
 		}
 	});
 

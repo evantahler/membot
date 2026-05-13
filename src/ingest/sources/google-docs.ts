@@ -1,6 +1,7 @@
 import { HelpfulError } from "../../errors.ts";
+import { gwsExport } from "../gws.ts";
 import { sha256Hex } from "../local-reader.ts";
-import { fetchWithBrowserCookies, googleLoginEntry } from "./google-shared.ts";
+import { googleLoginEntry } from "./google-shared.ts";
 import { defaultUrlHint, registerSource } from "./registry.ts";
 import { type BatchFetcher, type DownloadedRemote, defineSourcePlugin } from "./types.ts";
 
@@ -12,16 +13,14 @@ interface GoogleDocsArgs extends Record<string, unknown> {
 }
 
 /**
- * Download a Google Doc as a `.docx` blob via the canonical export
- * endpoint. Authentication uses cookies pulled from the persistent
- * chromium profile (populated by `membot login`); the fetch itself
- * is a plain Node `fetch`, not Playwright's APIRequestContext, to
- * dodge a Playwright bug that crashes parsing Set-Cookie headers
- * from Google's same-origin redirects.
+ * Download a Google Doc as a `.docx` blob. Authentication is delegated
+ * to the bundled `gws` CLI (`gws drive files export ...`), which holds
+ * a Google-issued refresh token in `~/.config/gws/`. Membot itself
+ * never sees the user's OAuth credentials.
  */
 const googleDocsPlugin = defineSourcePlugin<Record<string, unknown>, GoogleDocsArgs>({
 	name: "google-docs",
-	description: "Google Docs — exports as .docx via the user's logged-in browser session.",
+	description: "Google Docs — exports as .docx via the bundled gws CLI.",
 	examples: ["https://docs.google.com/document/d/<DOC_ID>/edit"],
 	match: {
 		kind: "url",
@@ -47,8 +46,8 @@ const googleDocsPlugin = defineSourcePlugin<Record<string, unknown>, GoogleDocsA
 		return {
 			async fetch(entry, ctx): Promise<DownloadedRemote> {
 				const url = new URL(entry.source);
-				const exportUrl = `https://docs.google.com/document/d/${entry.cursor.document_id}/export?format=docx`;
-				const body = await fetchWithBrowserCookies(exportUrl, ctx, "Google Docs", url);
+				ctx.onProgress?.("downloading from google docs");
+				const body = await gwsExport({ fileId: entry.cursor.document_id, mimeType: DOCX_MIME });
 				const bytes = new Uint8Array(body);
 				return {
 					bytes,

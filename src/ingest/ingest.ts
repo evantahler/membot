@@ -1,5 +1,4 @@
-import { join } from "node:path";
-import { DEFAULTS, FILES } from "../constants.ts";
+import { DEFAULTS } from "../constants.ts";
 import type { AppContext } from "../context.ts";
 import { upsertBlob } from "../db/blobs.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
@@ -18,7 +17,6 @@ import { embed } from "./embedder.ts";
 import { readLocalFile, sha256Hex } from "./local-reader.ts";
 import { buildSearchText } from "./search-text.ts";
 import { type ResolvedLocalEntry, type ResolvedSource, resolveSource } from "./source-resolver.ts";
-import { BrowserPool } from "./sources/browser.ts";
 import type { Entry, PluginCtx } from "./sources/types.ts";
 
 /**
@@ -278,179 +276,171 @@ async function ingestPluginEntries(
 	const workerCount = Math.max(1, Math.min(configured, entries.length));
 	callbacks?.onWorkerCount?.(workerCount);
 
-	const userDataDir = join(ctx.dataDir, FILES.BROWSER_PROFILE);
-	const pool = new BrowserPool({ userDataDir, headless: !plugin.requireHeaded });
 	const persistMutex = new AsyncMutex();
 	let anyOk = false;
 
+	const fetcher = await plugin.openBatchFetcher({
+		logger,
+		config: ctx.config,
+	});
 	try {
-		const fetcher = await plugin.openBatchFetcher({
-			pool,
-			logger,
-			config: ctx.config,
-		});
-		try {
-			const outcomes = await pMap(entries, workerCount, async (entry, _index, workerId) => {
-				const logicalPath = pickPluginLogicalPath(input.logical_path, entry, isMulti);
-				const label = labelForEntry(entry);
-				const result: IngestEntryResult = {
-					source_path: entry.source,
-					logical_path: logicalPath,
-					version_id: null,
-					status: "ok",
-					mime_type: null,
-					size_bytes: 0,
-					chunk_count: null,
-					fetcher: "downloader",
-					source_sha256: "",
-				};
-				callbacks?.onEntryStart?.(label, workerId);
-				const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(label, sublabel, workerId);
-				try {
-					// Cheap pre-fetch gate (apple-notes mtime). When it fires
-					// we skip fetch + decode + describe + embed entirely.
-					if (!force && plugin.probeUnchanged) {
-						const cur = await getCurrent(ctx.db, logicalPath);
-						if (
-							cur &&
-							plugin.probeUnchanged(entry, {
-								source_mtime_ms: cur.source_mtime_ms,
-								source_sha256: cur.source_sha256,
-							})
-						) {
-							result.status = "unchanged";
-							result.version_id = cur.version_id;
-							result.source_sha256 = cur.source_sha256 ?? "";
-							result.size_bytes = cur.size_bytes ?? 0;
-							result.mime_type = cur.mime_type;
-							callbacks?.onEntryComplete?.(result, workerId);
-							return result;
-						}
+		const outcomes = await pMap(entries, workerCount, async (entry, _index, workerId) => {
+			const logicalPath = pickPluginLogicalPath(input.logical_path, entry, isMulti);
+			const label = labelForEntry(entry);
+			const result: IngestEntryResult = {
+				source_path: entry.source,
+				logical_path: logicalPath,
+				version_id: null,
+				status: "ok",
+				mime_type: null,
+				size_bytes: 0,
+				chunk_count: null,
+				fetcher: "downloader",
+				source_sha256: "",
+			};
+			callbacks?.onEntryStart?.(label, workerId);
+			const onPhase = (sublabel: string) => callbacks?.onEntryProgress?.(label, sublabel, workerId);
+			try {
+				// Cheap pre-fetch gate (apple-notes mtime). When it fires
+				// we skip fetch + decode + describe + embed entirely.
+				if (!force && plugin.probeUnchanged) {
+					const cur = await getCurrent(ctx.db, logicalPath);
+					if (
+						cur &&
+						plugin.probeUnchanged(entry, {
+							source_mtime_ms: cur.source_mtime_ms,
+							source_sha256: cur.source_sha256,
+						})
+					) {
+						result.status = "unchanged";
+						result.version_id = cur.version_id;
+						result.source_sha256 = cur.source_sha256 ?? "";
+						result.size_bytes = cur.size_bytes ?? 0;
+						result.mime_type = cur.mime_type;
+						callbacks?.onEntryComplete?.(result, workerId);
+						return result;
 					}
-
-					onPhase("fetching");
-					const pluginCtx: PluginCtx = {
-						pool,
-						logger,
-						config: ctx.config,
-						onProgress: onPhase,
-					};
-					const fetched = await fetcher.fetch(entry, pluginCtx);
-					result.mime_type = fetched.mimeType;
-					result.size_bytes = fetched.bytes.byteLength;
-					result.source_sha256 = fetched.sha256;
-
-					// Second-chance unchanged check on the fetched sha — catches
-					// the case where the source bumped a "modified" signal but
-					// the bytes are byte-identical.
-					if (!force) {
-						const cur = await getCurrent(ctx.db, logicalPath);
-						if (cur && cur.source_sha256 === fetched.sha256) {
-							result.status = "unchanged";
-							result.version_id = cur.version_id;
-							callbacks?.onEntryComplete?.(result, workerId);
-							return result;
-						}
-					}
-
-					// Plugins that already produce markdown (linear, github,
-					// apple-notes) tag mimeType='text/markdown'; convert()
-					// passes those through unchanged. Anything else (Google
-					// Docs .docx, Slides .pdf, raw fetched bytes) gets the
-					// real conversion pipeline.
-					onPhase("converting");
-					const conversion = await convert(
-						fetched.bytes,
-						fetched.mimeType,
-						fetched.sourceUrl,
-						ctx.config.llm,
-						ctx.config.converters,
-					);
-					const markdown = conversion.markdown;
-
-					onPhase("describing");
-					const description = await describe(logicalPath, fetched.mimeType, markdown, ctx.config.llm);
-					onPhase("chunking");
-					const chunks = chunkDeterministic(markdown, ctx.config.chunker);
-					const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content));
-
-					let embeddings: number[][];
-					try {
-						embeddings = await embed(searchTexts, ctx.config.embedding_model, {
-							onProgress: (done, total) => onPhase(`embedding ${done}/${total}`),
-						});
-					} catch (err) {
-						throw asHelpful(
-							err,
-							`while embedding chunks for ${logicalPath}`,
-							"Run `bun run prebuild` to apply the transformers WASM patch, or set a different config.embedding_model.",
-						);
-					}
-
-					const versionId = await persistMutex.lock(async () => {
-						onPhase("persisting");
-						return persistOne(ctx, {
-							logicalPath,
-							sourceType: "remote",
-							sourcePath: fetched.sourceUrl,
-							sourceMtimeMs: entry.mtimeMs ?? null,
-							sourceSha: fetched.sha256,
-							// Plugins that produce markdown directly don't carry an
-							// underlying binary blob — leave blob_sha256 NULL so the
-							// blobs table doesn't get a row pointing at non-bytes.
-							blobSha: fetched.mimeType === "text/markdown" ? null : fetched.sha256,
-							mime: fetched.mimeType,
-							bytes: fetched.mimeType === "text/markdown" ? null : fetched.bytes,
-							markdown,
-							description,
-							chunks,
-							searchTexts,
-							embeddings,
-							fetcher: "downloader",
-							downloader: fetched.downloader,
-							downloaderArgs: fetched.downloaderArgs,
-							refreshSec,
-							changeNote: input.change_note ?? null,
-						});
-					});
-					result.version_id = versionId;
-					result.chunk_count = chunks.length;
-					anyOk = true;
-					callbacks?.onChunks?.(chunks.length);
-				} catch (err) {
-					result.status = "failed";
-					result.error = errorMessage(err);
 				}
-				callbacks?.onEntryComplete?.(result, workerId);
-				return result;
-			});
 
-			const results: IngestEntryResult[] = outcomes.map((o) =>
-				o.ok
-					? o.value
-					: {
-							source_path: "",
-							logical_path: "",
-							version_id: null,
-							status: "failed",
-							error: errorMessage(o.error),
-							mime_type: null,
-							size_bytes: 0,
-							chunk_count: null,
-							fetcher: "downloader",
-							source_sha256: "",
-						},
-			);
+				onPhase("fetching");
+				const pluginCtx: PluginCtx = {
+					logger,
+					config: ctx.config,
+					onProgress: onPhase,
+				};
+				const fetched = await fetcher.fetch(entry, pluginCtx);
+				result.mime_type = fetched.mimeType;
+				result.size_bytes = fetched.bytes.byteLength;
+				result.source_sha256 = fetched.sha256;
 
-			if (anyOk) {
-				await rebuildFts(ctx.db);
+				// Second-chance unchanged check on the fetched sha — catches
+				// the case where the source bumped a "modified" signal but
+				// the bytes are byte-identical.
+				if (!force) {
+					const cur = await getCurrent(ctx.db, logicalPath);
+					if (cur && cur.source_sha256 === fetched.sha256) {
+						result.status = "unchanged";
+						result.version_id = cur.version_id;
+						callbacks?.onEntryComplete?.(result, workerId);
+						return result;
+					}
+				}
+
+				// Plugins that already produce markdown (linear, github,
+				// apple-notes) tag mimeType='text/markdown'; convert()
+				// passes those through unchanged. Anything else (Google
+				// Docs .docx, Slides .pdf, raw fetched bytes) gets the
+				// real conversion pipeline.
+				onPhase("converting");
+				const conversion = await convert(
+					fetched.bytes,
+					fetched.mimeType,
+					fetched.sourceUrl,
+					ctx.config.llm,
+					ctx.config.converters,
+				);
+				const markdown = conversion.markdown;
+
+				onPhase("describing");
+				const description = await describe(logicalPath, fetched.mimeType, markdown, ctx.config.llm);
+				onPhase("chunking");
+				const chunks = chunkDeterministic(markdown, ctx.config.chunker);
+				const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content));
+
+				let embeddings: number[][];
+				try {
+					embeddings = await embed(searchTexts, ctx.config.embedding_model, {
+						onProgress: (done, total) => onPhase(`embedding ${done}/${total}`),
+					});
+				} catch (err) {
+					throw asHelpful(
+						err,
+						`while embedding chunks for ${logicalPath}`,
+						"Run `bun run prebuild` to apply the transformers WASM patch, or set a different config.embedding_model.",
+					);
+				}
+
+				const versionId = await persistMutex.lock(async () => {
+					onPhase("persisting");
+					return persistOne(ctx, {
+						logicalPath,
+						sourceType: "remote",
+						sourcePath: fetched.sourceUrl,
+						sourceMtimeMs: entry.mtimeMs ?? null,
+						sourceSha: fetched.sha256,
+						// Plugins that produce markdown directly don't carry an
+						// underlying binary blob — leave blob_sha256 NULL so the
+						// blobs table doesn't get a row pointing at non-bytes.
+						blobSha: fetched.mimeType === "text/markdown" ? null : fetched.sha256,
+						mime: fetched.mimeType,
+						bytes: fetched.mimeType === "text/markdown" ? null : fetched.bytes,
+						markdown,
+						description,
+						chunks,
+						searchTexts,
+						embeddings,
+						fetcher: "downloader",
+						downloader: fetched.downloader,
+						downloaderArgs: fetched.downloaderArgs,
+						refreshSec,
+						changeNote: input.change_note ?? null,
+					});
+				});
+				result.version_id = versionId;
+				result.chunk_count = chunks.length;
+				anyOk = true;
+				callbacks?.onChunks?.(chunks.length);
+			} catch (err) {
+				result.status = "failed";
+				result.error = errorMessage(err);
 			}
-			return summarize(results);
-		} finally {
-			await fetcher.close();
+			callbacks?.onEntryComplete?.(result, workerId);
+			return result;
+		});
+
+		const results: IngestEntryResult[] = outcomes.map((o) =>
+			o.ok
+				? o.value
+				: {
+						source_path: "",
+						logical_path: "",
+						version_id: null,
+						status: "failed",
+						error: errorMessage(o.error),
+						mime_type: null,
+						size_bytes: 0,
+						chunk_count: null,
+						fetcher: "downloader",
+						source_sha256: "",
+					},
+		);
+
+		if (anyOk) {
+			await rebuildFts(ctx.db);
 		}
+		return summarize(results);
 	} finally {
-		await pool.dispose();
+		await fetcher.close();
 	}
 }
 

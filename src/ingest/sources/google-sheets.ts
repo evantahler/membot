@@ -1,6 +1,7 @@
 import { HelpfulError } from "../../errors.ts";
+import { gwsExport } from "../gws.ts";
 import { sha256Hex } from "../local-reader.ts";
-import { fetchWithBrowserCookies, googleLoginEntry } from "./google-shared.ts";
+import { googleLoginEntry } from "./google-shared.ts";
 import { defaultUrlHint, registerSource } from "./registry.ts";
 import { type BatchFetcher, type DownloadedRemote, defineSourcePlugin } from "./types.ts";
 
@@ -12,16 +13,15 @@ interface GoogleSheetsArgs extends Record<string, unknown> {
 }
 
 /**
- * Download a Google Sheet as `.xlsx` (the workbook's native format)
- * — the export includes **every tab** in a single file. The bytes
- * flow through `convertXlsx`, which renders each tab as a markdown
- * `## <tab name>` section with a real GitHub-flavored pipe table.
- * Cleaner than the PDF route (preserves cell structure, no layout
- * truncation) and `format=html` is no longer supported by Google.
+ * Download a Google Sheet as `.xlsx` (the workbook's native format) via
+ * the bundled `gws` CLI. The export includes every tab in a single
+ * file; `convertXlsx` renders each tab as a markdown `## <tab name>`
+ * section with a GitHub-flavored pipe table.
  */
 const googleSheetsPlugin = defineSourcePlugin<Record<string, unknown>, GoogleSheetsArgs>({
 	name: "google-sheets",
-	description: "Google Sheets — exports every tab as .xlsx, rendered to markdown tables locally.",
+	description:
+		"Google Sheets — exports every tab as .xlsx via the bundled gws CLI, rendered to markdown tables locally.",
 	examples: ["https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit"],
 	match: {
 		kind: "url",
@@ -47,8 +47,8 @@ const googleSheetsPlugin = defineSourcePlugin<Record<string, unknown>, GoogleShe
 		return {
 			async fetch(entry, ctx): Promise<DownloadedRemote> {
 				const url = new URL(entry.source);
-				const exportUrl = `https://docs.google.com/spreadsheets/d/${entry.cursor.sheet_id}/export?format=xlsx`;
-				const body = await fetchWithBrowserCookies(exportUrl, ctx, "Google Sheets", url);
+				ctx.onProgress?.("downloading from google sheets");
+				const body = await gwsExport({ fileId: entry.cursor.sheet_id, mimeType: XLSX_MIME });
 				const bytes = new Uint8Array(body);
 				return {
 					bytes,

@@ -1,5 +1,3 @@
-import { join } from "node:path";
-import { FILES } from "../constants.ts";
 import type { AppContext } from "../context.ts";
 import { upsertBlob } from "../db/blobs.ts";
 import { insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
@@ -12,7 +10,6 @@ import { describe } from "../ingest/describer.ts";
 import { embed } from "../ingest/embedder.ts";
 import { mimeFromPath, readLocalFile, sha256Hex } from "../ingest/local-reader.ts";
 import { buildSearchText } from "../ingest/search-text.ts";
-import { BrowserPool } from "../ingest/sources/browser.ts";
 import { findSourceByName, findSourceForInput } from "../ingest/sources/registry.ts";
 import type { PluginCtx, SourcePlugin } from "../ingest/sources/types.ts";
 import { logger } from "../output/logger.ts";
@@ -156,72 +153,65 @@ async function refreshRemote(
 		});
 	}
 	const plugin = pickPluginForRefresh(cur);
-	const userDataDir = join(ctx.dataDir, FILES.BROWSER_PROFILE);
-	const pool = new BrowserPool({ userDataDir, headless: !plugin.requireHeaded });
-	try {
-		const entry = plugin.rehydrateEntry(cur.source_path, (cur.downloader_args ?? {}) as Record<string, unknown>);
-		const pluginCtx: PluginCtx = {
-			pool,
-			logger,
-			config: ctx.config,
-			onProgress: onPhase,
-		};
-		// Cheap pre-fetch gate (apple-notes mtime). When it fires we
-		// short-circuit before any IO; the row's refresh status flips to
-		// `unchanged` without touching content.
-		if (!force && plugin.probeUnchanged) {
-			if (
-				plugin.probeUnchanged(entry, {
-					source_mtime_ms: cur.source_mtime_ms,
-					source_sha256: cur.source_sha256,
-				})
-			) {
-				await updateRefreshStatus(ctx.db, cur.logical_path, cur.version_id, {
-					refreshed_at: new Date().toISOString(),
-					last_refresh_status: "unchanged",
-				});
-				return { logical_path: cur.logical_path, status: "unchanged" };
-			}
-		}
-
-		const fetcher = await plugin.openBatchFetcher(pluginCtx);
-		let fetched: Awaited<ReturnType<typeof fetcher.fetch>>;
-		try {
-			fetched = await fetcher.fetch(entry, pluginCtx);
-		} finally {
-			await fetcher.close();
-		}
-
-		if (!force && cur.source_sha256 === fetched.sha256) {
+	const entry = plugin.rehydrateEntry(cur.source_path, (cur.downloader_args ?? {}) as Record<string, unknown>);
+	const pluginCtx: PluginCtx = {
+		logger,
+		config: ctx.config,
+		onProgress: onPhase,
+	};
+	// Cheap pre-fetch gate (apple-notes mtime). When it fires we
+	// short-circuit before any IO; the row's refresh status flips to
+	// `unchanged` without touching content.
+	if (!force && plugin.probeUnchanged) {
+		if (
+			plugin.probeUnchanged(entry, {
+				source_mtime_ms: cur.source_mtime_ms,
+				source_sha256: cur.source_sha256,
+			})
+		) {
 			await updateRefreshStatus(ctx.db, cur.logical_path, cur.version_id, {
 				refreshed_at: new Date().toISOString(),
 				last_refresh_status: "unchanged",
 			});
 			return { logical_path: cur.logical_path, status: "unchanged" };
 		}
-
-		const versionId = await runPipelineForRefresh(
-			ctx,
-			{
-				logicalPath: cur.logical_path,
-				bytes: fetched.bytes,
-				mime: fetched.mimeType,
-				source: cur.source_path,
-				sourceType: "remote",
-				sourcePath: cur.source_path,
-				sourceMtimeMs: entry.mtimeMs ?? null,
-				sourceSha: fetched.sha256,
-				fetcher: "downloader",
-				downloader: fetched.downloader,
-				downloaderArgs: fetched.downloaderArgs,
-				refreshSec: cur.refresh_frequency_sec,
-			},
-			onPhase,
-		);
-		return { logical_path: cur.logical_path, status: "ok", new_version_id: versionId };
-	} finally {
-		await pool.dispose();
 	}
+
+	const fetcher = await plugin.openBatchFetcher(pluginCtx);
+	let fetched: Awaited<ReturnType<typeof fetcher.fetch>>;
+	try {
+		fetched = await fetcher.fetch(entry, pluginCtx);
+	} finally {
+		await fetcher.close();
+	}
+
+	if (!force && cur.source_sha256 === fetched.sha256) {
+		await updateRefreshStatus(ctx.db, cur.logical_path, cur.version_id, {
+			refreshed_at: new Date().toISOString(),
+			last_refresh_status: "unchanged",
+		});
+		return { logical_path: cur.logical_path, status: "unchanged" };
+	}
+
+	const versionId = await runPipelineForRefresh(
+		ctx,
+		{
+			logicalPath: cur.logical_path,
+			bytes: fetched.bytes,
+			mime: fetched.mimeType,
+			source: cur.source_path,
+			sourceType: "remote",
+			sourcePath: cur.source_path,
+			sourceMtimeMs: entry.mtimeMs ?? null,
+			sourceSha: fetched.sha256,
+			fetcher: "downloader",
+			downloader: fetched.downloader,
+			downloaderArgs: fetched.downloaderArgs,
+			refreshSec: cur.refresh_frequency_sec,
+		},
+		onPhase,
+	);
+	return { logical_path: cur.logical_path, status: "ok", new_version_id: versionId };
 }
 
 /**
@@ -275,9 +265,9 @@ async function runPipelineForRefresh(
 	// Plugins that produce markdown directly (linear, github, apple-notes)
 	// arrive here with `mime='text/markdown'`. Skip the blob upsert + the
 	// pass-through `convert()` round-trip for those — the bytes ARE the
-	// markdown. Binary plugins (google-docs, generic-web) take the full
-	// path, with the blob-policy gate applied so videos/oversized payloads
-	// keep their metadata row but skip the byte persistence.
+	// markdown. Binary plugins (the Google ones) take the full path, with
+	// the blob-policy gate applied so videos/oversized payloads keep their
+	// metadata row but skip the byte persistence.
 	const isMarkdownDirect = p.mime === "text/markdown";
 	if (!isMarkdownDirect) {
 		onPhase?.("storing blob");

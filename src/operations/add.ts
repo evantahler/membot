@@ -70,7 +70,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 			.string()
 			.optional()
 			.describe(
-				"Force a specific downloader by name (e.g. 'google-docs', 'github', 'generic-web'). Skips URL-based matching.",
+				"Force a specific downloader by name (e.g. 'google-docs', 'github', 'linear'). Skips URL-based matching.",
 			),
 		change_note: z.string().optional().describe("Free-text note attached to the new version"),
 		force: z

@@ -17,10 +17,9 @@
 
 ```bash
 bun install -g membot
-bunx playwright install chromium    # one-time browser binary download (~150 MB)
 ```
 
-This pulls in DuckDB's per-platform native bindings and Playwright's Chromium binary alongside membot. The build externalizes `@duckdb/*` (those `.node` bindings can't be embedded by `bun build --compile`) and `playwright*` (the browser binary lives in `~/.cache/ms-playwright`), so a global Bun install is the supported path.
+DuckDB's per-platform native bindings are pulled in by the install; the `postinstall` step also downloads the bundled [`gws`](https://github.com/googleworkspace/cli) binary (~6 MB) into `~/.membot/bin/gws` — membot's Google Docs/Sheets/Slides plugins shell out to it for auth and export. No browser/Chromium dep.
 
 After installing, set up the services you want to ingest from:
 
@@ -28,10 +27,10 @@ After installing, set up the services you want to ingest from:
 membot login
 ```
 
-A real Chromium window opens with two sections:
+`membot login` walks every registered source:
 
-- **Browser sign-in** — Google Docs / Sheets / Slides. Click the Google link in the window, sign in, close the window. Cookies + IndexedDB persist to `~/.membot/auth/browser-profile/` and reused by every browser-based downloader.
-- **API-key services** — GitHub and Linear. The window shows the settings URL where you create a token and the `membot config set …` command to run in your terminal:
+- **Google Docs / Sheets / Slides** — `membot login` runs `gws auth setup`, which opens your default browser to Google's consent screen. Tokens land in `~/.config/gws/` (encrypted in the OS keyring). One-time setup; future `membot add`/`refresh` calls are non-interactive.
+- **API-key services** — GitHub and Linear. The CLI prints the settings URL where you create a token and the `membot config set …` command to run in your terminal:
 
 ```bash
 # GitHub: settings/tokens → fine-grained, repo:read
@@ -45,6 +44,8 @@ membot config set downloaders.linear.api_key <KEY>
 
 Public GitHub repos work without a token (rate-limited at 60 req/hr). Linear always needs a key.
 
+> **Google auth note.** `gws` requires a one-time GCP project + OAuth client setup the first time you run `gws auth setup`. If you have `gcloud` installed it'll do this for you; otherwise create a Desktop-app OAuth client in the GCP console and drop `client_secret.json` into `~/.config/gws/`. See the [gws README](https://github.com/googleworkspace/cli) for details.
+
 ### Supported sources
 
 The set of URL patterns and scheme prefixes `membot add` accepts is driven by a plugin registry. Run `membot sources` to inspect the live set on your install. The table below is auto-generated from the registry — adding a new plugin updates it here automatically.
@@ -53,13 +54,12 @@ The set of URL patterns and scheme prefixes `membot add` accepts is driven by a 
 
 | Plugin | Auth | Examples | Notes |
 | --- | --- | --- | --- |
-| **google-docs**<br>Google Docs — exports as .docx via the user's logged-in browser session. | browser — `membot login` | `https://docs.google.com/document/d/<DOC_ID>/edit` |  |
-| **google-sheets**<br>Google Sheets — exports every tab as .xlsx, rendered to markdown tables locally. | browser — `membot login` | `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit` |  |
-| **google-slides**<br>Google Slides — exports as PDF for layout-faithful conversion. | browser — `membot login` | `https://docs.google.com/presentation/d/<SLIDES_ID>/edit` |  |
+| **google-docs**<br>Google Docs — exports as .docx via the bundled gws CLI. | cli_tool — `membot login` | `https://docs.google.com/document/d/<DOC_ID>/edit` |  |
+| **google-sheets**<br>Google Sheets — exports every tab as .xlsx via the bundled gws CLI, rendered to markdown tables locally. | cli_tool — `membot login` | `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit` |  |
+| **google-slides**<br>Google Slides — exports as PDF via the bundled gws CLI, for layout-faithful conversion. | cli_tool — `membot login` | `https://docs.google.com/presentation/d/<SLIDES_ID>/edit` |  |
 | **github**<br>GitHub issues & PRs — uses the GitHub REST API (with optional token for private repos). | `api_key` — `membot config set downloaders.github.api_key <PAT>` | `https://github.com/<owner>/<repo>/issues/<n>`<br>`https://github.com/<owner>/<repo>/pull/<n>` | Public repos work unauthenticated at 60 req/hr. For private repos or higher limits, configure a token: `membot config set downloaders.github.api_key <PAT>` or export `GITHUB_TOKEN`. |
 | **linear**<br>Linear issues & projects — uses the Linear GraphQL API with a personal access key. | `api_key` — `membot config set downloaders.linear.api_key <KEY>` | `https://linear.app/<workspace>/issue/<KEY>`<br>`https://linear.app/<workspace>/project/<slug>` | Requires a personal API key from https://linear.app/settings/api. Set it via `membot config set downloaders.linear.api_key <KEY>`. |
 | **apple-notes** _(darwin only)_<br>Apple Notes (macOS) — scope-driven import via NoteStore.sqlite. Markdown comes straight from the protobuf body. | none | `apple-notes:`<br>`apple-notes:Personal/Recipes`<br>`apple-notes:*/Archive`<br>`apple-notes:Personal/Recipes/**` | Requires Full Disk Access for your terminal in System Settings → Privacy & Security. Password-protected notes and Recently Deleted are skipped. Pass `--sync` to tombstone rows whose notes have been deleted. |
-| **generic-web**<br>Catch-all for any other http(s) URL — HEAD/GET, render HTML via headless browser, else stream bytes. | none | `https://example.com/some-page`<br>`https://example.com/some-file.pdf` |  |
 
 <!-- /AUTO-GENERATED:sources -->
 
@@ -84,12 +84,12 @@ Out of scope for v1: attachments, password-protected notes (skipped per-entry), 
 ## Quick start
 
 ```bash
-membot login                                     # one-time: sign into Google / GitHub / Linear in a browser
+membot login                                     # one-time: sign into Google / GitHub / Linear
 membot add ./docs                                # ingest a directory recursively
-membot add https://docs.google.com/document/d/.. # Google Docs / Sheets / Slides via export endpoints
+membot add https://docs.google.com/document/d/.. # Google Docs / Sheets / Slides via the bundled gws CLI
 membot add https://github.com/o/r/issues/123     # GitHub issues + PRs (with comments)
 membot add https://linear.app/w/issue/ABC-12     # Linear issues + projects
-membot add https://example.com/spec.pdf          # any other URL (browser print-to-PDF fallback)
+membot add ./local-copy.pdf                      # any other content: download locally and add the file
 membot add "apple-notes:Personal/Recipes"        # Apple Notes (macOS-only); see "Apple Notes" below
 membot add a.md b.md "docs/**/*.md"              # any number of files / globs in one call
 membot ls                                        # list current files
@@ -133,7 +133,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot logs`                   | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`) — `--follow`, `--lines <N>`, `--raw` |
 | `membot reindex`                | Rebuild the FTS keyword index over current chunks                                 |
 | `membot config <subcommand>`    | Get / set values in `~/.membot/config.json` (`get`, `set`, `unset`, `list`, `path`) |
-| `membot login`                  | Open a Chromium window to sign into Google / GitHub / Linear / etc. — closes save the session |
+| `membot login`                  | One-time interactive auth setup: runs `gws auth setup` for Google, prints `membot config set` instructions for API-key services |
 | `membot skill install`          | Install the Claude Code / Cursor agent skill                                      |
 
 Run `membot <command> --help` for full flags and arguments. Every command produces JSON when piped, when `--json` is set, or when `CI=true`.
@@ -221,7 +221,7 @@ See [`docs/sdk.md`](./docs/sdk.md) for the full method list, error model, and lo
   **Blob persistence policy:** `blobs.max_size_bytes` (default `25 MB`, nullable to disable) and `blobs.skip_mime_types` (default `["video/*", "audio/*"]`, prefix-glob) control whether the original ingested bytes are persisted alongside the metadata row. Rows that fail either rule still get a `blobs` row with `sha256`, `mime_type`, `size_bytes`, and downloader provenance — only the `bytes` column is left NULL. Refresh, dedupe, conversion-at-ingest-time, chunks, and embeddings all keep working; only `membot read --bytes` and future re-conversion against an improved converter need the persisted bytes. To strip bytes retroactively under the current policy (e.g. after lowering the limit), run `membot prune --strip-blob-bytes --no-dry-run`.
 
   Values are written with file mode `0600`. `ANTHROPIC_API_KEY` set in the environment still wins on read, so existing env-var setups keep working.
-- **Browser session:** `~/.membot/auth/browser-profile/` (Playwright persistent profile — cookies, localStorage, IndexedDB). Captured by `membot login`; cookie-based downloaders (Google) reuse it on every fetch. Delete the directory to force a fresh login.
+- **Google auth:** OAuth refresh token managed by the bundled `gws` binary at `~/.membot/bin/gws`; tokens live in `~/.config/gws/` (encrypted in the OS keyring). Captured by `membot login` (which delegates to `gws auth setup`). Re-run `membot login` to refresh if Google revokes the token.
 - **API keys:** stored under `downloaders.<service>.api_key` in `~/.membot/config.json`. Read by API-based downloaders (GitHub, Linear).
 - **Environment variables:**
   - `ANTHROPIC_API_KEY` — optional. Enables LLM fallback for messy / scanned input (vision captions for images, last-resort markdown conversion). Without it, the pipeline degrades to deterministic native conversion. Equivalent to `membot config set llm.anthropic_api_key ...`; the env var takes precedence on read.
