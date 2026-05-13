@@ -140,36 +140,44 @@ describe("linearTeamPlugin.enumerate", () => {
 					},
 				});
 			},
-			IssuesForProject: (vars) => {
-				const projectId = vars.projectId as string;
-				return jsonResponse({
+			IssuesForTeam: () =>
+				jsonResponse({
 					data: {
-						issues: {
-							pageInfo: { hasNextPage: false, endCursor: null },
-							nodes: [
-								{
-									id: `${projectId}-i1`,
-									identifier: projectId === "p1" ? "ENG-1" : "ENG-2",
-									title: "T",
-									url: `https://linear.app/arcade/issue/${projectId === "p1" ? "ENG-1" : "ENG-2"}`,
-									updatedAt: "2026-01-05T00:00:00Z",
-								},
-							],
+						team: {
+							issues: {
+								pageInfo: { hasNextPage: false, endCursor: null },
+								nodes: [
+									{
+										id: "i1",
+										identifier: "ENG-1",
+										title: "T",
+										url: "https://linear.app/arcade/issue/ENG-1",
+										updatedAt: "2026-01-05T00:00:00Z",
+									},
+									{
+										id: "i2",
+										identifier: "ENG-2",
+										title: "T",
+										url: "https://linear.app/arcade/issue/ENG-2",
+										updatedAt: "2026-01-05T00:00:00Z",
+									},
+								],
+							},
 						},
 					},
-				});
-			},
+				}),
 		});
 		restoreFetch = stub.restore;
 
 		const entries = await linearTeamPlugin.enumerate("linear-team:ENG", { config: configWithKey, logger });
-		// 2 projects + 2 issues = 4 entries, in the order [project, issue, project, issue].
+		// 2 projects + 2 issues = 4 entries, order is now [project, project, issue, issue].
 		expect(entries).toHaveLength(4);
 		expect(entries[0]?.cursor.kind).toBe("project");
 		expect(entries[0]?.logicalPathHint).toBe("linear/arcade/projects/alpha-abc12345.md");
-		expect(entries[1]?.cursor.kind).toBe("issue");
-		expect(entries[1]?.logicalPathHint).toBe("linear/arcade/issues/ENG-1.md");
-		expect(entries[2]?.cursor.kind).toBe("project");
+		expect(entries[1]?.cursor.kind).toBe("project");
+		expect(entries[1]?.logicalPathHint).toBe("linear/arcade/projects/beta-def67890.md");
+		expect(entries[2]?.cursor.kind).toBe("issue");
+		expect(entries[2]?.logicalPathHint).toBe("linear/arcade/issues/ENG-1.md");
 		expect(entries[3]?.logicalPathHint).toBe("linear/arcade/issues/ENG-2.md");
 
 		const projectsCalls = stub.calls.filter((c) => c.body.query.includes("ProjectsForTeam"));
@@ -245,9 +253,9 @@ describe("linearTeamPlugin.enumerate", () => {
 					},
 				});
 			},
-			IssuesForProject: () =>
+			IssuesForTeam: () =>
 				jsonResponse({
-					data: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } },
+					data: { team: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } },
 				}),
 		});
 		restoreFetch = stub.restore;
@@ -435,20 +443,22 @@ describe("linearTeamPlugin.sync", () => {
 						},
 					},
 				}),
-			IssuesForProject: () =>
+			IssuesForTeam: () =>
 				jsonResponse({
 					data: {
-						issues: {
-							pageInfo: { hasNextPage: false, endCursor: null },
-							nodes: [
-								{
-									id: "i1",
-									identifier: "ENG-1",
-									title: "T",
-									url: "https://linear.app/arcade/issue/ENG-1",
-									updatedAt: "2026-01-05T00:00:00Z",
-								},
-							],
+						team: {
+							issues: {
+								pageInfo: { hasNextPage: false, endCursor: null },
+								nodes: [
+									{
+										id: "i1",
+										identifier: "ENG-1",
+										title: "T",
+										url: "https://linear.app/arcade/issue/ENG-1",
+										updatedAt: "2026-01-05T00:00:00Z",
+									},
+								],
+							},
 						},
 					},
 				}),

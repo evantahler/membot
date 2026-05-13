@@ -103,11 +103,18 @@ const PROJECTS_FOR_TEAM_QUERY = `query ProjectsForTeam($teamId: ID!, $after: Str
   }
 }`;
 
-const ISSUES_FOR_PROJECT_QUERY = `query IssuesForProject($projectId: ID!, $after: String) {
-  issues(filter: { project: { id: { eq: $projectId } } },
-         first: 100, after: $after) {
-    pageInfo { hasNextPage endCursor }
-    nodes { id identifier title url updatedAt }
+/**
+ * Issues belong to exactly one team via `Issue.team`, so we walk
+ * `team(id).issues` once per team instead of querying issues per project
+ * — much cheaper for teams with many small projects. Each issue cursor
+ * already carries `identifier`, which is enough for refresh.
+ */
+const ISSUES_FOR_TEAM_QUERY = `query IssuesForTeam($teamId: String!, $after: String) {
+  team(id: $teamId) {
+    issues(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id identifier title url updatedAt }
+    }
   }
 }`;
 
@@ -147,6 +154,9 @@ const linearTeamPlugin = defineSourcePlugin<LinearConfig, LinearTeamArgs>({
 		const apiKey = requireApiKey(ctx);
 		const { workspace, teamIds, childKeys } = await resolveTeamHierarchy(apiKey, team, source);
 
+		const subTeamSuffix = childKeys.length > 0 ? ` (incl. sub-teams: ${childKeys.join(", ")})` : "";
+		ctx.logger.info(`linear-team:${team}: enumerating across ${teamIds.length} team(s)${subTeamSuffix}`);
+
 		const entries: Entry<LinearTeamArgs>[] = [];
 		const seenProjects = new Set<string>();
 		for (const teamId of teamIds) {
@@ -161,46 +171,55 @@ const linearTeamPlugin = defineSourcePlugin<LinearConfig, LinearTeamArgs>({
 				// multiple per-team queries — dedupe so we don't double-ingest.
 				if (seenProjects.has(project.id)) continue;
 				seenProjects.add(project.id);
-
-				const projectArgs: LinearTeamProjectArgs = {
-					kind: "project",
-					team,
-					workspace,
-					slug: project.slugId,
-					slug_id: project.slugId,
-					project_id: project.id,
-				};
 				entries.push({
 					source: project.url,
 					logicalPathHint: linearProjectPath(workspace, project.slugId),
 					mtimeMs: Date.parse(project.updatedAt),
-					cursor: projectArgs,
+					cursor: {
+						kind: "project",
+						team,
+						workspace,
+						slug: project.slugId,
+						slug_id: project.slugId,
+						project_id: project.id,
+					} satisfies LinearTeamProjectArgs,
 				});
+			}
+		}
+		ctx.logger.info(`linear-team:${team}: found ${seenProjects.size} project(s); enumerating issues per team`);
 
-				for await (const issue of paginate(
-					apiKey,
-					ISSUES_FOR_PROJECT_QUERY,
-					{ projectId: project.id },
-					source,
-					(data: { issues: { pageInfo: PageInfo; nodes: IssueNode[] } }) => data.issues,
-				)) {
-					const issueArgs: LinearTeamIssueArgs = {
+		// Issues belong to exactly one team, so iterating teams won't double-count.
+		// Pull issues per team via `team.issues` — one paginated walk per team.
+		let issueCount = 0;
+		for (const teamId of teamIds) {
+			for await (const issue of paginate(
+				apiKey,
+				ISSUES_FOR_TEAM_QUERY,
+				{ teamId },
+				source,
+				(data: { team: { issues: { pageInfo: PageInfo; nodes: IssueNode[] } } | null }) =>
+					data.team?.issues ?? { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+			)) {
+				entries.push({
+					source: issue.url,
+					logicalPathHint: linearIssuePath(workspace, issue.identifier),
+					mtimeMs: Date.parse(issue.updatedAt),
+					cursor: {
 						kind: "issue",
 						team,
 						workspace,
 						identifier: issue.identifier,
-					};
-					entries.push({
-						source: issue.url,
-						logicalPathHint: linearIssuePath(workspace, issue.identifier),
-						mtimeMs: Date.parse(issue.updatedAt),
-						cursor: issueArgs,
-					});
+					} satisfies LinearTeamIssueArgs,
+				});
+				issueCount += 1;
+				if (issueCount % 500 === 0) {
+					ctx.logger.info(`linear-team:${team}: ${issueCount} issues enumerated so far…`);
 				}
 			}
 		}
-		const subTeamSuffix = childKeys.length > 0 ? ` (incl. sub-teams: ${childKeys.join(", ")})` : "";
-		ctx.logger.info(`linear-team:${team} enumerated ${entries.length} entries${subTeamSuffix}`);
+		ctx.logger.info(
+			`linear-team:${team}: enumerated ${entries.length} entries (${seenProjects.size} projects + ${issueCount} issues)`,
+		);
 		return entries;
 	},
 	rehydrateEntry(source, args) {
@@ -268,15 +287,16 @@ const linearTeamPlugin = defineSourcePlugin<LinearConfig, LinearTeamArgs>({
 				if (seenProjects.has(project.id)) continue;
 				seenProjects.add(project.id);
 				liveProjectSlugIds.add(project.slugId);
-				for await (const issue of paginate(
-					apiKey,
-					ISSUES_FOR_PROJECT_QUERY,
-					{ projectId: project.id },
-					source,
-					(data: { issues: { pageInfo: PageInfo; nodes: IssueNode[] } }) => data.issues,
-				)) {
-					liveIssueIdentifiers.add(issue.identifier);
-				}
+			}
+			for await (const issue of paginate(
+				apiKey,
+				ISSUES_FOR_TEAM_QUERY,
+				{ teamId },
+				source,
+				(data: { team: { issues: { pageInfo: PageInfo; nodes: IssueNode[] } } | null }) =>
+					data.team?.issues ?? { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+			)) {
+				liveIssueIdentifiers.add(issue.identifier);
 			}
 		}
 
