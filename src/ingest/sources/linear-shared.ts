@@ -1,3 +1,4 @@
+import matter from "gray-matter";
 import { z } from "zod";
 import { HelpfulError } from "../../errors.ts";
 
@@ -28,6 +29,35 @@ export interface LinearComment {
 	user: LinearUser | null;
 }
 
+export interface LinearLabel {
+	name: string;
+}
+
+export interface LinearTeam {
+	key: string;
+	name: string;
+}
+
+export interface LinearProjectRef {
+	name: string;
+	slugId: string;
+}
+
+export interface LinearCycle {
+	number: number;
+	name: string | null;
+}
+
+export interface LinearRelation {
+	type: string;
+	relatedIssue: { identifier: string } | null;
+}
+
+export interface LinearInverseRelation {
+	type: string;
+	issue: { identifier: string } | null;
+}
+
 export interface LinearIssue {
 	identifier: string;
 	url: string;
@@ -39,6 +69,14 @@ export interface LinearIssue {
 	creator: LinearUser | null;
 	createdAt: string;
 	updatedAt: string;
+	dueDate: string | null;
+	estimate: number | null;
+	team: LinearTeam | null;
+	project: LinearProjectRef | null;
+	cycle: LinearCycle | null;
+	labels: { nodes: LinearLabel[] };
+	relations: { nodes: LinearRelation[] };
+	inverseRelations: { nodes: LinearInverseRelation[] };
 	comments: { nodes: LinearComment[] };
 }
 
@@ -54,8 +92,10 @@ export interface LinearProject {
 	targetDate: string | null;
 	createdAt: string;
 	updatedAt: string;
+	progress: number | null;
 	lead: LinearUser | null;
 	members: { nodes: LinearUser[] };
+	teams: { nodes: LinearTeam[] };
 }
 
 export const ISSUE_QUERY = `query Issue($id: String!) {
@@ -64,7 +104,13 @@ export const ISSUE_QUERY = `query Issue($id: String!) {
     state { name }
     assignee { name displayName email }
     creator { name displayName email }
-    createdAt updatedAt
+    createdAt updatedAt dueDate estimate
+    team { key name }
+    project { name slugId }
+    cycle { number name }
+    labels(first: 50) { nodes { name } }
+    relations(first: 50) { nodes { type relatedIssue { identifier } } }
+    inverseRelations(first: 50) { nodes { type issue { identifier } } }
     comments(first: 100) {
       nodes { body createdAt user { name displayName email } }
     }
@@ -74,9 +120,10 @@ export const ISSUE_QUERY = `query Issue($id: String!) {
 export const PROJECT_QUERY = `query ProjectBySlug($slugId: String!) {
   projects(filter: { slugId: { eq: $slugId } }, first: 1) {
     nodes {
-      id url name slugId description content state startDate targetDate createdAt updatedAt
+      id url name slugId description content state startDate targetDate createdAt updatedAt progress
       lead { name displayName email }
       members(first: 50) { nodes { name displayName email } }
+      teams(first: 10) { nodes { key name } }
     }
   }
 }`;
@@ -198,18 +245,51 @@ export function userLabel(user: LinearUser): string {
 	return name;
 }
 
-/** Render an issue payload as the markdown body that flows into chunk/embed. */
+/**
+ * Render an issue as YAML-frontmatter-prefixed markdown that flows into
+ * chunk/embed. Scalar metadata lives in the frontmatter block at the top
+ * (`source_url`, `state`, `assignee`, `labels`, `blocks`/`blocked_by`,
+ * etc.) — that's both machine-parseable for agents and indexed as plain
+ * text by hybrid search, so a search for a labelled keyword still hits.
+ * Body sections (Description, Comments) keep their human-facing markdown.
+ */
 export function renderIssue(issue: LinearIssue): string {
+	const labels = issue.labels.nodes.map((l) => l.name).filter((n) => n !== "");
+	const blocks = issue.relations.nodes
+		.filter((r) => r.type === "blocks" && r.relatedIssue)
+		.map((r) => (r.relatedIssue as { identifier: string }).identifier);
+	const blockedBy = issue.inverseRelations.nodes
+		.filter((r) => r.type === "blocks" && r.issue)
+		.map((r) => (r.issue as { identifier: string }).identifier);
+
+	const data: Record<string, unknown> = {
+		source_url: issue.url,
+		identifier: issue.identifier,
+		title: issue.title,
+	};
+	if (issue.state) data.state = issue.state.name;
+	if (issue.priorityLabel) data.priority = issue.priorityLabel;
+	if (issue.assignee) data.assignee = userLabel(issue.assignee);
+	if (issue.creator) data.author = userLabel(issue.creator);
+	if (issue.team) data.team = issue.team.key;
+	if (issue.project) data.project = issue.project.name;
+	if (issue.cycle) data.cycle = issue.cycle.name ?? `Cycle ${issue.cycle.number}`;
+	if (labels.length > 0) data.labels = labels;
+	if (issue.estimate !== null && issue.estimate !== undefined) data.estimate = issue.estimate;
+	if (issue.dueDate) data.due_date = issue.dueDate;
+	if (blocks.length > 0) data.blocks = blocks;
+	if (blockedBy.length > 0) data.blocked_by = blockedBy;
+	data.created_at = issue.createdAt;
+	data.updated_at = issue.updatedAt;
+
+	const body = renderIssueBody(issue);
+	return matter.stringify(body, data).trimEnd();
+}
+
+/** Build the markdown body for an issue (title heading + description + comments). */
+function renderIssueBody(issue: LinearIssue): string {
 	const lines: string[] = [];
 	lines.push(`# ${issue.identifier}: ${issue.title}`);
-	lines.push("");
-	lines.push(`- URL: ${issue.url}`);
-	if (issue.state) lines.push(`- Status: ${issue.state.name}`);
-	if (issue.priorityLabel) lines.push(`- Priority: ${issue.priorityLabel}`);
-	if (issue.assignee) lines.push(`- Assignee: ${userLabel(issue.assignee)}`);
-	if (issue.creator) lines.push(`- Author: ${userLabel(issue.creator)}`);
-	lines.push(`- Created: ${issue.createdAt}`);
-	lines.push(`- Updated: ${issue.updatedAt}`);
 	lines.push("");
 	if (issue.description) {
 		lines.push("## Description");
@@ -232,20 +312,38 @@ export function renderIssue(issue: LinearIssue): string {
 	return lines.join("\n").trim();
 }
 
-/** Render a project payload as the markdown body that flows into chunk/embed. */
+/**
+ * Render a project as YAML-frontmatter-prefixed markdown. Same shape as
+ * `renderIssue` — scalar metadata in the frontmatter block, the body
+ * holds the H1 title plus the project's `Summary` (description) and
+ * `Overview` (content) sections.
+ */
 export function renderProject(project: LinearProject): string {
+	const members = project.members.nodes.map(userLabel);
+	const teams = project.teams.nodes.map((t) => t.key);
+
+	const data: Record<string, unknown> = {
+		source_url: project.url,
+		name: project.name,
+	};
+	if (project.state) data.state = project.state;
+	if (project.lead) data.lead = userLabel(project.lead);
+	if (members.length > 0) data.members = members;
+	if (teams.length > 0) data.teams = teams;
+	if (project.progress !== null && project.progress !== undefined) data.progress = project.progress;
+	if (project.startDate) data.start_date = project.startDate;
+	if (project.targetDate) data.target_date = project.targetDate;
+	data.created_at = project.createdAt;
+	data.updated_at = project.updatedAt;
+
+	const body = renderProjectBody(project);
+	return matter.stringify(body, data).trimEnd();
+}
+
+/** Build the markdown body for a project (title heading + summary + overview). */
+function renderProjectBody(project: LinearProject): string {
 	const lines: string[] = [];
 	lines.push(`# ${project.name}`);
-	lines.push("");
-	lines.push(`- URL: ${project.url}`);
-	if (project.state) lines.push(`- State: ${project.state}`);
-	if (project.startDate) lines.push(`- Start: ${project.startDate}`);
-	if (project.targetDate) lines.push(`- Target: ${project.targetDate}`);
-	if (project.lead) lines.push(`- Lead: ${userLabel(project.lead)}`);
-	const members = project.members.nodes;
-	if (members.length > 0) lines.push(`- Members: ${members.map(userLabel).join(", ")}`);
-	lines.push(`- Created: ${project.createdAt}`);
-	lines.push(`- Updated: ${project.updatedAt}`);
 	lines.push("");
 	if (project.description) {
 		lines.push("## Summary");

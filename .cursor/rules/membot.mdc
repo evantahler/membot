@@ -101,7 +101,8 @@ Pass `-p <path>` (or `--logical-path`) to override. On a directory walk it's tre
 ## 3. Read
 
 ```bash
-membot read <logical_path>                       # current markdown surrogate
+membot read <logical_path>                       # current markdown surrogate (ANSI-rendered on a TTY)
+membot read <logical_path> --raw                 # unrendered markdown — skip the TTY ANSI styling
 membot read <logical_path> --bytes               # original bytes (base64) — PDF/DOCX/image as ingested
 membot read <logical_path> --version <ts>        # historical snapshot
 membot info <logical_path>                       # metadata only (no content)
@@ -169,7 +170,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 | `membot add <sources...>`             | Ingest one or more files, directories, globs, URLs, `apple-notes:<scope>`, or `inline:<text>`. Skips unchanged sources; pass `--force` to re-ingest. For `apple-notes:` sources, `--sync` tombstones rows whose underlying note has been deleted in Notes.app |
 | `membot ls [prefix]`                  | List current files (size, mime, refresh status)                                |
 | `membot tree [prefix]`                | Render the synthesised logical-path tree (`--max-depth`, `--max-items` cap output) |
-| `membot read <path>`                  | Read current markdown surrogate (or `--bytes` for original)                    |
+| `membot read <path>`                  | Read current markdown surrogate (`--bytes` for original; `--raw` skips TTY ANSI rendering) |
 | `membot write <path> --content <txt>` | Write inline agent-authored markdown as a new version                          |
 | `membot search <query>`               | Hybrid search (semantic + BM25); add `--include-history` to search older versions |
 | `membot info <path>`                  | Inspect metadata (source, downloader, refresh schedule, digests) without content |

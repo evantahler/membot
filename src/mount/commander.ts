@@ -65,7 +65,9 @@ export function mountAsCommanderCommand<I extends z.ZodObject, O extends z.ZodTy
 			ctx = await buildContext(getContextOptions());
 			const result = await op.handler(parsedInput, ctx);
 			const validated = parseOutput(op, result);
-			process.stdout.write(`${renderResult(validated, { console_formatter: op.console_formatter })}\n`);
+			process.stdout.write(
+				`${renderResult(validated, { console_formatter: op.console_formatter, input: parsedInput })}\n`,
+			);
 		} catch (err) {
 			renderCliError(err);
 			const exitCode = isHelpfulError(err) ? mapKindToExit(err.kind) : 1;

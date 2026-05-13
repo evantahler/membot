@@ -4,6 +4,7 @@ import {
 	type GithubComment,
 	type GithubConfig,
 	type GithubIssue,
+	type GithubTimelineEvent,
 	getJson,
 	githubConfigSchema,
 	githubIssuePath,
@@ -84,8 +85,14 @@ const githubPlugin = defineSourcePlugin<GithubConfig, GithubArgs>({
 					token,
 					url,
 				);
+				ctx.onProgress?.("fetching timeline");
+				const timeline = await getJson<GithubTimelineEvent[]>(
+					`/repos/${owner}/${repo}/issues/${number}/timeline?per_page=100`,
+					token,
+					url,
+				);
 				const isPullRequest = !!issue.pull_request;
-				const markdown = renderIssue(issue, comments, isPullRequest);
+				const markdown = renderIssue(issue, comments, timeline, isPullRequest);
 				const bytes = new TextEncoder().encode(markdown);
 				return {
 					bytes,

@@ -116,7 +116,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot add <sources...>`       | Ingest one or more files, directories, globs, URLs, `apple-notes:<scope>` (macOS), or `inline:<text>`. Default `logical_path` mirrors the source (absolute path for local files, `remotes/{host}/{path}` for URLs, `apple-notes/<account>/<folder>/<title>.md` for notes) so files with the same basename in different projects don't collide. Pass `-p <path>` to override or set a prefix. Skips unchanged source bytes; pass `--force` to re-ingest. For `apple-notes:` sources, pass `--sync` to tombstone rows whose underlying note was deleted in Notes.app. |
 | `membot ls [prefix]`            | List current files (size, mime, refresh status)                                   |
 | `membot tree [prefix]`          | Render the synthesised logical-path tree (`--max-depth`, `--max-items` cap output) |
-| `membot read <path>`            | Read the markdown surrogate (or `--bytes` for original bytes, base64)             |
+| `membot read <path>`            | Read the markdown surrogate; on a TTY the body renders with ANSI markdown styling. `--bytes` returns original bytes (base64). `--raw` skips ANSI rendering and prints unformatted markdown. |
 | `membot search <query>`         | Hybrid search (semantic + BM25); `--include-history` searches older versions      |
 | `membot info <path>`            | Inspect metadata (source, fetcher, schedule, digests) without content             |
 | `membot stats [prefix]`         | Summarize the index (file/version/chunk/blob counts, on-disk size, refresh health, mime/source/downloader breakdowns); optional prefix scopes the aggregates |

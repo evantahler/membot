@@ -125,11 +125,11 @@ describe("operations end-to-end lifecycle", () => {
 	});
 
 	test("read returns markdown surrogate by default, original bytes when bytes=true", async () => {
-		const surrogate = await readOperation.handler({ logical_path: authPath, bytes: false }, ctx);
+		const surrogate = await readOperation.handler({ logical_path: authPath, bytes: false, raw: false }, ctx);
 		expect(surrogate.content).toContain("OAuth");
 		expect(surrogate.version_is_current).toBe(true);
 
-		const raw = await readOperation.handler({ logical_path: authPath, bytes: true }, ctx);
+		const raw = await readOperation.handler({ logical_path: authPath, bytes: true, raw: false }, ctx);
 		const decoded = Buffer.from(raw.bytes_base64 ?? "", "base64").toString();
 		expect(decoded).toContain("# Auth");
 	});
@@ -139,7 +139,7 @@ describe("operations end-to-end lifecycle", () => {
 		// /Users/me/foo.md as Users/me/foo.md, so read /Users/me/foo.md must
 		// resolve to the same row.
 		const absInput = `/${authPath}`;
-		const out = await readOperation.handler({ logical_path: absInput, bytes: false }, ctx);
+		const out = await readOperation.handler({ logical_path: absInput, bytes: false, raw: false }, ctx);
 		expect(out.logical_path).toBe(authPath);
 		expect(out.content).toContain("OAuth");
 	});

@@ -7,13 +7,18 @@ function colorize(fn: (s: string) => string, msg: string): string {
 
 /**
  * Render a final result for the CLI. JSON mode → JSON.stringify. Otherwise
- * defer to the optional `console_formatter`, falling back to JSON.
+ * defer to the optional `console_formatter`, falling back to JSON. The
+ * caller's parsed input is threaded through so formatters can consult
+ * CLI-only display flags (e.g. `--raw` on `membot read`).
  */
-export function renderResult<T>(result: T, opts: { console_formatter?: (result: T) => string } = {}): string {
+export function renderResult<T, I = unknown>(
+	result: T,
+	opts: { console_formatter?: (result: T, input: I) => string; input?: I } = {},
+): string {
 	if (isJson()) {
 		return JSON.stringify(result, null, 2);
 	}
-	if (opts.console_formatter) return opts.console_formatter(result);
+	if (opts.console_formatter) return opts.console_formatter(result, opts.input as I);
 	if (typeof result === "string") return result;
 	return JSON.stringify(result, null, 2);
 }
