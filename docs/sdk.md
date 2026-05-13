@@ -8,7 +8,7 @@ The `membot` npm package ships both the `membot` CLI binary and a TypeScript SDK
 bun add membot
 ```
 
-The package's `postinstall` step also downloads the bundled `gws` binary into `~/.membot/bin/gws` — required only if you ingest Google Docs/Sheets/Slides. Other sources (GitHub, Linear, local files, Apple Notes) work without it.
+No `postinstall` step and no bundled third-party binaries. Google Docs/Sheets/Slides aren't ingested natively — export from Drive as `.docx`/`.xlsx`/`.pdf` and `client.add({ sources: ["./that-file.docx"] })`.
 
 The SDK is Bun-only (the runtime depends on `Bun.Worker`, native DuckDB bindings, and bundled WASM patches). Don't try to run it under Node.
 

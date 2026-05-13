@@ -88,7 +88,7 @@ agent.
 ```
 membot_add <url>
   ↓
-findDownloader(url) → Downloader  (always returns one — generic-web is the catch-all)
+findDownloader(url) → Downloader  (or null → HelpfulError pointing at `membot add <local-path>`)
   ↓
 downloader.download(url, ctx) → bytes + mime + downloader_args
   ↓
@@ -101,45 +101,37 @@ chunk → embed → store with persisted (downloader, downloader_args)
 
 | Downloader | Match | Strategy | Auth |
 |---|---|---|---|
-| `google-docs` | `docs.google.com/document/d/<id>` | `gws drive files export` (DOCX) → `convertDocx` | OAuth refresh token managed by bundled `gws` CLI |
-| `google-sheets` | `docs.google.com/spreadsheets/d/<id>` | `gws drive files export` (XLSX) → `convertXlsx` | Same |
-| `google-slides` | `docs.google.com/presentation/d/<id>` | `gws drive files export` (PDF) → `convertPdf` | Same |
 | `github` | `github.com/<owner>/<repo>/(issues\|pull)/<n>` | `api.github.com/repos/.../issues/<n>` + `/comments` → render JSON to markdown | `downloaders.github.api_key` PAT (or `GITHUB_TOKEN`); public repos work unauth at 60 req/hr |
 | `linear` | `linear.app/<workspace>/issue/<KEY>` and `…/project/<slug>` | `api.linear.app/graphql` queries → render JSON to markdown | `downloaders.linear.api_key` personal API key |
 
-There is **no** generic-web catch-all. Arbitrary http(s) URLs that no
-plugin claims produce a clear `HelpfulError` instructing the user to
-download the file and `membot add <path>`.
+There is **no** generic-web catch-all and **no** Google ingest.
+Arbitrary http(s) URLs that no plugin claims (including
+`docs.google.com/...`) produce a clear `HelpfulError` instructing the
+user to download the file locally and `membot add <path>`.
 
-The Google plugins shell out to the bundled
-[`gws`](https://github.com/googleworkspace/cli) (Google Workspace CLI)
-binary that the `postinstall` script downloads into
-`~/.membot/bin/gws`. `gws` holds an encrypted refresh token in
-`~/.config/gws/` (OS keyring) and renews the access token on every
-call. GitHub and Linear remain pure HTTP — they don't shell out to
-anything. Membot itself opens **no** browser anywhere; the only
-embedded subprocess is `gws`, and even it only opens a browser during
-the one-time `gws auth setup` interactive flow.
+Google Docs/Sheets/Slides specifically are not a first-class source:
+Google's OAuth scope policy makes the Drive-readonly entry tax
+disproportionate (you either grant `cloud-platform` to gcloud or
+manage your own GCP project + OAuth client). The deliberate
+workaround: export from Drive as `.docx` / `.xlsx` / `.pdf` and
+`membot add <path>`. The existing DOCX/XLSX/PDF converters render the
+content identically to a hypothetical Drive-API ingest. We lose
+auto-refresh of those files; everything else is the same.
 
-### Auth flow: one interactive step + non-interactive fetches
+GitHub and Linear are pure HTTP — they don't shell out to anything.
+Membot itself opens **no** browser, embeds **no** browser, and ships
+**no** bundled third-party CLI.
 
-`membot login` is the only interactive entry point. It walks every
-registered plugin's `LoginEntry` and dispatches:
+### Auth flow: print instructions + non-interactive fetches
 
-- `cli_tool` entries (Google) → run the entry's `setupCommand`
-  (currently `gws auth setup`) as an interactive subprocess (inherited
-  stdio). `gws` opens the user's default browser for the OAuth
-  consent screen, exchanges the code for a refresh token, and stores
-  it in `~/.config/gws/`. Future `membot add`/`refresh` calls invoke
-  `gws drive files export` non-interactively against that token.
-- `api_key` entries (GitHub, Linear) → print the settings URL where
-  the user creates the key plus the `membot config set` command to
-  copy. The user pastes the command into a terminal.
+`membot login` is informational only — it walks every registered
+plugin's `LoginEntry` (today: GitHub + Linear, both `api_key`) and
+prints the settings URL plus the `membot config set` command for each
+one. The user pastes the command into a terminal.
 
-After that, every `membot add` and `membot refresh` runs strictly
-non-interactively. Auth failures throw `HelpfulError` with a concrete
+Every `membot add` and `membot refresh` runs strictly non-
+interactively. Auth failures throw `HelpfulError` with a concrete
 next step:
-- Google → "Run `membot login`." (delegates to `gws auth setup`)
 - Token services (GitHub, Linear) → "Run `membot config set
   downloaders.<svc>.api_key <KEY>`."
 
@@ -229,8 +221,8 @@ CREATE TABLE files (
   mime_type       TEXT,
   size_bytes      BIGINT,
   fetcher         TEXT,                                 -- 'downloader' | 'local' | 'inline'
-  downloader      TEXT,                                 -- e.g. 'google-docs', NULL for non-remote
-  downloader_args JSON,                                 -- e.g. { document_id: '...' } — replayable on refresh
+  downloader      TEXT,                                 -- e.g. 'github', NULL for non-remote
+  downloader_args JSON,                                 -- e.g. { owner, repo, number } — replayable on refresh
   refresh_frequency_sec INTEGER,
   refreshed_at    TIMESTAMP,
   last_refresh_status TEXT,
@@ -283,7 +275,7 @@ src/
     commander.ts        # mountAsCommanderCommand — registers an Operation as a CLI subcommand
     zod-to-cli.ts       # zod → commander .argument()/.option()
   commands/             # CLI-only (no MCP equivalent)
-    login.ts            # one-time auth setup; runs `gws auth setup` and prints API-key instructions
+    login.ts            # prints `membot config set` instructions for every api_key source
     serve.ts reindex.ts config.ts skill.ts ...
   config/               # zod schema + loader (~/.membot/config.json)
   db/                   # DuckDB connection, migrations, files.ts, chunks.ts, blobs.ts
@@ -291,7 +283,6 @@ src/
     source-resolver.ts  # file / dir / glob / url / inline detection
     local-reader.ts
     fetcher.ts          # source plugin registry dispatch
-    gws.ts              # subprocess wrapper around the bundled `gws` CLI (Google auth + export)
     chunker.ts embedder.ts embedder-pool.ts embed-worker.ts describer.ts search-text.ts
     concurrency.ts      # pMap (worker-pool with stable workerId) + AsyncMutex
     converter/          # pdf, docx, xlsx, pptx, html, image, text, llm
@@ -299,7 +290,6 @@ src/
       index.ts          # side-effect plugin imports
       registry.ts       # registerSource, findSourceForInput, collectLoginEntries
       types.ts          # SourcePlugin, PluginCtx, LoginEntry shapes
-      google-docs.ts google-sheets.ts google-slides.ts google-shared.ts
       github.ts linear.ts apple-notes.ts
   search/               # semantic.ts, keyword.ts, hybrid.ts (weighted RRF; semantic gets BGE query prefix)
   refresh/              # runner.ts, scheduler.ts (daemon)
@@ -382,12 +372,9 @@ with file mode `0600` and masked by `membot config list`.
   bindings can't be embedded by `bun build --compile`; `macos-ts`
   is externalized because it uses Apple-specific native bindings.
 - Targets: darwin-arm64, darwin-x64, linux-arm64, linux-x64,
-  windows-x64, windows-arm64. `gws` does not publish a windows-arm64
-  binary; on that target the postinstall script skips the download
-  and the Google plugins throw a clear `HelpfulError` at first use.
-- Install: `bun add -g membot`. The `postinstall` script
-  (`scripts/install-gws.ts`) downloads the pinned `gws` release for
-  the host platform into `~/.membot/bin/gws` (~6 MB).
+  windows-x64, windows-arm64.
+- Install: `bun add -g membot`. No postinstall step, no bundled
+  third-party binaries.
 - Auto-release: incrementing `version` in `package.json` triggers the
   GitHub Action that builds and publishes binaries to a release.
 
@@ -401,10 +388,7 @@ with file mode `0600` and masked by `membot config list`.
 - Live-network E2E test at
   `test/ingest/downloaders-e2e.test.ts` hits
   `github.com/evantahler/membot/issues/36` (the github REST path).
-  Skipped when `MEMBOT_SKIP_E2E=1`. The Google plugins are exercised
-  by `test/ingest/gws.test.ts` against a stubbed `gws` binary —
-  hitting the real Google Drive API in CI would require service-
-  account credentials we deliberately don't provision.
+  Skipped when `MEMBOT_SKIP_E2E=1`.
 - Versioning paths to cover: insert creates v1, refresh-unchanged
   creates no new version, refresh-changed creates v2, `current_files`
   returns v2, explicit `version=v1` returns v1, tombstone hides from
@@ -422,10 +406,12 @@ with file mode `0600` and masked by `membot config list`.
 - Routing fetches through an LLM/agent. Refresh re-invokes the
   persisted downloader by name; deterministic, no Anthropic call.
 - Opening a browser or prompting on stdin during a fetch. `membot add`
-  and `membot refresh` MUST stay non-interactive. The only interactive
-  entry point is `membot login` (which delegates to `gws auth setup`).
-- Re-introducing Playwright or any embedded browser. Google auth is
-  handled by the bundled `gws` CLI; GitHub/Linear are pure HTTP.
+  and `membot refresh` MUST stay non-interactive. `membot login` is
+  informational only (no subprocess, no prompt).
+- Re-introducing Playwright or any embedded browser. All current
+  plugins are pure HTTP (GitHub, Linear) or pure local (Apple Notes).
+- Adding native Google Docs/Sheets/Slides ingest. Users export from
+  Drive as `.docx`/`.xlsx`/`.pdf` and `membot add <path>`.
 - Throwing bare `new Error(...)` anywhere in handlers. Always
   `HelpfulError` with a concrete actionable hint. Wrap external errors
   with `asHelpful(cause, context, hint, kind)`.

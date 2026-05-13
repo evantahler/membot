@@ -5,7 +5,7 @@ import { findSourceByName, findSourceForInput, listSources } from "../../src/ing
 describe("source plugin registry", () => {
 	test("listSources surfaces every registered plugin with non-empty descriptions and examples", () => {
 		const all = listSources();
-		expect(all.length).toBeGreaterThanOrEqual(5);
+		expect(all.length).toBeGreaterThanOrEqual(2);
 		for (const p of all) {
 			expect(p.name.length).toBeGreaterThan(0);
 			expect(p.description.length).toBeGreaterThan(20);
@@ -13,14 +13,14 @@ describe("source plugin registry", () => {
 			expect(p.examples.length).toBeGreaterThan(0);
 		}
 		const names = all.map((p) => p.name);
-		for (const expected of ["google-docs", "google-sheets", "google-slides", "github", "linear"]) {
+		for (const expected of ["github", "linear"]) {
 			expect(names).toContain(expected);
 		}
 	});
 
 	test("findSourceByName is case-sensitive and returns null for unknowns", () => {
-		expect(findSourceByName("google-docs")?.name).toBe("google-docs");
-		expect(findSourceByName("GOOGLE-DOCS")).toBeNull();
+		expect(findSourceByName("github")?.name).toBe("github");
+		expect(findSourceByName("GITHUB")).toBeNull();
 		expect(findSourceByName("nonexistent")).toBeNull();
 	});
 
@@ -29,19 +29,8 @@ describe("source plugin registry", () => {
 		expect(findSourceForInput("")).toBeNull();
 	});
 
-	test("findSourceForInput: Google Docs URL → google-docs", () => {
-		const p = findSourceForInput("https://docs.google.com/document/d/abc123/edit");
-		expect(p?.name).toBe("google-docs");
-	});
-
-	test("findSourceForInput: Google Sheets URL → google-sheets", () => {
-		const p = findSourceForInput("https://docs.google.com/spreadsheets/d/abc123/edit#gid=0");
-		expect(p?.name).toBe("google-sheets");
-	});
-
-	test("findSourceForInput: Google Slides URL → google-slides", () => {
-		const p = findSourceForInput("https://docs.google.com/presentation/d/abc123/edit");
-		expect(p?.name).toBe("google-slides");
+	test("findSourceForInput: Google Docs URL → null (we don't ingest Google natively)", () => {
+		expect(findSourceForInput("https://docs.google.com/document/d/abc123/edit")).toBeNull();
 	});
 
 	test("findSourceForInput: GitHub issue URL → github", () => {
@@ -55,8 +44,7 @@ describe("source plugin registry", () => {
 	});
 
 	test("findSourceForInput: GitHub repo root → null (no catch-all anymore)", () => {
-		const p = findSourceForInput("https://github.com/owner/repo");
-		expect(p).toBeNull();
+		expect(findSourceForInput("https://github.com/owner/repo")).toBeNull();
 	});
 
 	test("findSourceForInput: Linear issue URL → linear", () => {
@@ -70,13 +58,11 @@ describe("source plugin registry", () => {
 	});
 
 	test("findSourceForInput: arbitrary URL → null (we no longer ship generic-web)", () => {
-		const p = findSourceForInput("https://example.com/some/page");
-		expect(p).toBeNull();
+		expect(findSourceForInput("https://example.com/some/page")).toBeNull();
 	});
 
 	test("findSourceForInput: scheme prefix (apple-notes:) wins on darwin", () => {
 		const p = findSourceForInput("apple-notes:Personal/Recipes");
-		// Only matched on darwin (platform-gated registration); skip on other platforms.
 		if (process.platform === "darwin") {
 			expect(p?.name).toBe("apple-notes");
 		} else {
@@ -85,11 +71,6 @@ describe("source plugin registry", () => {
 	});
 
 	test("specific plugins do not match unrelated URLs", () => {
-		const docs = findSourceByName("google-docs");
-		if (docs?.match.kind === "url") {
-			expect(docs.match.matches(new URL("https://docs.google.com/spreadsheets/d/abc/edit"))).toBe(false);
-			expect(docs.match.matches(new URL("https://example.com/document/d/abc/edit"))).toBe(false);
-		}
 		const linear = findSourceByName("linear");
 		if (linear?.match.kind === "url") {
 			expect(linear.match.matches(new URL("https://linear.app/arcade/team/abc"))).toBe(false);

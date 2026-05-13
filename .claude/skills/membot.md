@@ -30,7 +30,7 @@ membot add ./README.md                                            # single file
 membot add ./docs                                                 # recursive directory walk
 membot add "docs/**/*.md"                                         # glob
 membot add a.md b.md "docs/**/*.md"                               # any number of args; each resolved independently
-membot add https://docs.google.com/document/d/<ID>/edit           # Google Docs/Sheets/Slides via the bundled gws CLI
+membot add ./drive-export.docx                                    # Google Docs/Sheets/Slides: export from Drive and add the file
 membot add https://github.com/<owner>/<repo>/issues/<n>           # GitHub issues + PRs (with comments)
 membot add https://linear.app/<workspace>/issue/<KEY>             # Linear issues + projects
 membot add ./local-copy.pdf                                       # for arbitrary content: download locally and add the file
@@ -50,22 +50,23 @@ MCP tool) to inspect it at runtime.
 
 | Plugin | Auth | Examples | Notes |
 | --- | --- | --- | --- |
-| **google-docs**<br>Google Docs — exports as .docx via the bundled gws CLI. | cli_tool — `membot login` | `https://docs.google.com/document/d/<DOC_ID>/edit` |  |
-| **google-sheets**<br>Google Sheets — exports every tab as .xlsx via the bundled gws CLI, rendered to markdown tables locally. | cli_tool — `membot login` | `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit` |  |
-| **google-slides**<br>Google Slides — exports as PDF via the bundled gws CLI, for layout-faithful conversion. | cli_tool — `membot login` | `https://docs.google.com/presentation/d/<SLIDES_ID>/edit` |  |
 | **github**<br>GitHub issues & PRs — uses the GitHub REST API (with optional token for private repos). | `api_key` — `membot config set downloaders.github.api_key <PAT>` | `https://github.com/<owner>/<repo>/issues/<n>`<br>`https://github.com/<owner>/<repo>/pull/<n>` | Public repos work unauthenticated at 60 req/hr. For private repos or higher limits, configure a token: `membot config set downloaders.github.api_key <PAT>` or export `GITHUB_TOKEN`. |
 | **linear**<br>Linear issues & projects — uses the Linear GraphQL API with a personal access key. | `api_key` — `membot config set downloaders.linear.api_key <KEY>` | `https://linear.app/<workspace>/issue/<KEY>`<br>`https://linear.app/<workspace>/project/<slug>` | Requires a personal API key from https://linear.app/settings/api. Set it via `membot config set downloaders.linear.api_key <KEY>`. |
 | **apple-notes** _(darwin only)_<br>Apple Notes (macOS) — scope-driven import via NoteStore.sqlite. Markdown comes straight from the protobuf body. | none | `apple-notes:`<br>`apple-notes:Personal/Recipes`<br>`apple-notes:*/Archive`<br>`apple-notes:Personal/Recipes/**` | Requires Full Disk Access for your terminal in System Settings → Privacy & Security. Password-protected notes and Recently Deleted are skipped. Pass `--sync` to tombstone rows whose notes have been deleted. |
 
 <!-- /AUTO-GENERATED:sources -->
 
-CLI-tool plugins (Google) need a one-time sign-in via `membot login`,
-which delegates to `gws auth setup` (the bundled Google Workspace
-CLI). API-key plugins need a credential set via `membot config set
-downloaders.<svc>.api_key`. If a fetch fails with an auth error, the
+API-key plugins (GitHub, Linear) need a credential set via `membot
+config set downloaders.<svc>.api_key` — run `membot login` to see the
+exact commands. If a fetch fails with an auth error, the
 `HelpfulError` will tell you exactly which command to run. Fetches
-are non-interactive — they never prompt or open a browser during
-ingest or refresh.
+are non-interactive — they never prompt or open a browser.
+
+**Google Docs / Sheets / Slides are NOT a native source.** Don't
+suggest `membot add https://docs.google.com/...` — it will fail with
+a `HelpfulError`. Instead: in Google Drive, `File → Download →
+Microsoft Word (.docx)` (or `.xlsx` / `.pdf`) and `membot add
+./that-file.docx`.
 
 **Apple Notes** (`apple-notes:` scheme, macOS-only) reads `NoteStore.sqlite` directly via `macos-ts` — no AppleScript, no browser, just a fast local SQLite read. The scope syntax is `apple-notes:[<account-glob>[/<folder-glob>]]` and supports the same `*`/`**`/`?` wildcards as filesystem globs:
 
@@ -181,7 +182,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 | `membot logs`                         | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`); `--follow`, `--lines <N>`, `--raw` for JSON |
 | `membot reindex`                      | Rebuild the FTS keyword index over current chunks                              |
 | `membot config <subcommand>`          | Host-side config management (`get` / `set` / `unset` / `list` / `path`). **Don't run** — this is for the human operator, not for agents |
-| `membot login`                        | One-time interactive auth setup (runs `gws auth setup` for Google, prints `membot config set` instructions for API-key services). **Don't run** — this is for the human operator |
+| `membot login`                        | Print `membot config set` instructions for API-key services (GitHub, Linear). **Don't run** — this is for the human operator |
 
 ## Output formats
 
@@ -193,7 +194,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 ## Troubleshooting
 
 - **"ingest failed: unsupported mime"** → Add a converter or pass `--bytes` to keep the original; LLM-fallback only runs when `ANTHROPIC_API_KEY` is set.
-- **"refresh failed: auth"** for a Google URL → the gws refresh token expired or was revoked. Run `membot login` to re-authenticate (delegates to `gws auth setup`).
+- **Google Docs/Sheets/Slides URL was rejected** → membot doesn't ingest Google natively. Export from Drive as `.docx`/`.xlsx`/`.pdf` and `membot add ./that-file`.
 - **"refresh failed: auth"** for a GitHub URL → set the PAT via `membot config set downloaders.github.api_key <PAT>` (or export `GITHUB_TOKEN`).
 - **"refresh failed: auth"** for a Linear URL → set the personal API key via `membot config set downloaders.linear.api_key <KEY>` (create one at `linear.app/settings/api`).
 - **"Cannot read the Apple Notes database — Full Disk Access required"** → System Settings → Privacy & Security → Full Disk Access → toggle on for your terminal/editor (Terminal, iTerm, Warp, Cursor, VSCode, Conductor). Restart the app and re-run. Open the pane directly: `open 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'`.

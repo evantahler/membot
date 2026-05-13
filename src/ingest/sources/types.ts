@@ -81,26 +81,7 @@ export interface SyncCtx {
 	logger: typeof Logger;
 }
 
-export type LoginEntry = CliToolLoginEntry | ApiKeyLoginEntry;
-
-/**
- * A login that's driven by a bundled external CLI (currently just
- * `gws` for Google). `membot login` runs `setupCommand` interactively
- * for these entries — the user's actual browser opens, the CLI handles
- * the OAuth dance, and the resulting refresh token lives wherever the
- * CLI keeps it (`~/.config/gws/...` for gws). Multiple plugins can
- * share the same login by declaring the same `setupCommand` — the
- * registry dedupes on that string.
- */
-export interface CliToolLoginEntry {
-	kind: "cli_tool";
-	/** Display name (e.g. "Google"). */
-	name: string;
-	/** Shell command `membot login` runs to drive the interactive auth flow. */
-	setupCommand: string;
-	/** Optional one-liner shown next to the login step. */
-	description?: string;
-}
+export type LoginEntry = ApiKeyLoginEntry;
 
 export interface ApiKeyLoginEntry {
 	kind: "api_key";

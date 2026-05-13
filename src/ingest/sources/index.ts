@@ -7,9 +7,6 @@
  * platforms the plugin's `platform` field excludes (apple-notes on
  * non-darwin), so this list is safe to keep flat.
  */
-import "./google-docs.ts";
-import "./google-sheets.ts";
-import "./google-slides.ts";
 import "./github.ts";
 import "./linear.ts";
 import "./apple-notes.ts";

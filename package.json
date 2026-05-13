@@ -29,8 +29,7 @@
 		"prebuild": "bash scripts/apply-patches.sh",
 		"build": "bun build --compile --minify --sourcemap --external '@duckdb/*' --external 'macos-ts' ./src/cli.ts --outfile dist/membot",
 		"docs:sources": "bun run scripts/generate-source-docs.ts",
-		"docs:sources:check": "bun run scripts/generate-source-docs.ts --check",
-		"postinstall": "bun run scripts/install-gws.ts"
+		"docs:sources:check": "bun run scripts/generate-source-docs.ts --check"
 	},
 	"keywords": [
 		"mcp",

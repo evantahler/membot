@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { HelpfulError } from "../../errors.ts";
-import type { ApiKeyLoginEntry, CliToolLoginEntry, PluginCtx, SourcePlugin } from "./types.ts";
+import type { ApiKeyLoginEntry, PluginCtx, SourcePlugin } from "./types.ts";
 
 /**
  * Append-only plugin registry. Plugins call `registerSource(plugin)` at
@@ -89,29 +89,22 @@ export function findSourceForInput(input: string): SourcePlugin | null {
 }
 
 /**
- * Collect every login entry declared by a plugin, deduped within each
- * kind. The `membot login` command runs each `cli_tool` entry's
- * `setupCommand` interactively and prints instructions for each
- * `api_key` entry. Multiple plugins can share the same login (all
- * three Google plugins collapse to a single `gws auth setup` step).
+ * Collect every login entry declared by a plugin, deduped by `url`.
+ * Today every login is an `api_key` entry (GitHub, Linear); `membot
+ * login` prints the settings URL plus the `membot config set ...`
+ * command for each one.
  */
 export function collectLoginEntries(): {
-	cliTool: CliToolLoginEntry[];
 	apiKey: ApiKeyLoginEntry[];
 } {
-	const cliTool = new Map<string, CliToolLoginEntry>();
 	const apiKey = new Map<string, ApiKeyLoginEntry>();
 	for (const p of REGISTRY) {
 		if (!p.logins) continue;
 		for (const login of p.logins) {
-			if (login.kind === "cli_tool") {
-				if (!cliTool.has(login.setupCommand)) cliTool.set(login.setupCommand, login);
-			} else {
-				if (!apiKey.has(login.url)) apiKey.set(login.url, login);
-			}
+			if (!apiKey.has(login.url)) apiKey.set(login.url, login);
 		}
 	}
-	return { cliTool: [...cliTool.values()], apiKey: [...apiKey.values()] };
+	return { apiKey: [...apiKey.values()] };
 }
 
 /**
@@ -208,7 +201,7 @@ export function defaultUrlHint(url: URL): string {
 export function renderSourceList(): string {
 	const lines: string[] = [];
 	for (const p of listSources()) {
-		const authBadge = p.config ? "[api_key]" : p.logins?.[0]?.kind === "cli_tool" ? "[cli_tool]" : "";
+		const authBadge = p.config ? "[api_key]" : "";
 		const head = authBadge ? `- ${p.name} ${authBadge} — ${p.description}` : `- ${p.name} — ${p.description}`;
 		lines.push(head);
 		for (const ex of p.examples) {

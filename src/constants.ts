@@ -111,27 +111,4 @@ export const FILES = {
 	INDEX_DUCKDB: "index.duckdb",
 	MODELS_DIR: "models",
 	LOGS_DIR: "logs",
-	/**
-	 * Per-platform directory that holds bundled third-party binaries we
-	 * fetch at install time (currently just `gws`). Lives under
-	 * `~/.membot/` so a `bun add -g membot` reinstall doesn't blow it
-	 * away the way `~/.cache/membot/` would on some Linux distros.
-	 */
-	BIN_DIR: "bin",
 } as const;
-
-/**
- * Pinned release tag of `googleworkspace/cli` (`gws`) that membot's
- * postinstall script downloads into `~/.membot/bin/`. `gws` is pre-1.0
- * with advertised breaking changes; bumping this constant is a
- * deliberate, audited step — never auto-track latest.
- */
-export const GWS_VERSION = "v0.22.5";
-
-/**
- * Default install location for the `gws` binary. Resolved relative to
- * `MEMBOT_HOME` at runtime by the `gws` wrapper; defined here as a
- * single string so the postinstall script and the runtime resolver
- * stay in sync.
- */
-export const GWS_BIN_NAME = process.platform === "win32" ? "gws.exe" : "gws";

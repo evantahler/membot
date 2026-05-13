@@ -18,10 +18,8 @@ const SourceRowSchema = z.object({
 		.nullable()
 		.describe("For scheme-kind plugins, the URI prefix (e.g. `apple-notes:`). null for URL plugins."),
 	auth_kind: z
-		.enum(["cli_tool", "api_key", "none"])
-		.describe(
-			"`cli_tool` = needs `membot login` (delegates to a bundled CLI like `gws`). `api_key` = needs a token in config. `none` = no auth.",
-		),
+		.enum(["api_key", "none"])
+		.describe("`api_key` = needs a token set via `membot config set`. `none` = no auth."),
 	requires_api_key: z
 		.boolean()
 		.describe("True when this plugin's auth_error needs a token set via `membot config set`."),
@@ -36,7 +34,7 @@ export const sourcesOperation = defineOperation({
 
 Call this BEFORE \`membot_add\` when you're not sure what shape of input is supported. The output is generated from the live plugin registry so adding a new source automatically shows up here.
 
-When an entry's \`auth_kind\` is \`cli_tool\`, the credential lives outside membot in the bundled CLI's own config (Google → \`~/.config/gws/\`); an \`auth_error\` means the user needs to re-run \`membot login\` (which delegates to that CLI). When \`auth_kind\` is \`api_key\`, the credential lives in \`~/.membot/config.json\` under \`downloaders.<plugin>.api_key\` — point the user at \`membot config set\` to fix.`,
+When \`auth_kind\` is \`api_key\`, the credential lives in \`~/.membot/config.json\` under \`downloaders.<plugin>.api_key\` — point the user at \`membot config set\` to fix.`,
 	inputSchema: z.object({}),
 	outputSchema: z.object({
 		sources: z.array(SourceRowSchema),
@@ -65,10 +63,7 @@ When an entry's \`auth_kind\` is \`cli_tool\`, the credential lives outside memb
 			notes: p.notes ?? null,
 			match_kind: p.match.kind,
 			scheme: p.match.kind === "scheme" ? p.match.prefix : null,
-			auth_kind: ((p.logins?.[0]?.kind as "cli_tool" | "api_key" | undefined) ?? "none") as
-				| "cli_tool"
-				| "api_key"
-				| "none",
+			auth_kind: ((p.logins?.[0]?.kind as "api_key" | undefined) ?? "none") as "api_key" | "none",
 			requires_api_key: (p.logins?.[0]?.kind ?? "") === "api_key",
 			platform: p.platform ?? null,
 			examples: p.examples,
