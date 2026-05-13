@@ -1,6 +1,6 @@
 {
 	"name": "membot",
-	"version": "0.15.1",
+	"version": "0.15.2",
 	"description": "Versioned context store with hybrid search for AI agents. Stdio + HTTP MCP server and CLI.",
 	"type": "module",
 	"exports": {
@@ -84,9 +84,6 @@
 		"@biomejs/biome": "^2.4.14",
 		"@types/bun": "latest",
 		"@types/mustache": "^4.2.6",
-		"typescript": "^6"
-	},
-	"peerDependencies": {
 		"typescript": "^6"
 	}
 }

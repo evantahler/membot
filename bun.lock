@@ -35,9 +35,6 @@
         "@types/mustache": "^4.2.6",
         "typescript": "^6",
       },
-      "peerDependencies": {
-        "typescript": "^6",
-      },
     },
   },
   "packages": {
