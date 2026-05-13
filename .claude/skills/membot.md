@@ -30,10 +30,10 @@ membot add ./README.md                                            # single file
 membot add ./docs                                                 # recursive directory walk
 membot add "docs/**/*.md"                                         # glob
 membot add a.md b.md "docs/**/*.md"                               # any number of args; each resolved independently
-membot add https://docs.google.com/document/d/<ID>/edit           # Google Docs/Sheets/Slides via export endpoints
+membot add ./drive-export.docx                                    # Google Docs/Sheets/Slides: export from Drive and add the file
 membot add https://github.com/<owner>/<repo>/issues/<n>           # GitHub issues + PRs (with comments)
 membot add https://linear.app/<workspace>/issue/<KEY>             # Linear issues + projects
-membot add https://example.com/spec.pdf                           # any other URL (browser print-to-PDF fallback)
+membot add ./local-copy.pdf                                       # for arbitrary content: download locally and add the file
 membot add "apple-notes:"                                         # all Apple Notes (macOS-only)
 membot add "apple-notes:Personal/Recipes"                         # one folder
 membot add "apple-notes:Personal/Recipes/**" --sync               # one folder + nested; tombstone deleted notes
@@ -50,24 +50,25 @@ MCP tool) to inspect it at runtime.
 
 | Plugin | Auth | Examples | Notes |
 | --- | --- | --- | --- |
-| **google-docs**<br>Google Docs — exports as .docx via the user's logged-in browser session. | browser — `membot login` | `https://docs.google.com/document/d/<DOC_ID>/edit` |  |
-| **google-sheets**<br>Google Sheets — exports every tab as .xlsx, rendered to markdown tables locally. | browser — `membot login` | `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit` |  |
-| **google-slides**<br>Google Slides — exports as PDF for layout-faithful conversion. | browser — `membot login` | `https://docs.google.com/presentation/d/<SLIDES_ID>/edit` |  |
 | **github**<br>GitHub issues & PRs — uses the GitHub REST API (with optional token for private repos). | `api_key` — `membot config set downloaders.github.api_key <PAT>` | `https://github.com/<owner>/<repo>/issues/<n>`<br>`https://github.com/<owner>/<repo>/pull/<n>` | Public repos work unauthenticated at 60 req/hr. For private repos or higher limits, configure a token: `membot config set downloaders.github.api_key <PAT>` or export `GITHUB_TOKEN`. |
 | **github-repo**<br>GitHub repository bulk import — open issues and PRs (selectable, optionally including closed) via the GitHub REST API. | `api_key` — `membot config set downloaders.github.api_key <PAT>` | `github-repo:facebook/react`<br>`github-repo:owner/repo:issues`<br>`github-repo:owner/repo:prs:all`<br>`github-repo:owner/repo:all` | Default selector pulls open issues + open PRs. Override with `:issues`, `:prs`, `:issues:all`, `:prs:all`, `:all`. Uses the same API key as the per-URL github plugin (`membot config set downloaders.github.api_key <PAT>` or `GITHUB_TOKEN`). Pass --sync to tombstone items no longer returned by the enumerate; with an open-only selector, closing an item will tombstone it — use `:all` selectors to keep closed items. |
 | **linear**<br>Linear issues & projects — uses the Linear GraphQL API with a personal access key. | `api_key` — `membot config set downloaders.linear.api_key <KEY>` | `https://linear.app/<workspace>/issue/<KEY>`<br>`https://linear.app/<workspace>/project/<slug>` | Requires a personal API key from https://linear.app/settings/api. Set it via `membot config set downloaders.linear.api_key <KEY>`. |
 | **linear-team**<br>Linear team bulk import — every project under a team plus every issue in those projects, via the Linear GraphQL API. | `api_key` — `membot config set downloaders.linear.api_key <KEY>` | `linear-team:ENG`<br>`linear-team:DESIGN` | Same API key as the per-URL linear plugin (`membot config set downloaders.linear.api_key <KEY>`). Team key is the uppercase prefix of issue IDs (e.g. ENG from ENG-42). Pass --sync to tombstone projects/issues that have been deleted from Linear. |
 | **apple-notes** _(darwin only)_<br>Apple Notes (macOS) — scope-driven import via NoteStore.sqlite. Markdown comes straight from the protobuf body. | none | `apple-notes:`<br>`apple-notes:Personal/Recipes`<br>`apple-notes:*/Archive`<br>`apple-notes:Personal/Recipes/**` | Requires Full Disk Access for your terminal in System Settings → Privacy & Security. Password-protected notes and Recently Deleted are skipped. Pass `--sync` to tombstone rows whose notes have been deleted. |
-| **generic-web**<br>Catch-all for any other http(s) URL — HEAD/GET, render HTML via headless browser, else stream bytes. | none | `https://example.com/some-page`<br>`https://example.com/some-file.pdf` |  |
 
 <!-- /AUTO-GENERATED:sources -->
 
-Browser-auth plugins need cookies captured by `membot login`
-(one-time browser sign-in). API-key plugins need a credential set via
-`membot config set downloaders.<svc>.api_key`. If a fetch fails with
-an auth error, the `HelpfulError` will tell you exactly which command
-to run. Fetches are non-interactive — they never open a browser
-during ingest or refresh.
+API-key plugins (GitHub, Linear) need a credential set via `membot
+config set downloaders.<svc>.api_key` — run `membot login` to see the
+exact commands. If a fetch fails with an auth error, the
+`HelpfulError` will tell you exactly which command to run. Fetches
+are non-interactive — they never prompt or open a browser.
+
+**Google Docs / Sheets / Slides are NOT a native source.** Don't
+suggest `membot add https://docs.google.com/...` — it will fail with
+a `HelpfulError`. Instead: in Google Drive, `File → Download →
+Microsoft Word (.docx)` (or `.xlsx` / `.pdf`) and `membot add
+./that-file.docx`.
 
 **Apple Notes** (`apple-notes:` scheme, macOS-only) reads `NoteStore.sqlite` directly via `macos-ts` — no AppleScript, no browser, just a fast local SQLite read. The scope syntax is `apple-notes:[<account-glob>[/<folder-glob>]]` and supports the same `*`/`**`/`?` wildcards as filesystem globs:
 
@@ -183,7 +184,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 | `membot logs`                         | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`); `--follow`, `--lines <N>`, `--raw` for JSON |
 | `membot reindex`                      | Rebuild the FTS keyword index over current chunks                              |
 | `membot config <subcommand>`          | Host-side config management (`get` / `set` / `unset` / `list` / `path`). **Don't run** — this is for the human operator, not for agents |
-| `membot login`                        | Open a browser to sign into Google / GitHub / Linear / etc. (one-time host-side setup). **Don't run** — this is for the human operator |
+| `membot login`                        | Print `membot config set` instructions for API-key services (GitHub, Linear). **Don't run** — this is for the human operator |
 
 ## Output formats
 
@@ -195,7 +196,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 ## Troubleshooting
 
 - **"ingest failed: unsupported mime"** → Add a converter or pass `--bytes` to keep the original; LLM-fallback only runs when `ANTHROPIC_API_KEY` is set.
-- **"refresh failed: auth"** for a Google URL → cookies expired. Run `membot login` to refresh the browser session.
+- **Google Docs/Sheets/Slides URL was rejected** → membot doesn't ingest Google natively. Export from Drive as `.docx`/`.xlsx`/`.pdf` and `membot add ./that-file`.
 - **"refresh failed: auth"** for a GitHub URL → set the PAT via `membot config set downloaders.github.api_key <PAT>` (or export `GITHUB_TOKEN`).
 - **"refresh failed: auth"** for a Linear URL → set the personal API key via `membot config set downloaders.linear.api_key <KEY>` (create one at `linear.app/settings/api`).
 - **"Cannot read the Apple Notes database — Full Disk Access required"** → System Settings → Privacy & Security → Full Disk Access → toggle on for your terminal/editor (Terminal, iTerm, Warp, Cursor, VSCode, Conductor). Restart the app and re-run. Open the pane directly: `open 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'`.

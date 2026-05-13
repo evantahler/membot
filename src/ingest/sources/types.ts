@@ -1,7 +1,6 @@
 import type { z } from "zod";
 import type { MembotConfig } from "../../config/schemas.ts";
 import type { logger as Logger } from "../../output/logger.ts";
-import type { BrowserPool } from "./browser.ts";
 
 /**
  * The shape every source fetch produces. `downloader` + `downloaderArgs`
@@ -18,13 +17,11 @@ export interface DownloadedRemote {
 }
 
 /**
- * Per-call context passed to every plugin method. `pool` is a shared
- * BrowserPool managed by the orchestrator (only some plugins need it).
- * `onProgress` is the spinner sublabel hook — plugins call it with short
- * status strings during multi-step fetches.
+ * Per-call context passed to every plugin method. `onProgress` is the
+ * spinner sublabel hook — plugins call it with short status strings
+ * during multi-step fetches.
  */
 export interface PluginCtx {
-	pool: BrowserPool;
 	logger: typeof Logger;
 	config: MembotConfig;
 	onProgress?: (sublabel: string) => void;
@@ -75,7 +72,7 @@ export interface ProbeContext {
 }
 
 /**
- * One open batch (BrowserPool, sqlite reader, GraphQL client, …) shared
+ * One open batch (sqlite reader, GraphQL client, …) shared
  * across many fetches in a single ingest run. The orchestrator opens one
  * per source via `plugin.openBatchFetcher`, runs N fetches against it,
  * then closes it. URL plugins don't need this and return a trivial
@@ -99,17 +96,7 @@ export interface SyncCtx {
 	logger: typeof Logger;
 }
 
-export type LoginEntry = BrowserLoginEntry | ApiKeyLoginEntry;
-
-export interface BrowserLoginEntry {
-	kind: "browser";
-	/** Display name (e.g. "Google"). */
-	name: string;
-	/** Login URL the button opens. */
-	url: string;
-	/** Optional one-liner shown next to the button. */
-	description?: string;
-}
+export type LoginEntry = ApiKeyLoginEntry;
 
 export interface ApiKeyLoginEntry {
 	kind: "api_key";
@@ -128,8 +115,7 @@ export interface ApiKeyLoginEntry {
  *  - `url`: the source parses as an http(s) URL and the plugin's
  *    `matches(url)` returns true.
  *  - `scheme`: the source starts with `prefix` (e.g. `apple-notes:`).
- *    Scheme matchers are tried before URL matchers so a scheme-shaped
- *    source never accidentally falls through to generic-web.
+ *    Scheme matchers are tried before URL matchers.
  */
 export type SourceMatch = { kind: "url"; matches: (url: URL) => boolean } | { kind: "scheme"; prefix: string };
 
@@ -137,7 +123,8 @@ export type SourceMatch = { kind: "url"; matches: (url: URL) => boolean } | { ki
  * Plugin config-slice declaration. Used to assemble
  * `MembotConfigSchema.downloaders` at startup. Only plugins with their own
  * persisted settings (api_key, base_url overrides, etc.) declare this —
- * browser-cookie plugins like Google Docs have `logins` but no config slice.
+ * CLI-tool-auth plugins like Google Docs have `logins` but no config slice
+ * (credentials live wherever the bundled CLI keeps them).
  */
 export interface PluginConfigSlice<C extends Record<string, unknown> = Record<string, unknown>> {
 	/** Key under `config.downloaders`. Plugin's slice lives at `config.downloaders[key]`. */
@@ -177,25 +164,17 @@ export interface SourcePlugin<
 	/**
 	 * Login UI entries the plugin needs the user to complete before its
 	 * fetches will succeed. `membot login` collects these across every
-	 * plugin and dedupes by URL — the three Google plugins share one
-	 * `Google` button, etc.
+	 * plugin and dedupes by URL — e.g. `github` and `github-repo` share
+	 * one GitHub api_key entry.
 	 */
 	logins?: LoginEntry[];
 
 	/**
 	 * Per-plugin slice of `config.downloaders`. Required for plugins with
-	 * runtime settings (api_key); omit for browser-cookie plugins that
-	 * just rely on `membot login`.
+	 * runtime settings (api_key); omit for plugins with no auth (e.g.
+	 * apple-notes reads NoteStore.sqlite directly).
 	 */
 	config?: PluginConfigSlice<C>;
-
-	/**
-	 * The plugin authenticates via a config-stored credential, not browser
-	 * cookies. The fetcher uses this to skip the auto-login browser prompt
-	 * on `auth_error` (opening a browser doesn't help when the missing
-	 * credential is in a config file or env var).
-	 */
-	requiresApiKey?: boolean;
 
 	/**
 	 * Restrict registration to specific Node platforms. apple-notes is
@@ -205,22 +184,16 @@ export interface SourcePlugin<
 	platform?: NodeJS.Platform[];
 
 	/**
-	 * Force the BrowserPool into headed mode for this plugin's fetches.
-	 * Used for SPAs that detect headless Chromium and refuse to hydrate.
-	 */
-	requireHeaded?: boolean;
-
-	/**
 	 * Walk the source and produce one entry per ingestable thing. URL
 	 * plugins typically return a single entry whose `source` is the URL.
 	 * Scheme plugins like `apple-notes:` enumerate many notes per call.
 	 *
-	 * Runs in the resolve phase before the host builds a full PluginCtx
-	 * (no browser pool), but receives a narrow `EnumerateCtx` carrying
-	 * `config` + `logger` so bulk-import schemes can hit listing APIs and
-	 * paginate. Plugins that don't need network for enumeration ignore the
-	 * arg; plugins that need a session/cookies still defer that into
-	 * `openBatchFetcher.fetch`.
+	 * Runs in the resolve phase before the host builds a full PluginCtx,
+	 * but receives a narrow `EnumerateCtx` carrying `config` + `logger`
+	 * so bulk-import schemes (linear-team, github-repo) can hit listing
+	 * APIs and paginate. Plugins that don't need network for enumeration
+	 * ignore the arg; plugins that need richer context defer that work
+	 * into `openBatchFetcher.fetch` instead.
 	 */
 	enumerate: (source: string, ctx: EnumerateCtx) => Promise<Entry<A>[]>;
 

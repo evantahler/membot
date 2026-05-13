@@ -148,7 +148,6 @@ const linearTeamPlugin = defineSourcePlugin<LinearConfig, LinearTeamArgs>({
 			description: "create a personal API key, then run the command on the right",
 		},
 	],
-	requiresApiKey: true,
 	async enumerate(source, ctx) {
 		const { team } = parseLinearTeamScope(source);
 		const apiKey = requireApiKey(ctx);

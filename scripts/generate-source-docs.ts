@@ -48,8 +48,8 @@ function renderTable(): string {
 	for (const p of listSources()) {
 		const auth = p.config
 			? `\`api_key\` — \`${p.logins?.[0]?.kind === "api_key" ? p.logins[0].setupCommand : ""}\``
-			: p.logins?.[0]?.kind === "browser"
-				? "browser — `membot login`"
+			: p.logins?.[0]?.kind === "cli_tool"
+				? "cli_tool — `membot login`"
 				: "none";
 		const examples = p.examples.map((e) => `\`${e}\``).join("<br>");
 		const notes = (p.notes ?? "").replace(/\n+/g, " ");

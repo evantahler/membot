@@ -47,9 +47,8 @@ export interface ResolveOptions {
 	followSymlinks?: boolean;
 	/**
 	 * Force a specific source plugin by name when the input matches a URL.
-	 * Bypasses URL-based matching so e.g. `--downloader generic-web` wins
-	 * over the more-specific google-docs plugin. Has no effect on scheme
-	 * sources (apple-notes:) or local files.
+	 * Bypasses URL-based matching. Has no effect on scheme sources
+	 * (apple-notes:) or local files.
 	 */
 	pluginOverride?: string;
 	/**
@@ -135,6 +134,22 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 	const plugin = findSourceForInput(source);
 	if (plugin) {
 		return await resolveViaPlugin(plugin, source, requireEnumerateCtx(options));
+	}
+
+	// We dropped the generic-web catch-all alongside Playwright. An http(s)
+	// URL that doesn't claim a specific plugin is now a clear input error
+	// (better than the misleading "not_found" the local-file fallthrough
+	// would produce).
+	if (/^https?:\/\//i.test(source)) {
+		const names = listSources()
+			.filter((p) => p.match.kind === "url")
+			.map((p) => p.name)
+			.join(", ");
+		throw new HelpfulError({
+			kind: "input_error",
+			message: `no source plugin matches: ${source}`,
+			hint: `Pass a URL recognized by one of: ${names}. To ingest arbitrary web content, download the file locally and run \`membot add <path>\`.`,
+		});
 	}
 
 	source = expandHome(source);

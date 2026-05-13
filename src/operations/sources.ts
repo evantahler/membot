@@ -18,9 +18,11 @@ const SourceRowSchema = z.object({
 		.nullable()
 		.describe("For scheme-kind plugins, the URI prefix (e.g. `apple-notes:`). null for URL plugins."),
 	auth_kind: z
-		.enum(["browser", "api_key", "none"])
-		.describe("`browser` = needs `membot login`. `api_key` = needs a token in config. `none` = no auth."),
-	requires_api_key: z.boolean().describe("True when this plugin's auth_error can't be fixed by `membot login`."),
+		.enum(["api_key", "none"])
+		.describe("`api_key` = needs a token set via `membot config set`. `none` = no auth."),
+	requires_api_key: z
+		.boolean()
+		.describe("True when this plugin's auth_error needs a token set via `membot config set`."),
 	platform: z.array(z.string()).nullable().describe("Platforms this plugin is registered on. null = all platforms."),
 	examples: z.array(z.string()).describe("Concrete example sources users can copy-paste."),
 });
@@ -32,7 +34,7 @@ export const sourcesOperation = defineOperation({
 
 Call this BEFORE \`membot_add\` when you're not sure what shape of input is supported. The output is generated from the live plugin registry so adding a new source automatically shows up here.
 
-When an entry's \`auth_kind\` is \`browser\`, the user has likely already run \`membot login\` and authenticated; an \`auth_error\` from one of those plugins means they need to re-run it. When \`auth_kind\` is \`api_key\`, the credential lives in \`~/.membot/config.json\` under \`downloaders.<plugin>.api_key\` — point the user at \`membot config set\` to fix.`,
+When \`auth_kind\` is \`api_key\`, the credential lives in \`~/.membot/config.json\` under \`downloaders.<plugin>.api_key\` — point the user at \`membot config set\` to fix.`,
 	inputSchema: z.object({}),
 	outputSchema: z.object({
 		sources: z.array(SourceRowSchema),
@@ -61,11 +63,8 @@ When an entry's \`auth_kind\` is \`browser\`, the user has likely already run \`
 			notes: p.notes ?? null,
 			match_kind: p.match.kind,
 			scheme: p.match.kind === "scheme" ? p.match.prefix : null,
-			auth_kind: ((p.logins?.[0]?.kind as "browser" | "api_key" | undefined) ?? "none") as
-				| "browser"
-				| "api_key"
-				| "none",
-			requires_api_key: p.requiresApiKey === true,
+			auth_kind: ((p.logins?.[0]?.kind as "api_key" | undefined) ?? "none") as "api_key" | "none",
+			requires_api_key: (p.logins?.[0]?.kind ?? "") === "api_key",
 			platform: p.platform ?? null,
 			examples: p.examples,
 		}));

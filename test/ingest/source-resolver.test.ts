@@ -31,14 +31,19 @@ describe("resolveSource", () => {
 		if (r.kind === "inline") expect(r.text).toBe("hello world");
 	});
 
-	test("URL source resolves via the generic-web plugin into a single entry", async () => {
-		const r = await resolveSource("https://example.com/x", { enumerateCtx });
+	test("URL source claimed by a registered plugin resolves into a single entry", async () => {
+		const r = await resolveSource("https://github.com/evantahler/membot/issues/1", { enumerateCtx });
 		expect(r.kind).toBe("plugin");
 		if (r.kind === "plugin") {
-			expect(r.plugin.name).toBe("generic-web");
+			expect(r.plugin.name).toBe("github");
 			expect(r.entries).toHaveLength(1);
-			expect(r.entries[0]?.source).toBe("https://example.com/x");
 		}
+	});
+
+	test("URL with no matching plugin throws a clear input_error", async () => {
+		expect(resolveSource("https://example.com/x", { enumerateCtx })).rejects.toMatchObject({
+			kind: "input_error",
+		});
 	});
 
 	test("single file source carries the absolute realpath", async () => {

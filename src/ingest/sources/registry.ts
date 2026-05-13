@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { HelpfulError } from "../../errors.ts";
-import type { ApiKeyLoginEntry, BrowserLoginEntry, PluginCtx, SourcePlugin } from "./types.ts";
+import type { ApiKeyLoginEntry, PluginCtx, SourcePlugin } from "./types.ts";
 
 /**
  * Append-only plugin registry. Plugins call `registerSource(plugin)` at
  * module-load time; the side-effect imports in `./index.ts` are what
  * populate the array. Order matters — `findSourceForInput` walks the
- * list and returns the first match, so generic-web must be last.
+ * list and returns the first match.
  *
  * Registrations from a non-matching `platform` are silently dropped at
  * load time. That lets us ship apple-notes in the binary on every OS
@@ -16,13 +16,13 @@ const REGISTRY: SourcePlugin[] = [];
 const REGISTERED_NAMES = new Set<string>();
 
 /**
- * Register a plugin. Must be called at module-load time (side-effect
- * imports in `./index.ts`) so the registry is populated before
- * `MembotConfigSchema` is constructed.
+ * Register a plugin. Must be called at module-load time (via the
+ * side-effect imports in `./index.ts`) so the registry is populated
+ * before `MembotConfigSchema` is constructed.
  *
  * Refuses duplicate names — two plugins claiming the same name would
- * fight over the same `files.downloader` value and would corrupt
- * refresh dispatch. Scheme-prefix collisions are also rejected.
+ * fight over the same `files.downloader` value and corrupt refresh
+ * dispatch. Scheme-prefix collisions are also rejected.
  */
 export function registerSource<C extends Record<string, unknown>, A extends Record<string, unknown>>(
 	plugin: SourcePlugin<C, A>,
@@ -84,8 +84,8 @@ export function findSourceByName(name: string): SourcePlugin | null {
 /**
  * Find the first plugin that claims `input`. Scheme prefixes are checked
  * first so an `apple-notes:` string never falls through to URL matching.
- * URL plugins are tried in registration order; generic-web (registered
- * last) acts as the catch-all for http(s) URLs no specific plugin took.
+ * URL plugins are tried in registration order; if no plugin matches
+ * an http(s) URL, returns `null` (the caller raises a HelpfulError).
  *
  * Returns `null` when the input isn't a URL and doesn't match any
  * scheme — callers handle that as "not a remote source" (local file,
@@ -108,29 +108,22 @@ export function findSourceForInput(input: string): SourcePlugin | null {
 }
 
 /**
- * Collect every login entry declared by a plugin, deduped by URL within
- * each kind. The `membot login` command renders one button per
- * browser-auth entry and one set of instructions per api-key entry.
- * Multiple plugins can share the same login (all three Google plugins
- * collapse to one Google button).
+ * Collect every login entry declared by a plugin, deduped by `url`.
+ * Today every login is an `api_key` entry (GitHub, Linear); `membot
+ * login` prints the settings URL plus the `membot config set ...`
+ * command for each one.
  */
 export function collectLoginEntries(): {
-	browser: BrowserLoginEntry[];
 	apiKey: ApiKeyLoginEntry[];
 } {
-	const browser = new Map<string, BrowserLoginEntry>();
 	const apiKey = new Map<string, ApiKeyLoginEntry>();
 	for (const p of REGISTRY) {
 		if (!p.logins) continue;
 		for (const login of p.logins) {
-			if (login.kind === "browser") {
-				if (!browser.has(login.url)) browser.set(login.url, login);
-			} else {
-				if (!apiKey.has(login.url)) apiKey.set(login.url, login);
-			}
+			if (!apiKey.has(login.url)) apiKey.set(login.url, login);
 		}
 	}
-	return { browser: [...browser.values()], apiKey: [...apiKey.values()] };
+	return { apiKey: [...apiKey.values()] };
 }
 
 /**
@@ -227,7 +220,7 @@ export function defaultUrlHint(url: URL): string {
 export function renderSourceList(): string {
 	const lines: string[] = [];
 	for (const p of listSources()) {
-		const authBadge = p.config ? "[api_key]" : p.logins?.[0]?.kind === "browser" ? "[browser]" : "";
+		const authBadge = p.config ? "[api_key]" : "";
 		const head = authBadge ? `- ${p.name} ${authBadge} — ${p.description}` : `- ${p.name} — ${p.description}`;
 		lines.push(head);
 		for (const ex of p.examples) {

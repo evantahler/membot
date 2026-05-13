@@ -17,8 +17,9 @@ Reference project (origin):
 - **DuckDB is the only store.** Content AND original bytes live in rows (`files.content`, `blobs.bytes`), not in a filesystem tree. `~/.membot/index.duckdb` holds everything except cached model weights. The DB will get large — that's accepted.
 - **Append-only versioning.** Every ingest, refresh that finds new bytes, write, or rename creates a new `(logical_path, version_id)` row. `version_id` is a `TIMESTAMP` (ms precision). Default queries flow through `current_files` / `current_chunks` views. Delete = tombstone, not a row removal.
 - **MCP defaults to current.** Every MCP tool acts on the latest non-tombstoned version unless `version` is passed explicitly.
-- **Per-service downloaders + persisted provenance.** Remote URLs are dispatched to a downloader registry (`src/ingest/downloaders/`): Google Docs/Sheets/Slides via export endpoints with cookies from a persistent chromium profile, GitHub via REST API + PAT, Linear via GraphQL + personal API key, generic-web (Playwright print-to-PDF or plain GET) as the catch-all. Each row persists `(downloader, downloader_args)` so refresh replays the exact same downloader against the same URL — deterministic, no LLM, no agent loop.
-- **Fetches are non-interactive.** `membot add` and `membot refresh` never open a browser themselves. Auth failures throw `HelpfulError` with a concrete next step (`membot login` for cookie services, `membot config set downloaders.<svc>.api_key` for token services). The single interactive entry point is `membot login`, which the user runs once.
+- **Per-service downloaders + persisted provenance.** Remote URLs are dispatched to a source-plugin registry (`src/ingest/sources/`): GitHub via REST API + PAT, Linear via GraphQL + personal API key. There is no generic-web catch-all and no Google plugin — arbitrary URLs (and Google Docs/Sheets/Slides URLs) are rejected with a clear `HelpfulError`. Each row persists `(downloader, downloader_args)` so refresh replays the exact same downloader against the same URL — deterministic, no LLM, no agent loop.
+- **Fetches are non-interactive.** `membot add` and `membot refresh` never prompt or open a browser. Auth failures throw `HelpfulError` with a concrete next step (`membot config set downloaders.<svc>.api_key` for token services).
+- **No Playwright, no Chromium, no Google ingest.** Membot doesn't launch a browser, embed one, or shell out to a third-party CLI. Google Docs/Sheets/Slides aren't a first-class source — the OAuth scope tax to get Drive access (either `cloud-platform` to gcloud or a manual GCP-project setup) was disproportionate. Workaround for users: export the Drive file as `.docx` / `.xlsx` / `.pdf` and `membot add <path>`.
 - **Native conversion first, LLM fallback for messy/binary input.** `unpdf`, `mammoth`, `turndown` handle the common cases. Claude vision captions images; Claude markdown-converter is the last-resort fallback. Missing `ANTHROPIC_API_KEY` is not a hard error — the pipeline degrades to deterministic surrogates.
 - **Textual surrogate is the universal interface.** Every artifact (markdown, PDF, image, audio, anything) produces a markdown body that flows through chunking + embedding + FTS. Original bytes live in `blobs` and are reachable via `membot_read bytes=true`. Search has zero special cases for binary content.
 - **Always describe.** `files.description` is generated for every ingested file, including plain markdown. The string `<logical_path>\n<description>\n\n<chunk_content>` is what gets embedded and FTS-indexed (stored as `chunks.search_text`); `chunks.chunk_content` keeps the raw body for clean snippet rendering.
@@ -64,16 +65,12 @@ The downloader registry maps URLs to a tactic:
 
 | Service | Match | Strategy | Auth |
 |---|---|---|---|
-| google-docs | `docs.google.com/document/d/<id>` | `?format=docx` export → existing `convertDocx` | Cookies from persistent chromium profile (populated by `membot login`) |
-| google-sheets | `docs.google.com/spreadsheets/d/<id>` | `?format=html` export → `convertHtml` | Same |
-| google-slides | `docs.google.com/presentation/d/<id>` | `/export/pdf` → `convertPdf` | Same |
 | github | `github.com/<owner>/<repo>/(issues\|pull)/<n>` | `api.github.com/repos/.../issues/<n>` + `/comments` → render JSON to markdown | `downloaders.github.api_key` PAT (or `GITHUB_TOKEN`); public repos work unauth at 60 req/hr |
 | github-repo | scheme `github-repo:<owner>/<repo>[:<selector>]` | paginated `/repos/<o>/<r>/issues?state=…` → one Entry per issue/PR, fetched via the same path as `github` | Shares `downloaders.github.api_key` (or `GITHUB_TOKEN`) |
 | linear | `linear.app/<workspace>/issue/<KEY>` and `…/project/<slug>` | `api.linear.app/graphql` (Issue / Project queries) → render JSON to markdown | `downloaders.linear.api_key` personal API key |
 | linear-team | scheme `linear-team:<TEAM_KEY>` | paginated GraphQL `teams` → `projects` → `issues` → one Entry per project/issue, fetched via the same path as `linear` | Shares `downloaders.linear.api_key` |
-| generic-web | catch-all for any http(s) URL | Plain GET (mime-dispatched) or Playwright print-to-PDF for `text/html` | Cookies from the persistent profile if present |
 
-Google fetches go through Node's built-in `fetch()` with a `Cookie` header read from the chromium profile — Playwright's `APIRequestContext` has a cookie-parser bug on Google's same-origin redirects. GitHub + Linear are pure HTTP; they don't open chromium at all. Only Google + generic-web need the browser pool.
+There is **no** generic-web catch-all and **no** Google ingest. Arbitrary http(s) URLs that no plugin claims (including `docs.google.com/...`) produce a clear `HelpfulError` telling the user to download the file locally and `membot add <path>`. GitHub + Linear are pure HTTP — no plugin opens a browser, shells out to a third-party CLI, or needs Playwright.
 
 Daemon mode (`membot serve --watch`) ticks every `tick_interval_sec` and runs the no-arg refresh path against rows whose `refresh_frequency_sec` has elapsed.
 
@@ -97,7 +94,7 @@ src/
   commands/             # CLI-only commands with no MCP equivalent (serve, reindex, login)
   config/               # zod schema + loader (~/.membot/config.json)
   db/                   # DuckDB connection, migrations, files.ts, chunks.ts
-  ingest/               # source-resolver (file/dir/glob/url/inline), local-reader, fetcher, chunker, embedder, describer, search-text, concurrency (pMap + AsyncMutex), embed-pool / embed-worker (Bun.Worker pool for parallel embed), converter/ (pdf/docx/html/image/text/llm), downloaders/ (per-service: google-docs/sheets/slides, github, linear, generic-web)
+  ingest/               # source-resolver (file/dir/glob/url/inline), local-reader, fetcher, chunker, embedder, describer, search-text, concurrency (pMap + AsyncMutex), embed-pool / embed-worker (Bun.Worker pool for parallel embed), converter/ (pdf/docx/html/image/text/llm), sources/ (per-service: github, linear, apple-notes)
   search/               # semantic.ts, keyword.ts, hybrid.ts (RRF)
   refresh/              # runner.ts (per-row), scheduler.ts (daemon)
   mcp/                  # server.ts, instructions.ts
@@ -154,7 +151,7 @@ If a command, flag, or workflow changes, the README command table, the skill com
 ## Build & distribution
 
 - Pre-build: `scripts/apply-patches.sh` (applies the transformers WASM patch).
-- Build: `bun build --compile --minify --sourcemap --external '@duckdb/*' --external 'playwright*' ./src/cli.ts --outfile dist/membot`. Both `@duckdb/*` and `playwright*` are externalized: DuckDB ships per-platform `.node` bindings that `bun build --compile` can't bundle, and Playwright relies on a separately-installed Chromium binary at `~/.cache/ms-playwright/`. The published binary expects both to be reachable at runtime, so the README directs users to `bun add -g membot` (which installs both as deps) and `bunx playwright install chromium` (one-time browser download).
+- Build: `bun build --compile --minify --sourcemap --external '@duckdb/*' --external 'macos-ts' ./src/cli.ts --outfile dist/membot`. `@duckdb/*` is externalized because DuckDB ships per-platform `.node` bindings that `bun build --compile` can't bundle. The bundled `gws` CLI is fetched by the `postinstall` script (`scripts/install-gws.ts`) into `~/.membot/bin/gws` — it lives next to the membot binary, not inside it.
 - Targets: darwin-arm64, darwin-x64, linux-arm64, linux-x64, windows-x64, windows-arm64.
 
 ## Things to avoid
@@ -163,7 +160,9 @@ If a command, flag, or workflow changes, the README command table, the skill com
 - Cloud embeddings. Local WASM only.
 - Mutating an existing version's `content` / `content_sha256` / `chunks`. Those fields are immutable once the row is written — corrections are new versions.
 - Re-routing a remote refresh through an LLM/agent loop. Refresh looks up the persisted `downloader` name and re-invokes the same downloader against `source_path` — deterministic, no LLM call.
-- Opening a browser window during a fetch. `membot add` and `membot refresh` MUST stay non-interactive (the daemon depends on it). Browser windows only open inside `membot login`.
+- Opening a browser, prompting on stdin, or otherwise blocking during a fetch. `membot add` and `membot refresh` MUST stay non-interactive (the daemon depends on it). `membot login` is just an informational printout.
+- Re-introducing Playwright or any embedded browser. All current plugins are pure HTTP (GitHub, Linear) or pure local (Apple Notes).
+- Adding Google Docs/Sheets/Slides ingest. Google's OAuth scope requirements make it a poor fit (you need `cloud-platform` via gcloud or a self-managed GCP project/OAuth client). Users export from Drive as `.docx`/`.xlsx`/`.pdf` and use `membot add <path>`.
 - Tools that return content blobs without a `version_id` — every read-shaped response must echo which version it served.
 - A separate `membot_read_blob` tool. Bytes are reachable via `membot_read` with `bytes=true`. One read tool, one mental model.
 - Embedding `chunk_content` raw. Always embed `search_text` (the prepended `<path>\n<description>\n\n<body>`) — that's what `chunks.search_text` holds and what FTS is built on.

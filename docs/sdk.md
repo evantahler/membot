@@ -6,8 +6,9 @@ The `membot` npm package ships both the `membot` CLI binary and a TypeScript SDK
 
 ```bash
 bun add membot
-bunx playwright install chromium    # one-time, only if you ingest URLs
 ```
+
+No `postinstall` step and no bundled third-party binaries. Google Docs/Sheets/Slides aren't ingested natively — export from Drive as `.docx`/`.xlsx`/`.pdf` and `client.add({ sources: ["./that-file.docx"] })`.
 
 The SDK is Bun-only (the runtime depends on `Bun.Worker`, native DuckDB bindings, and bundled WASM patches). Don't try to run it under Node.
 

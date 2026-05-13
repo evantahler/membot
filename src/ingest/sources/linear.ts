@@ -55,7 +55,6 @@ const linearPlugin = defineSourcePlugin<LinearConfig, LinearArgs>({
 			description: "create a personal API key, then run the command on the right",
 		},
 	],
-	requiresApiKey: true,
 	async enumerate(source, _ctx) {
 		const url = new URL(source);
 		const cursor = parseLinearUrl(url);
