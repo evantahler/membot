@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { MembotConfig } from "../../config/schemas.ts";
 import { HelpfulError } from "../../errors.ts";
 import type { ApiKeyLoginEntry, PluginCtx, SourcePlugin } from "./types.ts";
 
@@ -84,14 +85,20 @@ export function findSourceByName(name: string): SourcePlugin | null {
 /**
  * Find the first plugin that claims `input`. Scheme prefixes are checked
  * first so an `apple-notes:` string never falls through to URL matching.
- * URL plugins are tried in registration order; if no plugin matches
- * an http(s) URL, returns `null` (the caller raises a HelpfulError).
+ * URL plugins are tried in registration order; dynamic-match plugins (whose
+ * claim depends on the live config — e.g. `custom-command`'s user-defined
+ * router list) run last, so a built-in plugin always wins on overlapping
+ * URL patterns. If no plugin matches an http(s) URL, returns `null` (the
+ * caller raises a HelpfulError).
  *
  * Returns `null` when the input isn't a URL and doesn't match any
  * scheme — callers handle that as "not a remote source" (local file,
- * glob, inline literal).
+ * glob, inline literal). `config` is required for dynamic matching;
+ * callers without a loaded config can pass `null` and accept that
+ * dynamic plugins won't fire (used by the source-resolver's narrow
+ * pluginOverride path).
  */
-export function findSourceForInput(input: string): SourcePlugin | null {
+export function findSourceForInput(input: string, config: MembotConfig | null = null): SourcePlugin | null {
 	for (const p of REGISTRY) {
 		if (p.match.kind === "scheme" && input.startsWith(p.match.prefix)) return p;
 	}
@@ -103,6 +110,11 @@ export function findSourceForInput(input: string): SourcePlugin | null {
 	}
 	for (const p of REGISTRY) {
 		if (p.match.kind === "url" && p.match.matches(parsed)) return p;
+	}
+	if (config) {
+		for (const p of REGISTRY) {
+			if (p.match.kind === "dynamic" && p.match.matches(parsed, config)) return p;
+		}
 	}
 	return null;
 }
@@ -133,14 +145,21 @@ export function collectLoginEntries(): {
  * keys land at their declared defaults. The composed object is what
  * `MembotConfigSchema.downloaders` points at — single source of truth,
  * no hand-edits required when a new plugin lands.
+ *
+ * `extras` lets the schema module inject downloader-level fields that
+ * aren't owned by any single plugin (e.g. `custom_routers` — a
+ * user-defined dispatch table consumed by the `custom-command` plugin).
  */
-export function buildDownloadersConfigSchema(): z.ZodTypeAny {
+export function buildDownloadersConfigSchema(extras: Record<string, z.ZodTypeAny> = {}): z.ZodTypeAny {
 	const shape: Record<string, z.ZodTypeAny> = {};
 	for (const p of REGISTRY) {
 		const cfg = p.config;
 		if (!cfg) continue;
 		const schema = cfg.schema;
 		shape[cfg.key] = schema.default(() => schema.parse({}));
+	}
+	for (const [key, schema] of Object.entries(extras)) {
+		shape[key] = schema;
 	}
 	const obj = z.object(shape);
 	return obj.default(() => obj.parse({}));

@@ -103,24 +103,63 @@ chunk → embed → store with persisted (downloader, downloader_args)
 |---|---|---|---|
 | `github` | `github.com/<owner>/<repo>/(issues\|pull)/<n>` | `api.github.com/repos/.../issues/<n>` + `/comments` → render JSON to markdown | `downloaders.github.api_key` PAT (or `GITHUB_TOKEN`); public repos work unauth at 60 req/hr |
 | `linear` | `linear.app/<workspace>/issue/<KEY>` and `…/project/<slug>` | `api.linear.app/graphql` queries → render JSON to markdown | `downloaders.linear.api_key` personal API key |
+| `custom-command` | user-defined: `downloaders.custom_routers[*].url_pattern` (regex with named groups) | `Bun.spawn` the user's configured argv with `{var}` placeholders substituted from named groups, capture stdout, run an optional post-processor (built-in: `passthrough` / `docmd` / `html-to-markdown`; or a second `Bun.spawn` whose stdin gets piped in) | user-owned — the spawned command (e.g. `mcpx`, `gws`, `gh`, a private script) handles its own auth |
 
-There is **no** generic-web catch-all and **no** Google ingest.
-Arbitrary http(s) URLs that no plugin claims (including
-`docs.google.com/...`) produce a clear `HelpfulError` instructing the
-user to download the file locally and `membot add <path>`.
+There is **no** generic-web catch-all and **no** built-in Google
+plugin. Arbitrary http(s) URLs that no plugin (built-in or
+user-registered) claims produce a clear `HelpfulError` instructing
+the user to either register a router via `membot router add` or
+download the file locally and `membot add <path>`.
 
-Google Docs/Sheets/Slides specifically are not a first-class source:
-Google's OAuth scope policy makes the Drive-readonly entry tax
+Google Docs/Sheets/Slides are not a first-class source: Google's
+OAuth scope policy makes the Drive-readonly entry tax
 disproportionate (you either grant `cloud-platform` to gcloud or
-manage your own GCP project + OAuth client). The deliberate
-workaround: export from Drive as `.docx` / `.xlsx` / `.pdf` and
-`membot add <path>`. The existing DOCX/XLSX/PDF converters render the
-content identically to a hypothetical Drive-API ingest. We lose
-auto-refresh of those files; everything else is the same.
+manage your own GCP project + OAuth client). Two supported paths
+instead:
 
-GitHub and Linear are pure HTTP — they don't shell out to anything.
-Membot itself opens **no** browser, embeds **no** browser, and ships
-**no** bundled third-party CLI.
+1. **Export + ingest**: from Drive `File → Download → .docx`/`.xlsx`/`.pdf`
+   and `membot add <path>`. The existing DOCX/XLSX/PDF converters
+   render the content identically to a hypothetical Drive-API ingest.
+   Auto-refresh is lost; everything else is the same.
+2. **Custom router**: register a `custom-command` router that
+   delegates the fetch to a tool that already has Google auth — e.g.
+   `mcpx exec GoogleDocs_GetDocumentAsDocmd --doc-id {doc_id}`. Auth
+   stays in the external tool; membot just spawns it and post-processes
+   the output. `membot refresh` replays the exact same command.
+
+GitHub, Linear, and custom routers' primary fetches are pure HTTP /
+argv-`Bun.spawn` — they don't open a shell, never interpolate strings
+into a command line, and never prompt. Membot itself opens **no**
+browser, embeds **no** browser, and ships **no** bundled third-party
+CLI. The user's machine supplies whatever shell commands their custom
+routers reference.
+
+### Custom URL routers
+
+`custom-command` is the only `dynamic`-match plugin in the registry
+(see `MatchSpec` in `src/ingest/sources/types.ts`). Its `matches`
+function reads the live `config.downloaders.custom_routers` array at
+dispatch time and tests each `url_pattern` regex in registration
+order; first hit wins. Built-in URL plugins always win over dynamic
+matchers — `findSourceForInput` runs dynamic matches only after every
+static URL pattern fails, so a user pattern as broad as `^https://`
+never steals a `github.com/...` URL from the `github` plugin.
+
+Each row stores `downloader = "custom-command"` and
+`downloader_args = { router: <name>, vars: { <captured> } }`. Refresh
+looks up the live router by name (HelpfulError on missing — the
+config row was deleted), substitutes the persisted vars back into the
+argv template, and re-spawns the same command. The captured `vars`
+are persisted, so a router whose `url_pattern` changes after ingest
+still refreshes existing rows correctly (the new pattern is only
+consulted on fresh ingests, not on replay).
+
+Routers are validated at config-load time (compilable regex, no
+placeholder references unknown named groups, unique names within the
+array). The CLI surface is `membot router {add,list,remove,test}` in
+`src/commands/router.ts`; the on-disk shape under
+`downloaders.custom_routers` is the single source of truth so editing
+`~/.membot/config.json` by hand also works.
 
 ### Auth flow: print instructions + non-interactive fetches
 

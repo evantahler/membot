@@ -77,6 +77,52 @@ Each note's body is rendered to markdown by `macos-ts` (decoded from the gzip'd 
 
 Out of scope for v1: attachments, password-protected notes (skipped per-entry), shared-note participants, two-way sync, iCloud-only notes not synced to this Mac.
 
+### Custom URL routers
+
+Need to ingest a URL that no built-in plugin claims? Register a **custom router** that dispatches matched URLs to an external shell command — useful when the URL's auth lives in another tool (`mcpx`, `gws`, `gcloud`, `gh`, a private script). The router persists the captured ID variables on each row so refresh replays the same command against the same source.
+
+Google Docs example (delegates to `mcpx exec`, which already has Google auth wired up via the user's mcpx config):
+
+```bash
+membot router add \
+  --name google-docs \
+  --url-pattern '^https://docs\.google\.com/document/d/(?<doc_id>[a-zA-Z0-9_-]+)' \
+  --command mcpx \
+  --args 'exec,GoogleDocs_GetDocumentAsDocmd,--doc-id,{doc_id}' \
+  --mime-type text/markdown \
+  --post-process docmd
+```
+
+Then ingest as normal:
+
+```bash
+membot add https://docs.google.com/document/d/<doc-id>/edit
+```
+
+How it works:
+
+- `--url-pattern` is a JS regex. Named groups `(?<name>...)` become `{name}` substitution variables; `{url}` substitutes the full source URL.
+- `--command` + `--args` form an argv array — no shell, no string interpolation. The user-supplied doc id can't escape its argv slot.
+- `--mime-type` declares what the command emits; it flows through the existing converter pipeline (markdown stays markdown, HTML routes through Turndown, etc.).
+- `--post-process` runs after the primary fetch:
+  - **passthrough** (default) — no transform.
+  - **docmd** — light cleanup for Google's docmd output (smart-quote/NBSP normalization, blank-line collapse).
+  - **html-to-markdown** — Turndown.
+  - Or pass `--post-process-command <cmd>` + `--post-process-args <csv>` to pipe the bytes through any external script (`pandoc`, `jq`, etc.). The bytes arrive on the command's stdin; its stdout becomes the post-processed bytes. **You are opting into running this command on every ingest and every refresh.**
+
+Manage routers:
+
+```bash
+membot router list                                 # table of configured routers
+membot router test https://docs.google.com/.../   # show which router would match + extracted vars (no spawn)
+membot router test https://docs.google.com/.../ --exec   # also run the spawn + post-process and print stdout
+membot router remove google-docs                  # delete a router (warns if stored rows still reference it)
+```
+
+Built-in plugins (github, linear, apple-notes) always win on overlapping URL patterns — custom routers only fire when no built-in claims the URL. Routers live under `downloaders.custom_routers` in `~/.membot/config.json`; editing the file by hand works too.
+
+Custom routers are the answer for Google Docs/Sheets/Slides today (see [issue #80](https://github.com/evantahler/membot/issues/80) for why a native plugin isn't): bring your own fetch command — `mcpx`, `gws`, `gh`, or whatever already has auth — and let membot handle the chunking, embedding, versioning, and refresh.
+
 ## Quick start
 
 ```bash
@@ -131,6 +177,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot logs`                   | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`) — `--follow`, `--lines <N>`, `--raw` |
 | `membot reindex`                | Rebuild the FTS keyword index over current chunks                                 |
 | `membot config <subcommand>`    | Get / set values in `~/.membot/config.json` (`get`, `set`, `unset`, `list`, `path`) |
+| `membot router <subcommand>`    | Manage user-defined URL routers (`add`, `list`, `remove`, `test`) — see [Custom URL routers](#custom-url-routers) |
 | `membot login`                  | Print one-time auth setup instructions (today: `membot config set` commands for GitHub / Linear) |
 | `membot skill install`          | Install the Claude Code / Cursor agent skill                                      |
 

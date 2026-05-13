@@ -33,7 +33,7 @@ export async function fetchRemote(
 	config: MembotConfig,
 	options: FetchOptions = {},
 ): Promise<FetchedRemote> {
-	const plugin = pickPlugin(url, options.downloaderName);
+	const plugin = pickPlugin(url, config, options.downloaderName);
 	const pctx: PluginCtx = { logger, config, onProgress: options.onProgress };
 	const fetcher = await plugin.openBatchFetcher(pctx);
 	try {
@@ -52,7 +52,7 @@ export async function fetchRemote(
 	}
 }
 
-function pickPlugin(url: string, override?: string): SourcePlugin {
+function pickPlugin(url: string, config: MembotConfig, override?: string): SourcePlugin {
 	if (override) {
 		const named = findSourceByName(override.toLowerCase());
 		if (!named) {
@@ -67,12 +67,12 @@ function pickPlugin(url: string, override?: string): SourcePlugin {
 		}
 		return named;
 	}
-	const matched = findSourceForInput(url);
+	const matched = findSourceForInput(url, config);
 	if (!matched) {
 		throw new HelpfulError({
 			kind: "input_error",
 			message: `no source plugin matches: ${url}`,
-			hint: "Pass an http(s):// URL for a supported service (Google Docs/Sheets/Slides, GitHub, Linear) or a recognised scheme like `apple-notes:`.",
+			hint: "Pass an http(s):// URL for a supported service (GitHub, Linear), a recognised scheme like `apple-notes:`, or register a custom URL router via `membot router add`.",
 		});
 	}
 	return matched;

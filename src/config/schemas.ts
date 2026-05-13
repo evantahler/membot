@@ -5,6 +5,7 @@ import { DEFAULTS, defaultMembotHome, EMBEDDING_DIMENSION, EMBEDDING_MODEL } fro
 // `buildDownloadersConfigSchema()` can see every plugin's slice.
 import "../ingest/sources/index.ts";
 import { buildDownloadersConfigSchema } from "../ingest/sources/registry.ts";
+import { CustomRoutersSchema } from "./router-validation.ts";
 
 /**
  * Compute the default ingest worker count: one fewer than the available CPUs
@@ -112,7 +113,9 @@ export const SearchConfigSchema = z.object({
  * the plugin file declares its slice and the schema appears here
  * automatically. See `buildDownloadersConfigSchema` for the assembly.
  */
-export const DownloadersConfigSchema = buildDownloadersConfigSchema();
+export const DownloadersConfigSchema = buildDownloadersConfigSchema({
+	custom_routers: CustomRoutersSchema,
+});
 
 export const DbLockRetryConfigSchema = z.object({
 	max_attempts: z.number().int().positive().default(30),

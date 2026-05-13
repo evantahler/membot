@@ -64,11 +64,22 @@ exact commands. If a fetch fails with an auth error, the
 `HelpfulError` will tell you exactly which command to run. Fetches
 are non-interactive — they never prompt or open a browser.
 
-**Google Docs / Sheets / Slides are NOT a native source.** Don't
-suggest `membot add https://docs.google.com/...` — it will fail with
-a `HelpfulError`. Instead: in Google Drive, `File → Download →
-Microsoft Word (.docx)` (or `.xlsx` / `.pdf`) and `membot add
-./that-file.docx`.
+**Google Docs / Sheets / Slides have no built-in plugin.** Two options:
+
+1. **One-off**: in Google Drive, `File → Download → Microsoft Word (.docx)` (or `.xlsx` / `.pdf`) and `membot add ./that-file.docx`.
+2. **Repeated use**: register a **custom router** that delegates the fetch to whatever already has Google auth on the user's machine. If `mcpx` is set up:
+
+   ```bash
+   membot router add \
+     --name google-docs \
+     --url-pattern '^https://docs\.google\.com/document/d/(?<doc_id>[a-zA-Z0-9_-]+)' \
+     --command mcpx \
+     --args 'exec,GoogleDocs_GetDocumentAsDocmd,--doc-id,{doc_id}' \
+     --mime-type text/markdown \
+     --post-process docmd
+   ```
+
+   After that, `membot add https://docs.google.com/document/d/<id>/edit` works as normal, and `membot refresh` re-runs the same command. See [Custom URL routers](#custom-url-routers) below for the full mechanism.
 
 **Apple Notes** (`apple-notes:` scheme, macOS-only) reads `NoteStore.sqlite` directly via `macos-ts` — no AppleScript, no browser, just a fast local SQLite read. The scope syntax is `apple-notes:[<account-glob>[/<folder-glob>]]` and supports the same `*`/`**`/`?` wildcards as filesystem globs:
 
@@ -86,6 +97,34 @@ Each note's body is rendered to markdown by `macos-ts` (no LLM round-trip). Note
 Requires **Full Disk Access** for your terminal/editor in System Settings → Privacy & Security → Full Disk Access. The error message names the exact pane to open.
 
 Pass `--sync` to reconcile deletions: after ingest, any current row inside the scope whose underlying note no longer exists in Notes.app is tombstoned. Without `--sync`, deletes are not detected.
+
+### Custom URL routers
+
+For URLs no built-in plugin claims, the user can register a **custom router** that dispatches the fetch to an external shell command. This is the supported way to ingest Google Docs / Sheets / Slides (and anything else whose auth lives outside membot — `mcpx`, `gws`, `gcloud`, `gh`, a private script, …). One-time setup, then `membot add <url>` works as normal; refresh replays the same command deterministically.
+
+```bash
+# Google Docs via mcpx (assuming the user has mcpx configured with a Google MCP server)
+membot router add \
+  --name google-docs \
+  --url-pattern '^https://docs\.google\.com/document/d/(?<doc_id>[a-zA-Z0-9_-]+)' \
+  --command mcpx \
+  --args 'exec,GoogleDocs_GetDocumentAsDocmd,--doc-id,{doc_id}' \
+  --mime-type text/markdown \
+  --post-process docmd
+
+membot router list                                # show configured routers
+membot router test <url>                          # show which router matches + extracted vars (no spawn)
+membot router test <url> --exec                   # also run the command + post-process and print stdout
+membot router remove <name>                       # delete a router
+```
+
+Rules of thumb:
+- `--url-pattern` is a JS regex. Named groups `(?<name>...)` become `{name}` substitution variables; `{url}` substitutes the full URL.
+- `--command` + `--args` form an argv array (no shell, no interpolation). The user-supplied id can't escape its argv slot.
+- `--mime-type` declares what the command's stdout is; it flows through the normal converter pipeline.
+- `--post-process` is one of `passthrough` (default), `docmd` (for Google's docmd format — light cleanup), `html-to-markdown` (Turndown). For anything else, pass `--post-process-command <cmd>` + `--post-process-args <csv>` to pipe the bytes through any external script (`pandoc`, `jq`, …).
+- Built-in plugins always win on overlapping patterns. Custom routers only fire when no built-in claims the URL.
+- Suggest these to the user; don't unilaterally run `membot router add` for them — it changes future ingest behaviour.
 
 Each entry becomes a new version under its own `logical_path`. PDFs/DOCX/HTML are converted to markdown; images get vision captions; original bytes are kept and reachable via `membot read --bytes` — except for sources that exceed `blobs.max_size_bytes` (default 25 MB) or whose mime matches `blobs.skip_mime_types` (default `video/*`, `audio/*`). The metadata row is still inserted (so refresh and dedupe still work) but `read --bytes` will fail with a hint pointing at the config knob; raise the limit and re-ingest to capture the bytes.
 
@@ -184,6 +223,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 | `membot logs`                         | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`); `--follow`, `--lines <N>`, `--raw` for JSON |
 | `membot reindex`                      | Rebuild the FTS keyword index over current chunks                              |
 | `membot config <subcommand>`          | Host-side config management (`get` / `set` / `unset` / `list` / `path`). **Don't run** — this is for the human operator, not for agents |
+| `membot router <subcommand>`          | Manage user-defined URL routers (`add` / `list` / `remove` / `test`). Useful when the user wants `membot add <url>` to delegate to an external CLI for fetch (e.g. mcpx for Google Docs). **Suggest, don't run unilaterally** — modifying routers changes future ingest behaviour |
 | `membot login`                        | Print `membot config set` instructions for API-key services (GitHub, Linear). **Don't run** — this is for the human operator |
 
 ## Output formats
@@ -196,7 +236,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 ## Troubleshooting
 
 - **"ingest failed: unsupported mime"** → Add a converter or pass `--bytes` to keep the original; LLM-fallback only runs when `ANTHROPIC_API_KEY` is set.
-- **Google Docs/Sheets/Slides URL was rejected** → membot doesn't ingest Google natively. Export from Drive as `.docx`/`.xlsx`/`.pdf` and `membot add ./that-file`.
+- **Google Docs/Sheets/Slides URL was rejected** → membot has no built-in Google plugin. Either export from Drive as `.docx`/`.xlsx`/`.pdf` and `membot add ./that-file`, or register a custom router that delegates to a tool that already has Google auth (e.g. `mcpx`) — see the "Custom URL routers" section above.
 - **"refresh failed: auth"** for a GitHub URL → set the PAT via `membot config set downloaders.github.api_key <PAT>` (or export `GITHUB_TOKEN`).
 - **"refresh failed: auth"** for a Linear URL → set the personal API key via `membot config set downloaders.linear.api_key <KEY>` (create one at `linear.app/settings/api`).
 - **"Cannot read the Apple Notes database — Full Disk Access required"** → System Settings → Privacy & Security → Full Disk Access → toggle on for your terminal/editor (Terminal, iTerm, Warp, Cursor, VSCode, Conductor). Restart the app and re-run. Open the pane directly: `open 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'`.

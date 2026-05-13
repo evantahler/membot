@@ -12,6 +12,10 @@ import "./github-repo.ts";
 import "./linear.ts";
 import "./linear-team.ts";
 import "./apple-notes.ts";
+// Registered LAST so built-in plugins always win on overlapping URL
+// patterns. Dynamic-match plugins only run after every static URL
+// matcher fails — see `findSourceForInput` in registry.ts.
+import "./custom-command.ts";
 
 export * from "./registry.ts";
 export * from "./types.ts";
