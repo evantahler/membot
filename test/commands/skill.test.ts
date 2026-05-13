@@ -78,7 +78,7 @@ describe("skill install", () => {
 
 		const r = await runCli(["--json", "skill", "install", "--claude", "--project"], cwd);
 		expect(r.exit).not.toBe(0);
-		const parsed = JSON.parse(r.stderr) as {
+		const parsed = JSON.parse(r.stdout) as {
 			ok: false;
 			error: { kind: string; hint: string; message: string };
 		};
@@ -103,7 +103,7 @@ describe("skill install", () => {
 		const cwd = mkdtempSync(join(root, "no-target-"));
 		const r = await runCli(["--json", "skill", "install"], cwd);
 		expect(r.exit).not.toBe(0);
-		const parsed = JSON.parse(r.stderr) as {
+		const parsed = JSON.parse(r.stdout) as {
 			ok: false;
 			error: { kind: string; hint: string };
 		};

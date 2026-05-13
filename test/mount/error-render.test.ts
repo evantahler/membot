@@ -21,6 +21,33 @@ function captureStderr(fn: () => void): string {
 	return buf.join("");
 }
 
+/** Capture both process.stdout and process.stderr writes during fn(). */
+function captureStreams(fn: () => void): { stdout: string; stderr: string } {
+	const outBuf: string[] = [];
+	const errBuf: string[] = [];
+	const origOut = process.stdout.write.bind(process.stdout);
+	const origErr = process.stderr.write.bind(process.stderr);
+	// biome-ignore lint/suspicious/noExplicitAny: minimal override for test capture
+	(process.stdout as any).write = (chunk: string | Uint8Array): boolean => {
+		outBuf.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+		return true;
+	};
+	// biome-ignore lint/suspicious/noExplicitAny: minimal override for test capture
+	(process.stderr as any).write = (chunk: string | Uint8Array): boolean => {
+		errBuf.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+		return true;
+	};
+	try {
+		fn();
+	} finally {
+		// biome-ignore lint/suspicious/noExplicitAny: restore
+		(process.stdout as any).write = origOut;
+		// biome-ignore lint/suspicious/noExplicitAny: restore
+		(process.stderr as any).write = origErr;
+	}
+	return { stdout: outBuf.join(""), stderr: errBuf.join("") };
+}
+
 describe("renderCliError", () => {
 	afterEach(() => {
 		setMode(detectMode({}));
@@ -53,16 +80,17 @@ describe("renderCliError", () => {
 		expect(out).toContain("hint: Try membot ls.");
 	});
 
-	test("emits structured JSON to stderr in --json mode (no ANSI, no human framing)", () => {
+	test("emits structured JSON to stdout in --json mode (no ANSI, no human framing, stderr stays clean)", () => {
 		setMode(detectMode({ json: true }));
 		const err = new HelpfulError({
 			kind: "input_error",
 			message: "bad input",
 			hint: "Pass --help.",
 		});
-		const out = captureStderr(() => renderCliError(err));
-		expect(out).not.toContain("\x1b[");
-		const parsed = JSON.parse(out.trim());
+		const { stdout, stderr } = captureStreams(() => renderCliError(err));
+		expect(stdout).not.toContain("\x1b[");
+		expect(stderr).toBe("");
+		const parsed = JSON.parse(stdout.trim());
 		expect(parsed.ok).toBe(false);
 		expect(parsed.error).toMatchObject({
 			kind: "input_error",
