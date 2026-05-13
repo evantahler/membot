@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { MembotClient } from "../src/client.ts";
 import { HelpfulError } from "../src/errors.ts";
 import { setEmbeddingCacheDir } from "../src/ingest/embedder.ts";
+import { OPERATIONS } from "../src/operations/index.ts";
 
 let tmp: string;
 let client: MembotClient;
@@ -83,6 +84,13 @@ describe("MembotClient", () => {
 		} catch (err) {
 			expect(err).toBeInstanceOf(HelpfulError);
 			expect((err as HelpfulError).kind).toBe("input_error");
+		}
+	});
+
+	test("every Operation in OPERATIONS has a same-named method on MembotClient", () => {
+		for (const op of OPERATIONS) {
+			const method = op.name.replace(/^membot_/, "");
+			expect(typeof (MembotClient.prototype as unknown as Record<string, unknown>)[method]).toBe("function");
 		}
 	});
 
