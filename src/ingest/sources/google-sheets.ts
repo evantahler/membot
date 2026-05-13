@@ -28,7 +28,7 @@ const googleSheetsPlugin = defineSourcePlugin<Record<string, unknown>, GoogleShe
 		matches: (url) => url.hostname === "docs.google.com" && SHEET_PATH.test(url.pathname),
 	},
 	logins: [googleLoginEntry()],
-	async enumerate(source) {
+	async enumerate(source, _ctx) {
 		const url = new URL(source);
 		const sheetId = extractSheetId(url);
 		return [

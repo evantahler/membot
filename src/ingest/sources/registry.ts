@@ -48,6 +48,25 @@ export function registerSource<C extends Record<string, unknown>, A extends Reco
 			}
 		}
 	}
+	// Two plugins are allowed to share a `config.key` (e.g. linear + linear-team
+	// both read from `downloaders.linear`), but only if they hand the same
+	// schema reference — otherwise `buildDownloadersConfigSchema` would silently
+	// last-write-wins on the slice. Catch the mistake at registration time.
+	if (plugin.config) {
+		for (const existing of REGISTRY) {
+			if (
+				existing.config &&
+				existing.config.key === plugin.config.key &&
+				existing.config.schema !== plugin.config.schema
+			) {
+				throw new HelpfulError({
+					kind: "internal_error",
+					message: `config key "${plugin.config.key}" claimed by both "${existing.name}" and "${plugin.name}" with different schemas`,
+					hint: "When two plugins share a config slice, both must import the same schema reference. Lift the schema into a shared module.",
+				});
+			}
+		}
+	}
 	REGISTERED_NAMES.add(plugin.name);
 	REGISTRY.push(plugin as SourcePlugin);
 }

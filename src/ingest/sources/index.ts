@@ -12,7 +12,9 @@ import "./google-docs.ts";
 import "./google-sheets.ts";
 import "./google-slides.ts";
 import "./github.ts";
+import "./github-repo.ts";
 import "./linear.ts";
+import "./linear-team.ts";
 import "./apple-notes.ts";
 import "./generic-web.ts";
 

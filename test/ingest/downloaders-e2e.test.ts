@@ -61,7 +61,7 @@ describe.if(SHOULD_RUN)("downloaders end-to-end (live network, chromium)", () =>
 		const plugin = findSourceByName("generic-web");
 		if (!plugin) throw new Error("generic-web plugin not registered");
 		const url = "https://www.evantahler.com";
-		const entries = await plugin.enumerate(url);
+		const entries = await plugin.enumerate(url, { config, logger });
 		const entry = entries[0];
 		if (!entry) throw new Error("generic-web produced no entry");
 		const ctx: PluginCtx = { pool, logger, config };
@@ -92,7 +92,7 @@ describe.if(SHOULD_RUN)("downloaders end-to-end (live network, chromium)", () =>
 		const plugin = findSourceByName("github");
 		if (!plugin) throw new Error("github plugin not registered");
 		const url = "https://github.com/evantahler/membot/issues/36";
-		const entries = await plugin.enumerate(url);
+		const entries = await plugin.enumerate(url, { config, logger });
 		const entry = entries[0];
 		if (!entry) throw new Error("github produced no entry");
 		const ctx: PluginCtx = { pool, logger, config };
