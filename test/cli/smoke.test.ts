@@ -87,10 +87,13 @@ describe("CLI smoke (spawns the real binary entrypoint)", () => {
 		expect(readParsed.content).toContain("Smoke Test");
 	}, 180_000);
 
-	test("missing path produces a HelpfulError JSON to stderr with non-zero exit", async () => {
+	test("missing path produces a HelpfulError JSON to stdout with non-zero exit", async () => {
 		const r = await runCli(["read", "does/not/exist.md"]);
 		expect(r.exit).not.toBe(0);
-		const parsed = JSON.parse(r.stderr) as {
+		// In --json mode all machine-readable output (success AND error) goes to
+		// stdout; stderr is reserved for unstructured noise (bun startup chatter,
+		// embedder warmup, dotenv warnings, etc.) and is not parsed here.
+		const parsed = JSON.parse(r.stdout) as {
 			ok: false;
 			error: { kind: string; hint: string; message: string };
 		};

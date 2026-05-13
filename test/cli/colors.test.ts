@@ -76,11 +76,11 @@ describe("CLI ANSI emission (real spawn, FORCE_COLOR=1)", () => {
 		expect(r.stderr).toContain("hint:");
 	});
 
-	test("error path under --json emits clean JSON to stderr (no ANSI)", async () => {
+	test("error path under --json emits clean JSON to stdout (no ANSI)", async () => {
 		const r = await run(["--json", "read", "does/not/exist.md"]);
 		expect(r.exit).not.toBe(0);
-		expect(r.stderr).not.toContain("\x1b[");
-		const parsed = JSON.parse(r.stderr);
+		expect(r.stdout).not.toContain("\x1b[");
+		const parsed = JSON.parse(r.stdout);
 		expect(parsed.ok).toBe(false);
 		expect(parsed.error.kind).toBe("not_found");
 	});
