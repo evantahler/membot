@@ -4,7 +4,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import picomatch from "picomatch";
 import { asHelpful, HelpfulError } from "../errors.ts";
 import { findSourceByName, findSourceForInput, listSources } from "./sources/registry.ts";
-import type { Entry, SourcePlugin } from "./sources/types.ts";
+import type { Entry, EnumerateCtx, SourcePlugin } from "./sources/types.ts";
 
 /**
  * Expand a leading `~` or `~/` to the user's home directory. The shell does
@@ -52,6 +52,13 @@ export interface ResolveOptions {
 	 * sources (apple-notes:) or local files.
 	 */
 	pluginOverride?: string;
+	/**
+	 * Context handed to a plugin's `enumerate` when one matches. Required
+	 * whenever the source could resolve to a plugin (URL or scheme prefix);
+	 * unused for local files / inline literals. Production callers pass
+	 * `{ config: ctx.config, logger: ctx.logger }` from `AppContext`.
+	 */
+	enumerateCtx?: EnumerateCtx;
 }
 
 const DEFAULT_EXCLUDES = ["**/node_modules/**", "**/.git/**", "**/.DS_Store", "**/dist/**", "**/.cache/**"];
@@ -123,11 +130,11 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 				hint: `Pick one of: ${available}.`,
 			});
 		}
-		return await resolveViaPlugin(named, source);
+		return await resolveViaPlugin(named, source, requireEnumerateCtx(options));
 	}
 	const plugin = findSourceForInput(source);
 	if (plugin) {
-		return await resolveViaPlugin(plugin, source);
+		return await resolveViaPlugin(plugin, source, requireEnumerateCtx(options));
 	}
 
 	source = expandHome(source);
@@ -225,9 +232,25 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
  * resources (sqlite reader, browser cookies) it needs to open and close
  * during enumeration.
  */
-async function resolveViaPlugin(plugin: SourcePlugin, source: string): Promise<ResolvedSource> {
-	const entries = await plugin.enumerate(source);
+async function resolveViaPlugin(plugin: SourcePlugin, source: string, ctx: EnumerateCtx): Promise<ResolvedSource> {
+	const entries = await plugin.enumerate(source, ctx);
 	return { kind: "plugin", plugin, raw: source, entries };
+}
+
+/**
+ * Pluck `enumerateCtx` from options, raising a programmer-error when a
+ * caller forgot to pass it. Caught early so a bulk-import plugin doesn't
+ * blow up mid-pagination with a confusing "config is undefined" error.
+ */
+function requireEnumerateCtx(options: ResolveOptions): EnumerateCtx {
+	if (!options.enumerateCtx) {
+		throw new HelpfulError({
+			kind: "internal_error",
+			message: "resolveSource: plugin source needs an enumerateCtx but none was provided",
+			hint: "Pass `{ enumerateCtx: { config: ctx.config, logger: ctx.logger } }` from the calling operation.",
+		});
+	}
+	return options.enumerateCtx;
 }
 
 /** Crude glob detector — matches what picomatch treats as a pattern. */

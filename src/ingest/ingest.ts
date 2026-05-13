@@ -132,6 +132,7 @@ export async function ingest(input: IngestInput, ctx: AppContext): Promise<Inges
 		include: input.include,
 		exclude: input.exclude,
 		followSymlinks: input.follow_symlinks ?? true,
+		enumerateCtx: { config: ctx.config, logger: ctx.logger },
 	});
 	const total = countResolvedEntries(resolved);
 	ctx.progress.start(total, "ingest");

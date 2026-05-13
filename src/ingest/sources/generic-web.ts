@@ -30,7 +30,7 @@ const genericWebPlugin = defineSourcePlugin<Record<string, unknown>, GenericWebA
 	description: "Catch-all for any other http(s) URL — HEAD/GET, render HTML via headless browser, else stream bytes.",
 	examples: ["https://example.com/some-page", "https://example.com/some-file.pdf"],
 	match: { kind: "url", matches: (url) => url.protocol === "http:" || url.protocol === "https:" },
-	async enumerate(source) {
+	async enumerate(source, _ctx) {
 		const url = new URL(source);
 		return [
 			{

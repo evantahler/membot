@@ -81,7 +81,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 			.boolean()
 			.optional()
 			.describe(
-				"For `apple-notes:` sources: after ingest, tombstone any current rows under the same scope whose underlying note has been deleted in Notes.app. No-op for other source kinds.",
+				"For scheme-prefix sources that support it (apple-notes, linear-team, github-repo): after ingest, tombstone any current rows under the same scope whose underlying item has been deleted at the source. No-op for URL sources and local files.",
 			),
 	}),
 	outputSchema: z.object({
@@ -149,6 +149,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 					exclude: rest.exclude,
 					followSymlinks,
 					pluginOverride: rest.downloader,
+					enumerateCtx: { config: ctx.config, logger: ctx.logger },
 				});
 				outcomes.push({ source, resolved });
 			} catch (err) {
@@ -233,7 +234,10 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 					aggregated.failed += r.failed;
 
 					if (shouldSync && outcome.resolved.kind === "plugin" && outcome.resolved.plugin.sync) {
-						const syncRes = await outcome.resolved.plugin.sync({ db: ctx.db, logger: ctx.logger }, outcome.source);
+						const syncRes = await outcome.resolved.plugin.sync(
+							{ db: ctx.db, config: ctx.config, logger: ctx.logger },
+							outcome.source,
+						);
 						tombstoned.push(...syncRes.tombstoned);
 					}
 				} catch (err) {

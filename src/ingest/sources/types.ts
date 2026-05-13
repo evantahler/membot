@@ -31,6 +31,18 @@ export interface PluginCtx {
 }
 
 /**
+ * Narrow context handed to `enumerate`. Enumeration runs in the resolve
+ * phase before a BrowserPool exists, so this is strictly `{ config, logger }`.
+ * Bulk-import scheme plugins (linear-team, github-repo) read API keys from
+ * `config.downloaders.<key>.api_key` to paginate listing endpoints; URL +
+ * filesystem plugins ignore the arg.
+ */
+export interface EnumerateCtx {
+	config: MembotConfig;
+	logger: typeof Logger;
+}
+
+/**
  * One unit of work the plugin asks the orchestrator to ingest. URL plugins
  * yield one Entry per source (the URL itself). Scheme plugins like
  * `apple-notes:` enumerate many entries per source — one per matched note.
@@ -76,11 +88,14 @@ export interface BatchFetcher<A extends Record<string, unknown> = Record<string,
 
 /**
  * Subset of the host AppContext that `sync` implementations need: a DB
- * handle and a logger. Kept narrow so plugins can be unit-tested against
- * a synthetic context without needing a full AppContext.
+ * handle, the loaded config (so plugins that re-enumerate the source —
+ * linear-team, github-repo — can read their API key), and a logger.
+ * Kept narrow so plugins can be unit-tested against a synthetic context
+ * without needing a full AppContext.
  */
 export interface SyncCtx {
 	db: import("../../db/connection.ts").DbConnection;
+	config: MembotConfig;
 	logger: typeof Logger;
 }
 
@@ -200,12 +215,14 @@ export interface SourcePlugin<
 	 * plugins typically return a single entry whose `source` is the URL.
 	 * Scheme plugins like `apple-notes:` enumerate many notes per call.
 	 *
-	 * Runs in the resolve phase before the host builds a full PluginCtx,
-	 * so this method has no access to the browser pool or runtime config.
-	 * Plugins that need network/credentials for enumeration should defer
-	 * that work into `openBatchFetcher.fetch` instead.
+	 * Runs in the resolve phase before the host builds a full PluginCtx
+	 * (no browser pool), but receives a narrow `EnumerateCtx` carrying
+	 * `config` + `logger` so bulk-import schemes can hit listing APIs and
+	 * paginate. Plugins that don't need network for enumeration ignore the
+	 * arg; plugins that need a session/cookies still defer that into
+	 * `openBatchFetcher.fetch`.
 	 */
-	enumerate: (source: string) => Promise<Entry<A>[]>;
+	enumerate: (source: string, ctx: EnumerateCtx) => Promise<Entry<A>[]>;
 
 	/**
 	 * Open a batch fetcher. The orchestrator calls this once per source,

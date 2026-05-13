@@ -28,7 +28,7 @@ const googleDocsPlugin = defineSourcePlugin<Record<string, unknown>, GoogleDocsA
 		matches: (url) => url.hostname === "docs.google.com" && DOC_PATH.test(url.pathname),
 	},
 	logins: [googleLoginEntry()],
-	async enumerate(source) {
+	async enumerate(source, _ctx) {
 		const url = new URL(source);
 		const documentId = extractDocId(url);
 		return [

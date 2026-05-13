@@ -68,7 +68,9 @@ The downloader registry maps URLs to a tactic:
 | google-sheets | `docs.google.com/spreadsheets/d/<id>` | `?format=html` export → `convertHtml` | Same |
 | google-slides | `docs.google.com/presentation/d/<id>` | `/export/pdf` → `convertPdf` | Same |
 | github | `github.com/<owner>/<repo>/(issues\|pull)/<n>` | `api.github.com/repos/.../issues/<n>` + `/comments` → render JSON to markdown | `downloaders.github.api_key` PAT (or `GITHUB_TOKEN`); public repos work unauth at 60 req/hr |
+| github-repo | scheme `github-repo:<owner>/<repo>[:<selector>]` | paginated `/repos/<o>/<r>/issues?state=…` → one Entry per issue/PR, fetched via the same path as `github` | Shares `downloaders.github.api_key` (or `GITHUB_TOKEN`) |
 | linear | `linear.app/<workspace>/issue/<KEY>` and `…/project/<slug>` | `api.linear.app/graphql` (Issue / Project queries) → render JSON to markdown | `downloaders.linear.api_key` personal API key |
+| linear-team | scheme `linear-team:<TEAM_KEY>` | paginated GraphQL `teams` → `projects` → `issues` → one Entry per project/issue, fetched via the same path as `linear` | Shares `downloaders.linear.api_key` |
 | generic-web | catch-all for any http(s) URL | Plain GET (mime-dispatched) or Playwright print-to-PDF for `text/html` | Cookies from the persistent profile if present |
 
 Google fetches go through Node's built-in `fetch()` with a `Cookie` header read from the chromium profile — Playwright's `APIRequestContext` has a cookie-parser bug on Google's same-origin redirects. GitHub + Linear are pure HTTP; they don't open chromium at all. Only Google + generic-web need the browser pool.

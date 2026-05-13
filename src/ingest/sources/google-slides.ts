@@ -25,7 +25,7 @@ const googleSlidesPlugin = defineSourcePlugin<Record<string, unknown>, GoogleSli
 		matches: (url) => url.hostname === "docs.google.com" && SLIDE_PATH.test(url.pathname),
 	},
 	logins: [googleLoginEntry()],
-	async enumerate(source) {
+	async enumerate(source, _ctx) {
 		const url = new URL(source);
 		const slidesId = extractSlidesId(url);
 		return [

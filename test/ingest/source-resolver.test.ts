@@ -2,8 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { MembotConfigSchema } from "../../src/config/schemas.ts";
 import { expandUserPattern, isGlob, resolveSource } from "../../src/ingest/source-resolver.ts";
 import "../../src/ingest/sources/index.ts";
+import { logger } from "../../src/output/logger.ts";
+
+const enumerateCtx = { config: MembotConfigSchema.parse({}), logger };
 
 describe("resolveSource", () => {
 	let tmp: string;
@@ -28,7 +32,7 @@ describe("resolveSource", () => {
 	});
 
 	test("URL source resolves via the generic-web plugin into a single entry", async () => {
-		const r = await resolveSource("https://example.com/x");
+		const r = await resolveSource("https://example.com/x", { enumerateCtx });
 		expect(r.kind).toBe("plugin");
 		if (r.kind === "plugin") {
 			expect(r.plugin.name).toBe("generic-web");

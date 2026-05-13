@@ -55,7 +55,7 @@ export async function fetchRemote(
 	const pctx: PluginCtx = { pool, logger, config, onProgress: options.onProgress };
 	const fetcher = await plugin.openBatchFetcher(pctx);
 	try {
-		const entries = await plugin.enumerate(url);
+		const entries = await plugin.enumerate(url, { config, logger });
 		const entry = entries[0];
 		if (!entry) {
 			throw new HelpfulError({
