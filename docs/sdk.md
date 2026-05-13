@@ -68,7 +68,7 @@ Each method maps 1:1 to a CLI verb and an MCP tool. Input and output shapes are 
 | `diff(input)` | `membot diff` | `membot_diff` | Unified diff between two versions. |
 | `write(input)` | `membot write` | `membot_write` | Write inline agent-authored markdown as a new version. |
 | `move(input)` | `membot mv` | `membot_move` | Rename a logical_path. |
-| `remove(input)` | `membot rm` | `membot_delete` | Tombstone one or more logical_paths (literals or globs). |
+| `remove(input)` | `membot rm` | `membot_remove` | Tombstone one or more logical_paths (literals or globs). |
 | `refresh(input?)` | `membot refresh` | `membot_refresh` | Re-fetch a source (or all due sources when `logical_path` is omitted). |
 | `prune(input)` | `membot prune` | `membot_prune` | Drop non-current versions older than the cutoff and GC orphan blobs. |
 

@@ -43,7 +43,7 @@ const appleNotesPlugin = defineSourcePlugin<Record<string, unknown>, AppleNotesA
 		"Requires Full Disk Access for your terminal in System Settings → Privacy & Security. Password-protected notes and Recently Deleted are skipped. Pass `--sync` to tombstone rows whose notes have been deleted.",
 	match: { kind: "scheme", prefix: APPLE_NOTES_PREFIX },
 	platform: ["darwin"],
-	async enumerate(source) {
+	async enumerate(source, _ctx) {
 		const scope = parseAppleNotesScope(source);
 		const reader = openAppleNotes();
 		try {

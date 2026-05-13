@@ -28,6 +28,18 @@ export interface PluginCtx {
 }
 
 /**
+ * Narrow context handed to `enumerate`. Enumeration runs in the resolve
+ * phase before a BrowserPool exists, so this is strictly `{ config, logger }`.
+ * Bulk-import scheme plugins (linear-team, github-repo) read API keys from
+ * `config.downloaders.<key>.api_key` to paginate listing endpoints; URL +
+ * filesystem plugins ignore the arg.
+ */
+export interface EnumerateCtx {
+	config: MembotConfig;
+	logger: typeof Logger;
+}
+
+/**
  * One unit of work the plugin asks the orchestrator to ingest. URL plugins
  * yield one Entry per source (the URL itself). Scheme plugins like
  * `apple-notes:` enumerate many entries per source — one per matched note.
@@ -73,11 +85,14 @@ export interface BatchFetcher<A extends Record<string, unknown> = Record<string,
 
 /**
  * Subset of the host AppContext that `sync` implementations need: a DB
- * handle and a logger. Kept narrow so plugins can be unit-tested against
- * a synthetic context without needing a full AppContext.
+ * handle, the loaded config (so plugins that re-enumerate the source —
+ * linear-team, github-repo — can read their API key), and a logger.
+ * Kept narrow so plugins can be unit-tested against a synthetic context
+ * without needing a full AppContext.
  */
 export interface SyncCtx {
 	db: import("../../db/connection.ts").DbConnection;
+	config: MembotConfig;
 	logger: typeof Logger;
 }
 
@@ -149,16 +164,15 @@ export interface SourcePlugin<
 	/**
 	 * Login UI entries the plugin needs the user to complete before its
 	 * fetches will succeed. `membot login` collects these across every
-	 * plugin and dedupes by URL — the three Google plugins share one
-	 * `Google` button, etc.
+	 * plugin and dedupes by URL — e.g. `github` and `github-repo` share
+	 * one GitHub api_key entry.
 	 */
 	logins?: LoginEntry[];
 
 	/**
 	 * Per-plugin slice of `config.downloaders`. Required for plugins with
-	 * runtime settings (api_key); omit for plugins whose credentials live
-	 * outside membot (e.g. the Google plugins rely on the bundled `gws`
-	 * CLI, which keeps tokens in its own config dir).
+	 * runtime settings (api_key); omit for plugins with no auth (e.g.
+	 * apple-notes reads NoteStore.sqlite directly).
 	 */
 	config?: PluginConfigSlice<C>;
 
@@ -175,11 +189,13 @@ export interface SourcePlugin<
 	 * Scheme plugins like `apple-notes:` enumerate many notes per call.
 	 *
 	 * Runs in the resolve phase before the host builds a full PluginCtx,
-	 * so this method has no access to runtime config. Plugins that need
-	 * network/credentials for enumeration should defer that work into
-	 * `openBatchFetcher.fetch` instead.
+	 * but receives a narrow `EnumerateCtx` carrying `config` + `logger`
+	 * so bulk-import schemes (linear-team, github-repo) can hit listing
+	 * APIs and paginate. Plugins that don't need network for enumeration
+	 * ignore the arg; plugins that need richer context defer that work
+	 * into `openBatchFetcher.fetch` instead.
 	 */
-	enumerate: (source: string) => Promise<Entry<A>[]>;
+	enumerate: (source: string, ctx: EnumerateCtx) => Promise<Entry<A>[]>;
 
 	/**
 	 * Open a batch fetcher. The orchestrator calls this once per source,

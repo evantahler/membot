@@ -130,8 +130,8 @@ async function refreshLocal(
 /**
  * Remote refresh: replay the persisted plugin against the original
  * source. Each plugin's `fetch` is deterministic (no LLM, no agent loop),
- * so a row with `downloader='google-docs'` always re-runs the Google
- * Docs plugin; rows from older membot versions whose `downloader` is
+ * so a row with `downloader='github'` always re-runs the GitHub
+ * plugin; rows from older membot versions whose `downloader` is
  * NULL fall back to URL-based dispatch.
  *
  * Apple-notes-shaped rows (markdown directly, no blob) work through the

@@ -52,7 +52,9 @@ The set of URL patterns and scheme prefixes `membot add` accepts is driven by a 
 | Plugin | Auth | Examples | Notes |
 | --- | --- | --- | --- |
 | **github**<br>GitHub issues & PRs — uses the GitHub REST API (with optional token for private repos). | `api_key` — `membot config set downloaders.github.api_key <PAT>` | `https://github.com/<owner>/<repo>/issues/<n>`<br>`https://github.com/<owner>/<repo>/pull/<n>` | Public repos work unauthenticated at 60 req/hr. For private repos or higher limits, configure a token: `membot config set downloaders.github.api_key <PAT>` or export `GITHUB_TOKEN`. |
+| **github-repo**<br>GitHub repository bulk import — open issues and PRs (selectable, optionally including closed) via the GitHub REST API. | `api_key` — `membot config set downloaders.github.api_key <PAT>` | `github-repo:facebook/react`<br>`github-repo:owner/repo:issues`<br>`github-repo:owner/repo:prs:all`<br>`github-repo:owner/repo:all` | Default selector pulls open issues + open PRs. Override with `:issues`, `:prs`, `:issues:all`, `:prs:all`, `:all`. Uses the same API key as the per-URL github plugin (`membot config set downloaders.github.api_key <PAT>` or `GITHUB_TOKEN`). Pass --sync to tombstone items no longer returned by the enumerate; with an open-only selector, closing an item will tombstone it — use `:all` selectors to keep closed items. |
 | **linear**<br>Linear issues & projects — uses the Linear GraphQL API with a personal access key. | `api_key` — `membot config set downloaders.linear.api_key <KEY>` | `https://linear.app/<workspace>/issue/<KEY>`<br>`https://linear.app/<workspace>/project/<slug>` | Requires a personal API key from https://linear.app/settings/api. Set it via `membot config set downloaders.linear.api_key <KEY>`. |
+| **linear-team**<br>Linear team bulk import — every project under a team plus every issue in those projects, via the Linear GraphQL API. | `api_key` — `membot config set downloaders.linear.api_key <KEY>` | `linear-team:ENG`<br>`linear-team:DESIGN` | Same API key as the per-URL linear plugin (`membot config set downloaders.linear.api_key <KEY>`). Team key is the uppercase prefix of issue IDs (e.g. ENG from ENG-42). Pass --sync to tombstone projects/issues that have been deleted from Linear. |
 | **apple-notes** _(darwin only)_<br>Apple Notes (macOS) — scope-driven import via NoteStore.sqlite. Markdown comes straight from the protobuf body. | none | `apple-notes:`<br>`apple-notes:Personal/Recipes`<br>`apple-notes:*/Archive`<br>`apple-notes:Personal/Recipes/**` | Requires Full Disk Access for your terminal in System Settings → Privacy & Security. Password-protected notes and Recently Deleted are skipped. Pass `--sync` to tombstone rows whose notes have been deleted. |
 
 <!-- /AUTO-GENERATED:sources -->
@@ -84,6 +86,8 @@ membot add ./drive-export.docx                   # for Google Docs/Sheets/Slides
 membot add https://github.com/o/r/issues/123     # GitHub issues + PRs (with comments)
 membot add https://linear.app/w/issue/ABC-12     # Linear issues + projects
 membot add ./local-copy.pdf                      # any other web content: download locally and add the file
+membot add "github-repo:cli/cli:issues"          # bulk-import every open issue in a repo
+membot add "linear-team:ENG"                     # bulk-import every project + issue in a Linear team
 membot add "apple-notes:Personal/Recipes"        # Apple Notes (macOS-only); see "Apple Notes" below
 membot add a.md b.md "docs/**/*.md"              # any number of files / globs in one call
 membot ls                                        # list current files

@@ -8,12 +8,9 @@ import { logger } from "../../src/output/logger.ts";
 const config = MembotConfigSchema.parse({});
 
 /**
- * Live network test for the public-API plugins (`github`). The Google
- * plugins now require the bundled `gws` CLI plus a logged-in user, so
- * we don't exercise them here — those paths are covered by the unit
- * tests in `gws.test.ts` against a stubbed binary.
- *
- * Skipped when `MEMBOT_SKIP_E2E=1` (CI escape hatch).
+ * Live network test for the public-API plugins (`github`). Google
+ * ingest isn't a first-class source anymore (see issue #80), so the
+ * Google plugins aren't exercised here. Skipped when `MEMBOT_SKIP_E2E=1`.
  */
 
 const SKIP_E2E = process.env.MEMBOT_SKIP_E2E === "1";
@@ -23,7 +20,7 @@ describe.if(!SKIP_E2E)("downloaders end-to-end (live network)", () => {
 		const plugin = findSourceByName("github");
 		if (!plugin) throw new Error("github plugin not registered");
 		const url = "https://github.com/evantahler/membot/issues/36";
-		const entries = await plugin.enumerate(url);
+		const entries = await plugin.enumerate(url, { config, logger });
 		const entry = entries[0];
 		if (!entry) throw new Error("github produced no entry");
 		const ctx: PluginCtx = { logger, config };

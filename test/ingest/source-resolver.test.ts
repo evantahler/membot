@@ -2,8 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { MembotConfigSchema } from "../../src/config/schemas.ts";
 import { expandUserPattern, isGlob, resolveSource } from "../../src/ingest/source-resolver.ts";
 import "../../src/ingest/sources/index.ts";
+import { logger } from "../../src/output/logger.ts";
+
+const enumerateCtx = { config: MembotConfigSchema.parse({}), logger };
 
 describe("resolveSource", () => {
 	let tmp: string;
@@ -28,7 +32,7 @@ describe("resolveSource", () => {
 	});
 
 	test("URL source claimed by a registered plugin resolves into a single entry", async () => {
-		const r = await resolveSource("https://github.com/evantahler/membot/issues/1");
+		const r = await resolveSource("https://github.com/evantahler/membot/issues/1", { enumerateCtx });
 		expect(r.kind).toBe("plugin");
 		if (r.kind === "plugin") {
 			expect(r.plugin.name).toBe("github");
@@ -37,7 +41,9 @@ describe("resolveSource", () => {
 	});
 
 	test("URL with no matching plugin throws a clear input_error", async () => {
-		expect(resolveSource("https://example.com/x")).rejects.toMatchObject({ kind: "input_error" });
+		expect(resolveSource("https://example.com/x", { enumerateCtx })).rejects.toMatchObject({
+			kind: "input_error",
+		});
 	});
 
 	test("single file source carries the absolute realpath", async () => {

@@ -8,7 +8,9 @@
  * non-darwin), so this list is safe to keep flat.
  */
 import "./github.ts";
+import "./github-repo.ts";
 import "./linear.ts";
+import "./linear-team.ts";
 import "./apple-notes.ts";
 
 export * from "./registry.ts";

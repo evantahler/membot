@@ -5,7 +5,7 @@ import { findSourceByName, findSourceForInput, listSources } from "../../src/ing
 describe("source plugin registry", () => {
 	test("listSources surfaces every registered plugin with non-empty descriptions and examples", () => {
 		const all = listSources();
-		expect(all.length).toBeGreaterThanOrEqual(2);
+		expect(all.length).toBeGreaterThanOrEqual(4);
 		for (const p of all) {
 			expect(p.name.length).toBeGreaterThan(0);
 			expect(p.description.length).toBeGreaterThan(20);
@@ -13,7 +13,7 @@ describe("source plugin registry", () => {
 			expect(p.examples.length).toBeGreaterThan(0);
 		}
 		const names = all.map((p) => p.name);
-		for (const expected of ["github", "linear"]) {
+		for (const expected of ["github", "github-repo", "linear", "linear-team"]) {
 			expect(names).toContain(expected);
 		}
 	});
@@ -59,6 +59,16 @@ describe("source plugin registry", () => {
 
 	test("findSourceForInput: arbitrary URL → null (we no longer ship generic-web)", () => {
 		expect(findSourceForInput("https://example.com/some/page")).toBeNull();
+	});
+
+	test("findSourceForInput: scheme prefix (linear-team:) → linear-team", () => {
+		const p = findSourceForInput("linear-team:ENG");
+		expect(p?.name).toBe("linear-team");
+	});
+
+	test("findSourceForInput: scheme prefix (github-repo:) → github-repo", () => {
+		const p = findSourceForInput("github-repo:facebook/react");
+		expect(p?.name).toBe("github-repo");
 	});
 
 	test("findSourceForInput: scheme prefix (apple-notes:) wins on darwin", () => {

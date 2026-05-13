@@ -22,10 +22,8 @@ export interface FetchOptions {
 
 /**
  * Fetch a single remote URL via the source-plugin registry. URL-pattern
- * matchers take first crack. Every fetch authenticates via the credential
- * the plugin needs — for Google plugins that's a refresh token managed
- * by the bundled `gws` CLI; for GitHub/Linear that's a config-stored
- * api_key.
+ * matchers take first crack. Every fetch authenticates via a
+ * config-stored `api_key` for the matching plugin (GitHub, Linear).
  *
  * The returned shape includes the chosen plugin name and its args so
  * refresh can replay it deterministically.
@@ -39,7 +37,7 @@ export async function fetchRemote(
 	const pctx: PluginCtx = { logger, config, onProgress: options.onProgress };
 	const fetcher = await plugin.openBatchFetcher(pctx);
 	try {
-		const entries = await plugin.enumerate(url);
+		const entries = await plugin.enumerate(url, { config, logger });
 		const entry = entries[0];
 		if (!entry) {
 			throw new HelpfulError({
