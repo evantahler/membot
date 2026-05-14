@@ -19,20 +19,12 @@ export type BuiltinPostProcessor = (typeof BUILTIN_POST_PROCESSORS)[number];
  */
 export const PostProcessShellSchema = z
 	.object({
-		command: z
-			.string()
-			.min(1)
-			.describe("Executable to invoke. Resolved on PATH at fetch time."),
+		command: z.string().min(1).describe("Executable to invoke. Resolved on PATH at fetch time."),
 		args: z
 			.array(z.string())
 			.default([])
 			.describe("Argv elements. {var} placeholders are substituted from url_pattern named groups."),
-		timeout_ms: z
-			.number()
-			.int()
-			.positive()
-			.default(60_000)
-			.describe("Kill the post-process spawn past this duration."),
+		timeout_ms: z.number().int().positive().default(60_000).describe("Kill the post-process spawn past this duration."),
 	})
 	.describe(
 		"Shell-command post-processor. Bytes are piped on stdin; stdout becomes the post-processed bytes. " +
@@ -76,10 +68,7 @@ export const RouterSchema = z
 				"JS regex (string form) matched against the full URL. Named groups (?<name>...) are extracted as " +
 					"variables for {var} substitution in args and stdin. First router with a matching pattern wins.",
 			),
-		command: z
-			.string()
-			.min(1)
-			.describe("Executable to invoke. Resolved on PATH at fetch time."),
+		command: z.string().min(1).describe("Executable to invoke. Resolved on PATH at fetch time."),
 		args: z
 			.array(z.string())
 			.default([])

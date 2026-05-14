@@ -12,9 +12,9 @@ import {
 	withCustomRouters,
 } from "../config/router-validation.ts";
 import { MembotConfigSchema } from "../config/schemas.ts";
-import { HelpfulError, isHelpfulError, mapKindToExit } from "../errors.ts";
-import { listCurrent } from "../db/files.ts";
 import { buildContext, closeContext } from "../context.ts";
+import { listCurrent } from "../db/files.ts";
+import { HelpfulError, isHelpfulError, mapKindToExit } from "../errors.ts";
 import { applyPostProcessor } from "../ingest/sources/post-processors.ts";
 import { renderCliError } from "../mount/commander.ts";
 import { colors, renderTable } from "../output/formatter.ts";
@@ -339,7 +339,9 @@ function buildPostProcess(opts: AddOptions): PostProcessSpec {
 		return {
 			command: opts.postProcessCommand as string,
 			args: splitCsv(opts.postProcessArgs ?? ""),
-			timeout_ms: opts.postProcessTimeoutMs ? parsePositiveInt(opts.postProcessTimeoutMs, "--post-process-timeout-ms") : 60_000,
+			timeout_ms: opts.postProcessTimeoutMs
+				? parsePositiveInt(opts.postProcessTimeoutMs, "--post-process-timeout-ms")
+				: 60_000,
 		};
 	}
 
@@ -367,9 +369,7 @@ async function countRowsUsingRouter(name: string): Promise<number> {
 	try {
 		const rows = await listCurrent(ctx.db, {});
 		return rows.filter(
-			(r) =>
-				r.downloader === "custom-command" &&
-				(r.downloader_args as { router?: string } | null)?.router === name,
+			(r) => r.downloader === "custom-command" && (r.downloader_args as { router?: string } | null)?.router === name,
 		).length;
 	} finally {
 		await closeContext(ctx);
@@ -382,7 +382,7 @@ function splitCsv(s: string): string[] {
 }
 
 function requireFlag(value: string | undefined, flag: string): asserts value is string {
-	if (!value || !value.trim()) {
+	if (!value?.trim()) {
 		throw new HelpfulError({
 			kind: "input_error",
 			message: `${flag} is required`,

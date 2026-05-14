@@ -2,11 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	applyPostProcessor,
-	normalizeDocmd,
-	substituteVars,
-} from "../../../src/ingest/sources/post-processors.ts";
+import { applyPostProcessor, normalizeDocmd, substituteVars } from "../../../src/ingest/sources/post-processors.ts";
 
 describe("normalizeDocmd", () => {
 	test("collapses CRLF to LF", () => {
@@ -18,7 +14,7 @@ describe("normalizeDocmd", () => {
 	});
 
 	test("normalizes smart quotes and dashes", () => {
-		expect(normalizeDocmd("“abc” ‘x’ — y")).toBe('"abc" \'x\' - y');
+		expect(normalizeDocmd("“abc” ‘x’ — y")).toBe("\"abc\" 'x' - y");
 	});
 
 	test("collapses 3+ blank lines to 2", () => {
@@ -75,12 +71,7 @@ describe("applyPostProcessor", () => {
 		chmodSync(path, 0o755);
 		try {
 			const input = encoder.encode("hello world");
-			const out = await applyPostProcessor(
-				{ command: path, args: [], timeout_ms: 10_000 },
-				input,
-				{},
-				"",
-			);
+			const out = await applyPostProcessor({ command: path, args: [], timeout_ms: 10_000 }, input, {}, "");
 			expect(decoder.decode(out)).toBe("HELLO WORLD");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

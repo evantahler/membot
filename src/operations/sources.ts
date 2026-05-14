@@ -16,9 +16,7 @@ const SourceRowSchema = z.object({
 	scheme: z
 		.string()
 		.nullable()
-		.describe(
-			"For scheme-kind plugins, the URI prefix (e.g. `apple-notes:`). null for URL and dynamic plugins.",
-		),
+		.describe("For scheme-kind plugins, the URI prefix (e.g. `apple-notes:`). null for URL and dynamic plugins."),
 	auth_kind: z
 		.enum(["api_key", "none"])
 		.describe("`api_key` = needs a token set via `membot config set`. `none` = no auth."),

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MembotConfigSchema } from "../../../src/config/schemas.ts";
 import { withCustomRouters } from "../../../src/config/router-validation.ts";
+import { MembotConfigSchema } from "../../../src/config/schemas.ts";
 import { customCommandPlugin } from "../../../src/ingest/sources/custom-command.ts";
 import { findSourceForInput } from "../../../src/ingest/sources/registry.ts";
 import "../../../src/ingest/sources/index.ts";
@@ -95,10 +95,10 @@ describe("custom-command plugin dispatch", () => {
 				args: ["{doc_id}"],
 			},
 		]);
-		const entries = await customCommandPlugin.enumerate(
-			"https://docs.google.com/document/d/abc-123_XYZ/edit",
-			{ config, logger },
-		);
+		const entries = await customCommandPlugin.enumerate("https://docs.google.com/document/d/abc-123_XYZ/edit", {
+			config,
+			logger,
+		});
 		expect(entries).toHaveLength(1);
 		const entry = entries[0];
 		expect(entry?.cursor).toEqual({ router: "google-docs", vars: { doc_id: "abc-123_XYZ" } });
@@ -130,10 +130,10 @@ describe("custom-command fetch", () => {
 					args: ["{doc_id}"],
 				},
 			]);
-			const entries = await customCommandPlugin.enumerate(
-				"https://docs.google.com/document/d/abc/edit",
-				{ config, logger },
-			);
+			const entries = await customCommandPlugin.enumerate("https://docs.google.com/document/d/abc/edit", {
+				config,
+				logger,
+			});
 			const entry = entries[0];
 			if (!entry) throw new Error("expected entry");
 			const fetcher = await customCommandPlugin.openBatchFetcher({ logger, config });
@@ -171,7 +171,7 @@ describe("custom-command fetch", () => {
 	});
 
 	test("docmd post-processor normalizes nbsp/smart-quotes", async () => {
-		const { path, cleanup } = writeScript("printf 'hello\\xc2\\xa0\\xe2\\x80\\x9cworld\\xe2\\x80\\x9d'");
+		const { path, cleanup } = writeScript("printf 'hello\\302\\240\\342\\200\\234world\\342\\200\\235'");
 		try {
 			const config = configWith([
 				{
@@ -182,10 +182,10 @@ describe("custom-command fetch", () => {
 					post_process: "docmd",
 				},
 			]);
-			const entries = await customCommandPlugin.enumerate(
-				"https://docs.google.com/document/d/x/edit",
-				{ config, logger },
-			);
+			const entries = await customCommandPlugin.enumerate("https://docs.google.com/document/d/x/edit", {
+				config,
+				logger,
+			});
 			const entry = entries[0];
 			if (!entry) throw new Error("expected entry");
 			const fetcher = await customCommandPlugin.openBatchFetcher({ logger, config });

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-	compileRouterPattern,
 	CustomRoutersSchema,
+	compileRouterPattern,
 	type Router,
 	RouterSchema,
 	validateRouters,

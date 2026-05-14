@@ -1,5 +1,5 @@
-import type { MembotConfig } from "../../config/schemas.ts";
 import { compileRouterPattern, getCustomRouters, type Router } from "../../config/router-validation.ts";
+import type { MembotConfig } from "../../config/schemas.ts";
 import { asHelpful, HelpfulError } from "../../errors.ts";
 import { sha256Hex } from "../local-reader.ts";
 import { applyPostProcessor, substituteVars } from "./post-processors.ts";
@@ -132,7 +132,7 @@ function findRouterByName(name: string, config: MembotConfig): Router | null {
 function extractVars(router: Router, url: URL): Record<string, string> {
 	const re = compileRouterPattern(router);
 	const match = re.exec(url.toString());
-	if (!match || !match.groups) {
+	if (!match?.groups) {
 		throw new HelpfulError({
 			kind: "input_error",
 			message: `router "${router.name}" pattern matched ${url.toString()} but produced no named capture groups`,
@@ -152,11 +152,7 @@ function extractVars(router: Router, url: URL): Record<string, string> {
  * Uses an argv array (no shell), so router-config strings can't be
  * splattered together into a shell-injection vector.
  */
-async function runRouterCommand(
-	router: Router,
-	vars: Record<string, string>,
-	url: string,
-): Promise<Uint8Array> {
+async function runRouterCommand(router: Router, vars: Record<string, string>, url: string): Promise<Uint8Array> {
 	const args = router.args.map((arg) => substituteVars(arg, vars, url));
 	const stdinPayload = router.stdin ? substituteVars(router.stdin, vars, url) : null;
 
