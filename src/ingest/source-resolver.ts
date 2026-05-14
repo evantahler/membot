@@ -131,7 +131,7 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 		}
 		return await resolveViaPlugin(named, source, requireEnumerateCtx(options));
 	}
-	const plugin = findSourceForInput(source);
+	const plugin = findSourceForInput(source, options.enumerateCtx?.config ?? null);
 	if (plugin) {
 		return await resolveViaPlugin(plugin, source, requireEnumerateCtx(options));
 	}
@@ -139,7 +139,9 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 	// We dropped the generic-web catch-all alongside Playwright. An http(s)
 	// URL that doesn't claim a specific plugin is now a clear input error
 	// (better than the misleading "not_found" the local-file fallthrough
-	// would produce).
+	// would produce). The hint nudges the user toward `membot router add`,
+	// which registers a custom-command router for arbitrary URL patterns
+	// without bringing back the catch-all.
 	if (/^https?:\/\//i.test(source)) {
 		const names = listSources()
 			.filter((p) => p.match.kind === "url")
@@ -148,7 +150,7 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
 		throw new HelpfulError({
 			kind: "input_error",
 			message: `no source plugin matches: ${source}`,
-			hint: `Pass a URL recognized by one of: ${names}. To ingest arbitrary web content, download the file locally and run \`membot add <path>\`.`,
+			hint: `Pass a URL recognized by one of: ${names}, register a custom router with \`membot router add\`, or download the file locally and run \`membot add <path>\`.`,
 		});
 	}
 

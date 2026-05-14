@@ -12,11 +12,11 @@ const SourceRowSchema = z.object({
 	name: z.string().describe("Stable id; persisted as `files.downloader` and accepted by `--downloader`."),
 	description: z.string().describe("One-line LLM/human description of the plugin."),
 	notes: z.string().nullable().describe("Optional longer caveat (rate limits, platform requirements)."),
-	match_kind: z.enum(["url", "scheme"]).describe("How the plugin claims input."),
+	match_kind: z.enum(["url", "scheme", "dynamic"]).describe("How the plugin claims input."),
 	scheme: z
 		.string()
 		.nullable()
-		.describe("For scheme-kind plugins, the URI prefix (e.g. `apple-notes:`). null for URL plugins."),
+		.describe("For scheme-kind plugins, the URI prefix (e.g. `apple-notes:`). null for URL and dynamic plugins."),
 	auth_kind: z
 		.enum(["api_key", "none"])
 		.describe("`api_key` = needs a token set via `membot config set`. `none` = no auth."),

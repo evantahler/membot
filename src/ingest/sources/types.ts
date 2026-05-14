@@ -113,11 +113,21 @@ export interface ApiKeyLoginEntry {
 /**
  * How a plugin claims a source string.
  *  - `url`: the source parses as an http(s) URL and the plugin's
- *    `matches(url)` returns true.
+ *    `matches(url)` returns true. Tried in registration order after
+ *    every scheme matcher.
  *  - `scheme`: the source starts with `prefix` (e.g. `apple-notes:`).
- *    Scheme matchers are tried before URL matchers.
+ *    Scheme matchers are tried first so a scheme source never falls
+ *    through to URL matching.
+ *  - `dynamic`: the plugin consults the live config to decide whether
+ *    to claim the URL (e.g. the `custom-command` plugin iterates the
+ *    user-defined router list). Dynamic matchers run AFTER every static
+ *    URL matcher so built-in plugins always win on overlapping patterns,
+ *    and they only run for inputs that parse as URLs.
  */
-export type SourceMatch = { kind: "url"; matches: (url: URL) => boolean } | { kind: "scheme"; prefix: string };
+export type SourceMatch =
+	| { kind: "url"; matches: (url: URL) => boolean }
+	| { kind: "scheme"; prefix: string }
+	| { kind: "dynamic"; matches: (url: URL, config: MembotConfig) => boolean };
 
 /**
  * Plugin config-slice declaration. Used to assemble

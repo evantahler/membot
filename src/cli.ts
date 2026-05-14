@@ -8,6 +8,7 @@ import { registerConfigCommand } from "./commands/config.ts";
 import { registerLoginCommand } from "./commands/login.ts";
 import { registerLogsCommand } from "./commands/logs.ts";
 import { registerReindexCommand } from "./commands/reindex.ts";
+import { registerRouterCommand } from "./commands/router.ts";
 import { registerServeCommand } from "./commands/serve.ts";
 import { registerSkillCommand } from "./commands/skill.ts";
 import { registerUpgradeCommand } from "./commands/upgrade.ts";
@@ -71,6 +72,7 @@ for (const op of OPERATIONS) {
 registerServeCommand(program);
 registerReindexCommand(program);
 registerConfigCommand(program);
+registerRouterCommand(program);
 registerLoginCommand(program);
 registerLogsCommand(program);
 registerSkillCommand(program);

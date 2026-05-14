@@ -226,7 +226,10 @@ function pickPluginForRefresh(cur: CurrentRow): SourcePlugin {
 		if (named) return named;
 	}
 	if (cur.source_path) {
-		const matched = findSourceForInput(cur.source_path);
+		// Refresh's URL-match fallback handles legacy rows whose `downloader`
+		// is NULL — those rows always pre-date the custom-command plugin, so
+		// passing `null` here (skipping dynamic matchers) is safe.
+		const matched = findSourceForInput(cur.source_path, null);
 		if (matched) return matched;
 	}
 	throw new HelpfulError({
