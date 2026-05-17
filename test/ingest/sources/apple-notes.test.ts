@@ -153,7 +153,11 @@ mock.module("../../../src/ingest/apple-notes/platform.ts", () => ({
 	mapAppleNotesError: (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
 }));
 
-describe("apple-notes probeUnchanged round-trip", () => {
+// apple-notes is registered only on darwin (see registry.ts:31), so on
+// linux CI the plugin isn't in the registry and `apple-notes:` doesn't
+// resolve. Mocking `platform.ts` doesn't help — the gate runs at
+// import-time inside registerSource(). Skip the whole suite off-darwin.
+describe.if(process.platform === "darwin")("apple-notes probeUnchanged round-trip", () => {
 	let tmp: string;
 	let ctx: AppContext;
 
