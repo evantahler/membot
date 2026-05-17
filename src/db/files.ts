@@ -85,6 +85,17 @@ export async function insertVersion(db: DbConnection, file: NewFileVersion): Pro
 	const versionId = file.version_id ?? millisIso(Date.now());
 	const downloaderArgsJson = file.downloader_args ? JSON.stringify(file.downloader_args) : null;
 
+	// BIGINT columns (source_mtime_ms, size_bytes) must be bound as JS
+	// BigInts. @duckdb/node-api infers INTEGER (INT32) from a plain JS
+	// number, which silently truncates any value above 2^31 — millisecond
+	// timestamps and >2GB sizes both fit comfortably in INT64 but overflow
+	// INT32, so a JS-number bind round-trips back as a negative garbage
+	// value and breaks every downstream `source_mtime_ms === ` comparison
+	// (apple-notes / github-repo / linear-team probeUnchanged).
+	// node:fs `stats.mtimeMs` is a float (subsecond precision) — truncate
+	// to integer ms before BigInt conversion or BigInt() throws.
+	const sourceMtimeBigint = file.source_mtime_ms == null ? null : BigInt(Math.trunc(file.source_mtime_ms));
+	const sizeBytesBigint = file.size_bytes == null ? null : BigInt(file.size_bytes);
 	await db.queryRun(
 		`INSERT INTO files (
 			logical_path, version_id, tombstone, source_type,
@@ -104,14 +115,14 @@ export async function insertVersion(db: DbConnection, file: NewFileVersion): Pro
 		!!file.tombstone,
 		file.source_type,
 		file.source_path ?? null,
-		file.source_mtime_ms ?? null,
+		sourceMtimeBigint,
 		file.source_sha256 ?? null,
 		file.blob_sha256 ?? null,
 		file.content_sha256 ?? null,
 		file.content ?? null,
 		file.description ?? null,
 		file.mime_type ?? null,
-		file.size_bytes ?? null,
+		sizeBytesBigint,
 		file.fetcher ?? null,
 		file.downloader ?? null,
 		downloaderArgsJson,
