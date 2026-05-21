@@ -159,7 +159,7 @@ The skill files describe the discover → ingest → search → read → write w
 
 | Command                         | Description                                                                       |
 | ------------------------------- | --------------------------------------------------------------------------------- |
-| `membot add <sources...>`       | Ingest one or more files, directories, globs, URLs, `apple-notes:<scope>` (macOS), or `inline:<text>`. Default `logical_path` mirrors the source (absolute path for local files, `remotes/{host}/{path}` for URLs, `apple-notes/<account>/<folder>/<title>.md` for notes) so files with the same basename in different projects don't collide. Pass `-p <path>` to override or set a prefix. Skips unchanged source bytes; pass `--force` to re-ingest. For `apple-notes:` sources, pass `--sync` to tombstone rows whose underlying note was deleted in Notes.app. |
+| `membot add <sources...>`       | Ingest one or more files, directories, globs, URLs, `apple-notes:<scope>` (macOS), or `inline:<text>`. Default `logical_path` mirrors the source (absolute path for local files, `remotes/{host}/{path}` for URLs, `apple-notes/<account>/<folder>/<title>.md` for notes) so files with the same basename in different projects don't collide. Pass `-p <path>` to override or set a prefix. Skips unchanged source bytes; pass `-f` / `--force` to re-ingest. Use `--downloader <name>` to force a specific source plugin and skip URL pattern matching. For `apple-notes:` sources, pass `--sync` to tombstone rows whose underlying note was deleted in Notes.app. |
 | `membot ls [prefix]`            | List current files (size, mime, refresh status)                                   |
 | `membot tree [prefix]`          | Render the synthesised logical-path tree (`--max-depth`, `--max-items` cap output) |
 | `membot read <path>`            | Read the markdown surrogate; on a TTY the body renders with ANSI markdown styling. `--bytes` returns original bytes (base64). `--raw` skips ANSI rendering and prints unformatted markdown. |
@@ -178,8 +178,11 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot reindex`                | Rebuild the FTS keyword index over current chunks                                 |
 | `membot config <subcommand>`    | Get / set values in `~/.membot/config.json` (`get`, `set`, `unset`, `list`, `path`) |
 | `membot router <subcommand>`    | Manage user-defined URL routers (`add`, `list`, `remove`, `test`) — see [Custom URL routers](#custom-url-routers) |
+| `membot sources`                | List every registered source plugin — URL/scheme patterns, auth requirements, and example inputs |
 | `membot login`                  | Print one-time auth setup instructions (today: `membot config set` commands for GitHub / Linear) |
 | `membot skill install`          | Install the Claude Code / Cursor agent skill                                      |
+| `membot check-update`           | Check whether a newer release of membot is available                              |
+| `membot upgrade`                | Upgrade membot to the latest released version                                     |
 
 Run `membot <command> --help` for full flags and arguments. Every command produces JSON when piped, when `--json` is set, or when `CI=true`.
 
