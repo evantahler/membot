@@ -8,7 +8,8 @@ import { defineOperation } from "./types.ts";
 export const infoOperation = defineOperation({
 	name: "membot_info",
 	cliName: "info",
-	description: `Inspect metadata for a file: source (local path or URL), fetcher used, refresh schedule, last refresh status, all sha256 digests, and whether the requested version is the current one. Does NOT return file content — use membot_read for that. Use this to decide whether a refresh is worth forcing or whether to trust a cached row.`,
+	bashEquivalent: "stat",
+	description: `Inspect metadata for a file: source (local path or URL), downloader used, refresh schedule, last refresh status, all sha256 digests, and whether the requested version is the current one. Does NOT return file content — use membot_read for that. Use this to decide whether a refresh is worth forcing or whether to trust a cached row.`,
 	inputSchema: z.object({
 		logical_path: z.string().describe("Path to inspect"),
 		version: z.string().optional().describe("Specific version_id; default current"),

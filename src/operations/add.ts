@@ -31,7 +31,7 @@ export const addOperation = defineOperation({
 Registered source plugins:
 ${renderSourceList()}
 
-Browser-auth plugins ([browser]) require \`membot login\` once to sign in. API-key plugins ([api_key]) require a credential in config — see \`membot login\` for the setup command. Plugins are inspectable at runtime with \`membot sources\` / the \`membot_sources\` MCP tool.
+API-key plugins ([api_key]) need a credential in config — run \`membot login\` to print the exact \`membot config set ...\` command, or set it directly. Plugins are inspectable at runtime with \`membot sources\` / the \`membot_sources\` MCP tool.
 
 Pass any number of args; each is resolved independently and the matched entries are concatenated into one response. PDF, DOCX, HTML, images, and other binaries are converted to markdown — native libraries first, Claude vision for images, LLM fallback for messy or scanned input. Original bytes are kept in the blobs table; \`membot_read bytes=true\` returns them. Setting \`refresh_frequency\` enables automatic refresh from the daemon. By default, re-ingesting an unchanged source (same source_sha256 as the current version) is a no-op and reports \`status: "unchanged"\`; pass \`force=true\` to always create a new version. Directory/glob ingests stream one file at a time — partial failures do not abort the rest; the response lists per-entry status. Pass \`--sync\` for plugins that support it (e.g. apple-notes) to tombstone rows whose entries have been deleted upstream.
 

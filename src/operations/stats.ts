@@ -7,6 +7,7 @@ import { defineOperation } from "./types.ts";
 export const statsOperation = defineOperation({
 	name: "membot_stats",
 	cliName: "stats",
+	bashEquivalent: "du -sh",
 	description: `Summarize the local membot index: file/version/chunk/blob counts, total content and on-disk size, refresh health, and breakdowns by source_type, downloader, and mime_type. Optional prefix narrows aggregates to a subtree (same semantics as 'membot tree <prefix>'). Read-only. Use this before membot_prune to gauge how much there is to drop, or as a first call to confirm the index has anything in it.`,
 	inputSchema: z.object({
 		prefix: z
