@@ -8,6 +8,7 @@ import { defineOperation } from "./types.ts";
 export const diffOperation = defineOperation({
 	name: "membot_diff",
 	cliName: "diff",
+	bashEquivalent: "diff",
 	description: `Return a unified diff between two versions of a file. \`a\` is required; \`b\` defaults to the current version. Both \`a\` and \`b\` are version_id timestamps from membot_versions. Use to understand what a refresh actually changed before deciding to act on the new content.`,
 	inputSchema: z.object({
 		logical_path: z.string().describe("Path of the file"),

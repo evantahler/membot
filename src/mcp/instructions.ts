@@ -7,16 +7,27 @@ export const SERVER_INSTRUCTIONS = `You have a persistent context store. Files l
 addressed by logical path (e.g. "research/threat-models/llm.md"). The store
 is a hybrid search index: every file is chunked, embedded locally, and
 indexed with BM25 — so prefer membot_search to membot_read+grep for discovery.
+Call membot_sources before membot_add when unsure what input shapes are
+supported; membot_stats to confirm the index has content.
 
 Workflow:
   1. membot_tree or membot_search to find what already exists before adding new content.
-  2. membot_add to ingest a local file, a URL, or a remote document. URLs are
-     fetched via per-service downloaders (Google Docs, Sheets, Slides, GitHub,
-     Linear, with a generic browser print-to-PDF fallback). Authentication
-     comes from the user's logged-in browser cookies (saved via \`membot login\`).
-     Each row stores which downloader was used so refresh is deterministic.
+  2. membot_add to ingest a local file, directory, glob, URL, or "inline:<text>".
+     Remote URLs go to per-service downloaders — GitHub (issues/PRs/repos) and
+     Linear (issues/projects/teams) over their HTTP APIs, plus Apple Notes
+     locally on macOS. Token services read an API key from config (set via
+     \`membot config set downloaders.<svc>.api_key\`); \`membot login\` only PRINTS
+     those setup commands — it never opens a browser or stores cookies. Call
+     membot_sources to see exactly which URL/scheme shapes are ingestable.
+     Arbitrary URLs — including Google Docs/Sheets/Slides — are NOT fetched;
+     export the file locally as .docx/.pdf and membot_add the path instead.
+     Each row records which downloader ran so refresh replays it deterministically.
   3. membot_read or membot_search hits to consume content.
   4. membot_write to record agent-authored notes (source_type='inline').
+
+Other tools: membot_sources (what's ingestable), membot_stats / membot_info
+(inspect the index or a single row), membot_versions / membot_diff (history),
+membot_move / membot_remove (rename / tombstone), membot_prune (drop history).
 
 Versioning:
   - Every ingest, refresh, or write that changes content creates a NEW

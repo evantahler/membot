@@ -30,7 +30,7 @@ function formatEntryLine(p: RefreshEntry): string {
 export const refreshOperation = defineOperation({
 	name: "membot_refresh",
 	cliName: "refresh",
-	description: `Re-read a file's source and create a new version only if the source bytes changed. Pass \`logical_path\` to refresh one file, or omit it to refresh every file whose refresh_frequency_sec has elapsed. Local files are detected via mtime+sha; remote files are re-fetched via the same downloader (Google Docs, GitHub, etc.) that was originally chosen. On auth or network failure the prior version stays current — check \`last_refresh_status\`. If the failure mentions a login redirect, re-run \`membot login\` and try again.`,
+	description: `Re-read a file's source and create a new version only if the source bytes changed. Pass \`logical_path\` to refresh one file, or omit it to refresh every file whose refresh_frequency_sec has elapsed. Local files are detected via mtime+sha; remote files are re-fetched via the same downloader (GitHub, Linear, etc.) that was originally chosen. On auth or network failure the prior version stays current — check \`last_refresh_status\`. If it failed on auth, set the service's key with \`membot config set downloaders.<svc>.api_key\` (see \`membot_sources\`) and retry.`,
 	inputSchema: z.object({
 		logical_path: z.string().optional().describe("Single path to refresh; omit for all-due"),
 		force: z.boolean().default(false).describe("Re-embed even if source sha is unchanged"),

@@ -14,9 +14,24 @@ export const searchOperation = defineOperation({
 	bashEquivalent: "grep -r + semantic-search",
 	description: `Hybrid search over the context store. Pass \`query\` (natural language → semantic) and/or \`pattern\` (keyword/BM25); pass both for the strongest signal — hits matched by both float to the top via reciprocal rank fusion. Searches the CURRENT version of every file by default; set \`include_history=true\` to also search older versions. This is the primary discovery tool — prefer it over membot_read+scan.`,
 	inputSchema: z.object({
-		query: z.string().optional().describe("Natural-language query for semantic search"),
-		pattern: z.string().optional().describe("Keyword query for BM25 search"),
-		mode: z.enum(["hybrid", "semantic", "keyword"]).default("hybrid").describe("Search mode"),
+		query: z
+			.string()
+			.optional()
+			.describe(
+				"Natural-language query for semantic search (e.g. 'how does auth work'). Provide at least one of `query` or `pattern`.",
+			),
+		pattern: z
+			.string()
+			.optional()
+			.describe(
+				"Keyword query for BM25 search — best for exact tokens, identifiers, or error strings. Provide at least one of `query` or `pattern`.",
+			),
+		mode: z
+			.enum(["hybrid", "semantic", "keyword"])
+			.default("hybrid")
+			.describe(
+				"`hybrid` (default) fuses both lists via RRF; `semantic` uses only `query`; `keyword` uses only `pattern`.",
+			),
 		path_prefix: z.string().optional().describe("Restrict to logical paths starting with this prefix"),
 		limit: z.number().default(10).describe("Max hits to return"),
 		include_history: z.boolean().default(false).describe("Also search older versions (default: current only)"),
