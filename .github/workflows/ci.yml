@@ -13,9 +13,23 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      # Cache the embedding/reranker model weights so the suite doesn't
+      # re-download them from HuggingFace every run. Without this, repeated
+      # CI traffic from GitHub's runner IP range trips HF's 429 rate limit
+      # and every embedder-touching test fails. Keyed on constants.ts so a
+      # model change busts the cache. `MEMBOT_MODEL_CACHE_DIR` redirects the
+      # tests' per-test temp cache dirs to this one shared, cached location.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.membot/models
+          key: membot-models-${{ hashFiles('src/constants.ts') }}
       - run: bun install --frozen-lockfile
       - run: bash scripts/apply-patches.sh
-      - run: bun test
+      - name: bun test
+        run: |
+          export MEMBOT_MODEL_CACHE_DIR="$HOME/.membot/models"
+          mkdir -p "$MEMBOT_MODEL_CACHE_DIR"
+          bun test
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -43,10 +57,13 @@ jobs:
 
   # Search-quality regression gate: ingests the eval corpus with the shipped
   # chunking/pooling settings and fails when Recall/MRR/answer@3 drop below
-  # the thresholds in scripts/eval-search.ts. Model weights (~35MB) are
-  # cached keyed on constants.ts so the job only downloads on model changes.
+  # the thresholds in scripts/eval-search.ts. Runs AFTER `test` and shares its
+  # model cache key, so on a cold cache only one job ever downloads the
+  # weights from HuggingFace (test populates the cache; eval restores it) —
+  # never two jobs hitting HF concurrently.
   eval:
     runs-on: ubuntu-latest
+    needs: [test]
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
@@ -55,7 +72,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.membot/models
-          key: eval-models-${{ hashFiles('src/constants.ts') }}
+          key: membot-models-${{ hashFiles('src/constants.ts') }}
       - run: bun install --frozen-lockfile
       - run: bash scripts/apply-patches.sh
       - run: bun run eval --ci

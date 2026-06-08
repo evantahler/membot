@@ -24,9 +24,22 @@ if (ortWasm) {
 
 const pipelinePromises = new Map<string, Promise<FeatureExtractionPipeline>>();
 
-/** Configure where transformers caches downloaded model weights. */
+/**
+ * Configure where transformers caches downloaded model weights.
+ *
+ * `MEMBOT_MODEL_CACHE_DIR`, when set, overrides `dir`. The test suite points
+ * each test at a throwaway temp dir (to isolate the DB), which would force a
+ * fresh model download from HuggingFace per CI run — and concurrent CI jobs
+ * downloading the same weights trip HF's per-IP-range 429 limit. Model
+ * weights are read-only and identical regardless of directory, so CI sets
+ * this env var to one shared, `actions/cache`-restored dir; every test then
+ * reuses the cached weights instead of re-fetching. Unset in normal use, so
+ * local runs and the shipped binary keep the caller-provided dir.
+ */
 export function setEmbeddingCacheDir(dir: string): void {
-	env.cacheDir = dir.endsWith("/") ? dir : `${dir}/`;
+	const override = process.env.MEMBOT_MODEL_CACHE_DIR?.trim();
+	const resolved = override || dir;
+	env.cacheDir = resolved.endsWith("/") ? resolved : `${resolved}/`;
 }
 
 function isModelCached(model: string): boolean {
