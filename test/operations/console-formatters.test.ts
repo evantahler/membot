@@ -164,9 +164,11 @@ describe("search.console_formatter", () => {
 						score: 0.875,
 						semantic_score: 0.9,
 						keyword_score: 0.5,
+						rerank_score: null,
 					},
 				],
 				mode: "hybrid",
+				reranked: false,
 			}) ?? "";
 		const visible = STRIP(out);
 		expect(visible).toContain("docs/a.md");
@@ -176,8 +178,31 @@ describe("search.console_formatter", () => {
 		expect(visible).toContain("1 hit in hybrid mode");
 	});
 
+	test("renders the rerank score and a (reranked) footer when reranking ran", () => {
+		const out =
+			searchOperation.console_formatter?.({
+				hits: [
+					{
+						logical_path: "docs/a.md",
+						version_id: "v1",
+						chunk_index: 0,
+						snippet: "matched line",
+						score: 0.5,
+						semantic_score: 0.9,
+						keyword_score: null,
+						rerank_score: 0.987,
+					},
+				],
+				mode: "hybrid",
+				reranked: true,
+			}) ?? "";
+		const visible = STRIP(out);
+		expect(visible).toContain("rr=0.987");
+		expect(visible).toContain("reranked");
+	});
+
 	test("empty result reports '(no hits)' for the requested mode", () => {
-		const out = searchOperation.console_formatter?.({ hits: [], mode: "keyword" }) ?? "";
+		const out = searchOperation.console_formatter?.({ hits: [], mode: "keyword", reranked: false }) ?? "";
 		expect(STRIP(out)).toContain("(no hits in keyword mode)");
 	});
 });

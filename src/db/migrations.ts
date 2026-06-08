@@ -4,6 +4,7 @@ import { MIGRATION_001 } from "./migrations/001-init.ts";
 import { MIGRATION_002 } from "./migrations/002-fts.ts";
 import { MIGRATION_003 } from "./migrations/003-downloader-columns.ts";
 import { MIGRATION_004 } from "./migrations/004-nullable-blob-bytes.ts";
+import { MIGRATION_006 } from "./migrations/006-search-quality.ts";
 
 /**
  * One DDL/DML migration step. The id is monotonically increasing; the name
@@ -31,7 +32,9 @@ export interface Migration {
 	transactional?: boolean;
 }
 
-const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004];
+// Note: id 5 is reserved by the in-flight relationships work; 006 ships
+// independently so the two changes don't contend for the same slot.
+const MIGRATIONS: Migration[] = [MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_006];
 
 /**
  * Process-level cache of paths whose migrations have been applied (or

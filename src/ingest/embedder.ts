@@ -4,6 +4,7 @@ import { env, type FeatureExtractionPipeline, pipeline } from "@huggingface/tran
 import {
 	BGE_QUERY_PREFIX,
 	BGE_QUERY_PREFIX_MODELS,
+	CLS_POOLING_MODELS,
 	EMBEDDING_BATCH_SIZE,
 	EMBEDDING_DIMENSION,
 	EMBEDDING_MODEL,
@@ -84,11 +85,27 @@ async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
  * embedding; passages stay un-prefixed. Default is `"passage"` so all bulk
  * ingest call sites keep their current behavior. Search-time callers pass
  * `"query"`. For non-BGE models the prefix is skipped.
+ *
+ * `pooling` overrides the per-model pooling mode (see `resolvePooling`).
+ * This is an eval/test hook — it is honored only on the in-process path;
+ * pool workers always derive pooling from the model name, which yields the
+ * same answer for every production call site.
  */
 export interface EmbedOptions {
 	onProgress?: (done: number, total: number) => void;
 	directOnly?: boolean;
 	kind?: "query" | "passage";
+	pooling?: "cls" | "mean";
+}
+
+/**
+ * Pooling mode the model was trained with: CLS-token pooling for the BGE
+ * family (per the upstream sentence-transformers config), mean pooling for
+ * everything else. Using the wrong pooling silently degrades retrieval —
+ * the vectors are still unit-length and "look" fine, they're just worse.
+ */
+export function resolvePooling(model: string): "cls" | "mean" {
+	return CLS_POOLING_MODELS.has(model) ? "cls" : "mean";
 }
 
 /**
@@ -142,10 +159,11 @@ export async function embed(
 	const extractor = await getPipeline(model);
 	const usePrefix = opts.kind === "query" && BGE_QUERY_PREFIX_MODELS.has(model);
 	const inputs = usePrefix ? texts.map((t) => `${BGE_QUERY_PREFIX}${t}`) : texts;
+	const pooling = opts.pooling ?? resolvePooling(model);
 	const out: number[][] = [];
 	for (let i = 0; i < inputs.length; i += EMBEDDING_BATCH_SIZE) {
 		const slice = inputs.slice(i, i + EMBEDDING_BATCH_SIZE);
-		const output = await extractor(slice, { pooling: "mean", normalize: true });
+		const output = await extractor(slice, { pooling, normalize: true });
 		const data = output.tolist() as number[][];
 		if (out.length === 0 && data[0] && data[0].length !== EMBEDDING_DIMENSION) {
 			throw new HelpfulError({
@@ -176,9 +194,9 @@ export async function embed(
 export async function embedSingle(
 	text: string,
 	model: string = EMBEDDING_MODEL,
-	opts: { kind?: "query" | "passage" } = {},
+	opts: { kind?: "query" | "passage"; pooling?: "cls" | "mean" } = {},
 ): Promise<number[]> {
-	const all = await embed([text], model, { directOnly: true, kind: opts.kind ?? "passage" });
+	const all = await embed([text], model, { directOnly: true, kind: opts.kind ?? "passage", pooling: opts.pooling });
 	const vec = all[0];
 	if (!vec) {
 		throw new HelpfulError({

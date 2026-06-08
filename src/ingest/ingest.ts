@@ -366,7 +366,7 @@ async function ingestPluginEntries(
 				const description = await describe(logicalPath, fetched.mimeType, markdown, ctx.config.llm);
 				onPhase("chunking");
 				const chunks = chunkDeterministic(markdown, ctx.config.chunker);
-				const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content));
+				const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content, c.context));
 
 				let embeddings: number[][];
 				try {
@@ -561,7 +561,7 @@ async function ingestLocalFiles(
 
 			onPhase("chunking");
 			const chunks = chunkDeterministic(markdown, ctx.config.chunker);
-			const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content));
+			const searchTexts = chunks.map((c) => buildSearchText(logicalPath, description, c.content, c.context));
 
 			let embeddings: number[][];
 			try {
@@ -653,7 +653,7 @@ interface PersistOneParams {
 	bytes: Uint8Array | null;
 	markdown: string;
 	description: string;
-	chunks: { index: number; content: string }[];
+	chunks: { index: number; content: string; context?: string }[];
 	searchTexts: string[];
 	embeddings: number[][];
 	fetcher: FetcherKind;
@@ -713,8 +713,9 @@ async function persistOne(ctx: AppContext, p: PersistOneParams): Promise<string>
 			p.chunks.map((c, i) => ({
 				chunk_index: c.index,
 				chunk_content: c.content,
-				search_text: p.searchTexts[i] ?? buildSearchText(p.logicalPath, p.description, c.content),
+				search_text: p.searchTexts[i] ?? buildSearchText(p.logicalPath, p.description, c.content, c.context),
 				embedding: p.embeddings[i] ?? new Array(p.embeddings[0]?.length ?? 0).fill(0),
+				context: c.context ?? null,
 			})),
 		);
 		await ctx.db.exec("COMMIT");
@@ -761,7 +762,7 @@ async function persistVersion(
 	const description = await describe(p.logicalPath, p.mime, p.markdown, ctx.config.llm);
 	onPhase?.("chunking");
 	const chunks = chunkDeterministic(p.markdown, ctx.config.chunker);
-	const searchTexts = chunks.map((c) => buildSearchText(p.logicalPath, description, c.content));
+	const searchTexts = chunks.map((c) => buildSearchText(p.logicalPath, description, c.content, c.context));
 	let embeddings: number[][];
 	try {
 		embeddings = await embed(searchTexts, ctx.config.embedding_model, {
@@ -809,8 +810,9 @@ async function persistVersion(
 			chunks.map((c, i) => ({
 				chunk_index: c.index,
 				chunk_content: c.content,
-				search_text: searchTexts[i] ?? buildSearchText(p.logicalPath, description, c.content),
+				search_text: searchTexts[i] ?? buildSearchText(p.logicalPath, description, c.content, c.context),
 				embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
+				context: c.context ?? null,
 			})),
 		);
 		await ctx.db.exec("COMMIT");

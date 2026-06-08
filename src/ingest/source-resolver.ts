@@ -246,8 +246,8 @@ export async function resolveSource(source: string, options: ResolveOptions = {}
  * Resolve a plugin-matched source (URL or scheme prefix). The plugin's
  * own `enumerate` is the source of truth — URL plugins yield one entry,
  * scheme plugins like apple-notes yield many. The plugin owns whatever
- * resources (sqlite reader, browser cookies) it needs to open and close
- * during enumeration.
+ * resources (sqlite reader, API-keyed HTTP client) it needs to open and
+ * close during enumeration.
  */
 async function resolveViaPlugin(plugin: SourcePlugin, source: string, ctx: EnumerateCtx): Promise<ResolvedSource> {
 	const entries = await plugin.enumerate(source, ctx);

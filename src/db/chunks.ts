@@ -7,6 +7,12 @@ export interface ChunkInput {
 	chunk_content: string;
 	search_text: string;
 	embedding: number[];
+	/**
+	 * Heading breadcrumb scoping this chunk ("Doc > Section"), or null.
+	 * Persisted so operations that re-derive `search_text` from stored chunks
+	 * (move) can rebuild the same string without re-running the chunker.
+	 */
+	context?: string | null;
 }
 
 export interface ChunkRow extends ChunkInput {
@@ -35,14 +41,15 @@ export async function insertChunksForVersion(
 			});
 		}
 		await db.queryRun(
-			`INSERT INTO chunks (logical_path, version_id, chunk_index, chunk_content, search_text, embedding)
-			 VALUES (?1, CAST(?2 AS TIMESTAMP), ?3, ?4, ?5, ?6::FLOAT[${EMBEDDING_DIMENSION}])`,
+			`INSERT INTO chunks (logical_path, version_id, chunk_index, chunk_content, search_text, embedding, context)
+			 VALUES (?1, CAST(?2 AS TIMESTAMP), ?3, ?4, ?5, ?6::FLOAT[${EMBEDDING_DIMENSION}], ?7)`,
 			logical_path,
 			version_id,
 			c.chunk_index,
 			c.chunk_content,
 			c.search_text,
 			c.embedding,
+			c.context ?? null,
 		);
 	}
 }
@@ -67,6 +74,7 @@ interface RawChunkRow {
 	chunk_content: string;
 	search_text: string;
 	embedding: number[];
+	context: string | null;
 	[key: string]: unknown;
 }
 
@@ -78,7 +86,7 @@ export async function listChunksForVersion(
 ): Promise<ChunkRow[]> {
 	const rows = await db.queryAll<RawChunkRow>(
 		`SELECT logical_path, CAST(version_id AS VARCHAR) AS version_id,
-		        chunk_index, chunk_content, search_text, embedding
+		        chunk_index, chunk_content, search_text, embedding, context
 		 FROM chunks
 		 WHERE logical_path = ?1 AND version_id = CAST(?2 AS TIMESTAMP)
 		 ORDER BY chunk_index`,
@@ -89,6 +97,7 @@ export async function listChunksForVersion(
 		...r,
 		version_id: String(r.version_id),
 		chunk_index: Number(r.chunk_index),
+		context: r.context ?? null,
 	}));
 }
 

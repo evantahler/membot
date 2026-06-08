@@ -11,6 +11,7 @@ import { embed, embedSingle, setEmbeddingCacheDir } from "../../src/ingest/embed
 import { buildSearchText } from "../../src/ingest/search-text.ts";
 import { fuseRRF } from "../../src/search/hybrid.ts";
 import { searchKeyword } from "../../src/search/keyword.ts";
+import { rerankScores } from "../../src/search/rerank.ts";
 import { searchSemantic } from "../../src/search/semantic.ts";
 
 interface Doc {
@@ -63,7 +64,12 @@ describe("hybrid search e2e — real embeddings, real DB", () => {
 				description: doc.description,
 				mime_type: "text/markdown",
 			});
-			const chunks = chunkDeterministic(doc.body, { mode: "deterministic", target_chars: 4000, max_chars: 15000 });
+			const chunks = chunkDeterministic(doc.body, {
+				mode: "deterministic",
+				target_chars: 4000,
+				max_chars: 15000,
+				markdown_aware: true,
+			});
 			const searchTexts = chunks.map((c) => buildSearchText(doc.logical_path, doc.description, c.content));
 			const vectors = await embed(searchTexts);
 			await insertChunksForVersion(
@@ -122,4 +128,24 @@ describe("hybrid search e2e — real embeddings, real DB", () => {
 		const surfaces = fused.map((f) => f.logical_path);
 		expect(surfaces).toContain("diagrams/architecture.png");
 	});
+
+	test("rerank: cross-encoder scores the right doc highest", async () => {
+		const queryVec = await embedSingle("how do I cook pasta?", undefined, { kind: "query" });
+		const semantic = await searchSemantic(db, queryVec, { limit: 10 });
+		const keyword = await searchKeyword(db, "pasta carbonara");
+		const fused = fuseRRF(semantic, keyword, { limit: 5 });
+		const scores = await rerankScores(
+			"how do I cook pasta?",
+			fused.map((f) => f.search_text),
+		);
+		expect(scores).toHaveLength(fused.length);
+		for (const s of scores) {
+			expect(s).toBeGreaterThanOrEqual(0);
+			expect(s).toBeLessThanOrEqual(1);
+		}
+		// The pasta recipe should earn the top cross-encoder score.
+		let best = 0;
+		for (let i = 1; i < scores.length; i++) if ((scores[i] ?? 0) > (scores[best] ?? 0)) best = i;
+		expect(fused[best]?.logical_path).toBe("recipes/pasta.md");
+	}, 120_000);
 });

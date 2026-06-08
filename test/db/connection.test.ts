@@ -61,7 +61,7 @@ describe("openDb / connection", () => {
 		await db.close();
 		db = await openDb(join(tmp, "test.duckdb"));
 		const applied = await db.queryAll<{ id: number }>(`SELECT id FROM _migrations ORDER BY id`);
-		expect(applied.map((r) => Number(r.id))).toEqual([1, 2, 3, 4]);
+		expect(applied.map((r) => Number(r.id))).toEqual([1, 2, 3, 4, 6]);
 	});
 });
 

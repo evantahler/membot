@@ -41,6 +41,47 @@ export const BGE_QUERY_PREFIX_MODELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Models trained with CLS-token pooling. BGE-v1.5's sentence-transformers
+ * config sets `pooling_mode_cls_token: true` — the model card explicitly
+ * says to take the last hidden state of `[CLS]` as the sentence embedding.
+ * Mean pooling on these models produces measurably worse retrieval vectors.
+ * Models not in this set get mean pooling (the safe default for most
+ * sentence-transformers checkpoints).
+ */
+export const CLS_POOLING_MODELS: ReadonlySet<string> = new Set([
+	"Xenova/bge-small-en-v1.5",
+	"Xenova/bge-base-en-v1.5",
+	"Xenova/bge-large-en-v1.5",
+]);
+
+/**
+ * Revision of the embedding scheme (pooling mode + chunk sizing + search_text
+ * shape). Bump this whenever stored vectors become incomparable with vectors
+ * the current code produces, and add a line to the history below. Stored per
+ * DB in `meta.embedding_revision`; a mismatch at search time warns the user
+ * to run `membot reindex --embeddings`.
+ *
+ * History:
+ *   1 — mean pooling, 4000/15000-char chunks, search_text = path\ndesc\n\nbody
+ *   2 — CLS pooling for BGE, 1400/1800-char chunks sized to bge-small's
+ *       512-token window, heading breadcrumb line in search_text, description
+ *       capped at 240 chars in search_text
+ */
+export const EMBEDDING_REVISION = 2;
+
+/**
+ * Default cross-encoder used by `membot search --rerank`. A ~23M-param
+ * MS-MARCO-tuned MiniLM — small enough that reranking ~30 candidates on the
+ * WASM backend stays in the hundreds-of-ms range, while still providing the
+ * usual cross-encoder precision lift over bi-encoder cosine scores.
+ * Override via `config.search.rerank_model`.
+ */
+export const RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2";
+
+/** Candidate pairs scored per forward pass in the reranker (memory bound, same rationale as EMBEDDING_BATCH_SIZE). */
+export const RERANK_BATCH_SIZE = 8;
+
+/**
  * Max chunks fed to the feature-extraction pipeline in one forward pass.
  * ONNX/WASM allocates activations linearly with batch size, so a single
  * unbounded call OOMs (`std::bad_alloc`) on large files — a 168-chunk file
@@ -59,8 +100,20 @@ export const EMBED_WORKER_SENTINEL = "__embed_worker";
 
 export const DEFAULTS = {
 	CHUNKER_MODE: "deterministic" as const,
-	CHUNKER_TARGET_CHARS: 4_000,
-	CHUNKER_MAX_CHARS: 15_000,
+	/**
+	 * Chunk sizes are budgeted against the embedding model's input window, NOT
+	 * against what fits comfortably in a search snippet. bge-small-en-v1.5
+	 * truncates at 512 tokens (~1,800-2,000 chars of English prose), and the
+	 * embedded string is `search_text` — path + description (+ heading
+	 * breadcrumb) PREPENDED to the chunk body, which costs another ~250-300
+	 * chars. A 1,400-char body keeps typical search_text inside the window;
+	 * anything larger silently embeds only a prefix of the chunk (the original
+	 * 4,000/15,000 defaults left over half of every chunk invisible to vector
+	 * search). MAX is a hard cap applied after overlap; slight truncation on
+	 * pathological single-line content is accepted.
+	 */
+	CHUNKER_TARGET_CHARS: 1_400,
+	CHUNKER_MAX_CHARS: 1_800,
 	DAEMON_TICK_SEC: 60,
 	HTTP_TIMEOUT_MS: 30_000,
 	CONVERTER_MODEL: "claude-haiku-4-5-20251001",

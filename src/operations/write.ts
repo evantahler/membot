@@ -43,7 +43,7 @@ export const writeOperation = defineOperation({
 			const bytes = new TextEncoder().encode(input.content);
 			const description = await describe(path, "text/markdown", input.content, ctx.config.llm);
 			const chunks = chunkDeterministic(input.content, ctx.config.chunker);
-			const searchTexts = chunks.map((c) => buildSearchText(path, description, c.content));
+			const searchTexts = chunks.map((c) => buildSearchText(path, description, c.content, c.context));
 			const embeddings = await embed(searchTexts, ctx.config.embedding_model);
 
 			const versionId = millisIso(Date.now());
@@ -75,8 +75,9 @@ export const writeOperation = defineOperation({
 				chunks.map((c, i) => ({
 					chunk_index: c.index,
 					chunk_content: c.content,
-					search_text: searchTexts[i] ?? buildSearchText(path, description, c.content),
+					search_text: searchTexts[i] ?? buildSearchText(path, description, c.content, c.context),
 					embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
+					context: c.context ?? null,
 				})),
 			);
 			await rebuildFts(ctx.db);

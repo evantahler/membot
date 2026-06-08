@@ -138,6 +138,7 @@ membot add "apple-notes:Personal/Recipes"        # Apple Notes (macOS-only); see
 membot add a.md b.md "docs/**/*.md"              # any number of files / globs in one call
 membot ls                                        # list current files
 membot search "how does refresh work?"           # hybrid search
+membot search "how does refresh work?" --rerank  # + local cross-encoder precision pass
 membot read docs/refresh.md                      # read the markdown surrogate
 membot serve                                     # expose the same operations as MCP tools (stdio)
 ```
@@ -163,7 +164,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot ls [prefix]`            | List current files (size, mime, refresh status)                                   |
 | `membot tree [prefix]`          | Render the synthesised logical-path tree (`--max-depth`, `--max-items` cap output) |
 | `membot read <path>`            | Read the markdown surrogate; on a TTY the body renders with ANSI markdown styling. `--bytes` returns original bytes (base64). `--raw` skips ANSI rendering and prints unformatted markdown. |
-| `membot search <query>`         | Hybrid search (semantic + BM25); `--include-history` searches older versions      |
+| `membot search <query>`         | Hybrid search (semantic + BM25); `--rerank` adds a local cross-encoder precision pass; `--include-history` searches older versions |
 | `membot info <path>`            | Inspect metadata (source, fetcher, schedule, digests) without content             |
 | `membot stats [prefix]`         | Summarize the index (file/version/chunk/blob counts, on-disk size, refresh health, mime/source/downloader breakdowns); optional prefix scopes the aggregates |
 | `membot versions <path>`        | List every version newest-first                                                   |
@@ -175,7 +176,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot prune --before <ts>`    | Permanently drop non-current versions older than cutoff (irreversible). Add `--strip-blob-bytes` to also retroactively NULL out bytes for blobs that exceed the current `blobs.max_size_bytes` / `blobs.skip_mime_types` policy. |
 | `membot serve`                  | Run the MCP server (stdio default; `--http <port>` for HTTP)                      |
 | `membot logs`                   | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`) — `--follow`, `--lines <N>`, `--raw` |
-| `membot reindex`                | Rebuild the FTS keyword index over current chunks                                 |
+| `membot reindex`                | Rebuild the FTS keyword index over current chunks. `--embeddings` also re-chunks + re-embeds every version from stored content and bumps the store's embedding revision — run it once after upgrading across an embedding-scheme change |
 | `membot config <subcommand>`    | Get / set values in `~/.membot/config.json` (`get`, `set`, `unset`, `list`, `path`) |
 | `membot router <subcommand>`    | Manage user-defined URL routers (`add`, `list`, `remove`, `test`) — see [Custom URL routers](#custom-url-routers) |
 | `membot sources`                | List every registered source plugin — URL/scheme patterns, auth requirements, and example inputs |
@@ -252,6 +253,8 @@ See [`docs/sdk.md`](./docs/sdk.md) for the full method list, error model, and lo
   membot config set chunker.target_chars 800                    # tweak any nested value
   membot config set embedding.workers 4                         # cap parallel embed workers
   membot config set search.semantic_weight 0.6                  # tilt hybrid-search RRF toward semantic (default 0.6; 0.5 = equal, 0 = keyword-only, 1 = semantic-only)
+  membot config set search.rerank true                          # rerank every search with a local cross-encoder (per-query override: --rerank)
+  membot config set search.max_per_file 3                       # cap hits per file in results (0 = unlimited; backfills to keep `limit` hits)
   membot config set converters.max_inline_image_captions 50     # raise per-doc cap on vision captions for embedded images
   membot config set blobs.max_size_bytes 26214400               # 25 MB; skip persisting bytes for sources larger than this (null = always persist)
   membot config set blobs.skip_mime_types '["video/*","audio/*"]' # mime globs whose bytes are never persisted regardless of size
@@ -265,6 +268,10 @@ See [`docs/sdk.md`](./docs/sdk.md) for the full method list, error model, and lo
   **Parallel embedding:** `embedding.workers` (default `null` → `cpus()-1`) controls how many subprocess workers fan out the WASM embedding work. The pool is **per-command** — spawned at the start of `add` / `refresh` / `write` and killed before the command returns, so membot doesn't keep idle workers around between invocations. Each worker loads its own ~50MB copy of the model, so on RAM-constrained machines drop it to a small fixed number (e.g. `4`); set `1` to disable the pool entirely and embed inline.
 
   **Hybrid-search ranking:** `search.semantic_weight` (default `0.6`, range `[0, 1]`) controls reciprocal-rank fusion between the semantic and keyword sides. The semantic list contributes weight `semantic_weight`; keyword contributes `1 - semantic_weight`. The default tilts slightly toward semantic so a chunk that matches a query conceptually (without literal token overlap) can outrank docs that incidentally contain a query word. Set to `0.5` to restore equal weighting, `0.0` for keyword-only ranking behaviour, or `1.0` for semantic-only. Search-time queries also get the BGE-v1.5 instruction prefix prepended automatically — stored embeddings are unaffected, no reindex required.
+
+  **Cross-encoder reranking:** `search.rerank` (default `false`) rescoring the fused candidate list with a local cross-encoder (`search.rerank_model`, default `Xenova/ms-marco-MiniLM-L-6-v2`) before returning. A bi-encoder (the embedder) scores query and document independently; a cross-encoder reads the pair together, which is markedly more precise on hard/ambiguous queries — at the cost of query latency (the first call also downloads the ~23M-param model into `~/.membot/models`). It's off by default and best toggled per-query with `membot search --rerank` or per-call with the MCP `rerank` parameter. `search.max_per_file` (default `3`, `0` = unlimited) caps how many chunks from one file appear in results, backfilling from other files so you still get `limit` hits.
+
+  **Embedding revision & reindex:** the store records an `embedding_revision` (in the `meta` table). When membot's code produces a newer revision than your stored vectors — e.g. after an upgrade that changed the chunk sizing, pooling mode, or `search_text` shape — semantic search degrades because query and passage vectors no longer share a space, and search prints a one-time warning. Fix it with a single `membot reindex --embeddings`, which re-chunks and re-embeds every version from its stored content (no re-download of sources, no LLM calls) and bumps the revision. Content and version history are untouched.
 
   **Blob persistence policy:** `blobs.max_size_bytes` (default `25 MB`, nullable to disable) and `blobs.skip_mime_types` (default `["video/*", "audio/*"]`, prefix-glob) control whether the original ingested bytes are persisted alongside the metadata row. Rows that fail either rule still get a `blobs` row with `sha256`, `mime_type`, `size_bytes`, and downloader provenance — only the `bytes` column is left NULL. Refresh, dedupe, conversion-at-ingest-time, chunks, and embeddings all keep working; only `membot read --bytes` and future re-conversion against an improved converter need the persisted bytes. To strip bytes retroactively under the current policy (e.g. after lowering the limit), run `membot prune --strip-blob-bytes --no-dry-run`.
 
