@@ -69,8 +69,9 @@ export const moveOperation = defineOperation({
 		const reKeyed = oldChunks.map((c) => ({
 			chunk_index: c.chunk_index,
 			chunk_content: c.chunk_content,
-			search_text: buildSearchText(toPath, cur.description, c.chunk_content),
+			search_text: buildSearchText(toPath, cur.description, c.chunk_content, c.context),
 			embedding: c.embedding,
+			context: c.context ?? null,
 		}));
 		await insertChunksForVersion(ctx.db, toPath, newVersion, reKeyed);
 		await tombstone(ctx.db, fromPath, `moved to ${toPath}`);

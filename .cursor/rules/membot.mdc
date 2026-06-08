@@ -19,9 +19,10 @@ membot tree                         # synthesised directory tree of logical_path
 membot ls                           # one row per current file (size, mime, refresh status)
 membot ls docs/                     # filter by prefix
 membot search "<question>"          # hybrid search (semantic + keyword)
+membot search "<question>" --rerank # + local cross-encoder precision pass (slower, higher precision)
 ```
 
-`search` is the primary discovery tool — prefer it over scanning files.
+`search` is the primary discovery tool — prefer it over scanning files. Add `--rerank` on a hard or ambiguous query to rescore the top candidates with a local cross-encoder.
 
 ## 2. Ingest
 
@@ -211,7 +212,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 | `membot tree [prefix]`                | Render the synthesised logical-path tree (`--max-depth`, `--max-items` cap output) |
 | `membot read <path>`                  | Read current markdown surrogate (`--bytes` for original; `--raw` skips TTY ANSI rendering) |
 | `membot write <path> --content <txt>` | Write inline agent-authored markdown as a new version                          |
-| `membot search <query>`               | Hybrid search (semantic + BM25); add `--include-history` to search older versions |
+| `membot search <query>`               | Hybrid search (semantic + BM25); `--rerank` adds a local cross-encoder precision pass; `--include-history` searches older versions |
 | `membot info <path>`                  | Inspect metadata (source, downloader, refresh schedule, digests) without content |
 | `membot stats [prefix]`               | Summarize the index (file/version/chunk/blob counts, on-disk size, refresh health, mime/source/downloader breakdowns); optional prefix scopes |
 | `membot versions <path>`              | List every version newest-first with version_id and change notes               |
@@ -222,7 +223,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 | `membot prune --before <ts>`          | Permanently drop non-current versions older than cutoff (irreversible). Add `--strip-blob-bytes` to retroactively NULL out bytes for blobs that exceed current `blobs.max_size_bytes` / `blobs.skip_mime_types`. |
 | `membot serve`                        | Start MCP server (stdio default, `--http <port>` for HTTP)                     |
 | `membot logs`                         | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`); `--follow`, `--lines <N>`, `--raw` for JSON |
-| `membot reindex`                      | Rebuild the FTS keyword index over current chunks                              |
+| `membot reindex`                      | Rebuild the FTS keyword index over current chunks; `--embeddings` re-chunks + re-embeds every version and bumps the embedding revision (run once after upgrading across an embedding-scheme change) |
 | `membot config <subcommand>`          | Host-side config management (`get` / `set` / `unset` / `list` / `path`). **Don't run** — this is for the human operator, not for agents |
 | `membot router <subcommand>`          | Manage user-defined URL routers (`add` / `list` / `remove` / `test`). Useful when the user wants `membot add <url>` to delegate to an external CLI for fetch (e.g. mcpx for Google Docs). **Suggest, don't run unilaterally** |
 | `membot login`                        | Print `membot config set` instructions for API-key services (GitHub, Linear). **Don't run** — this is for the human operator |
@@ -244,6 +245,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 - **"Apple Note ... no longer exists"** on refresh → the note was deleted in Notes.app. Reconcile with `membot add apple-notes: --sync` or drop the row with `membot rm <path>`.
 - **Search returns nothing** → Confirm the file ingested with `membot info <path>`; if needed, run `membot reindex` to rebuild the FTS keyword index.
 - **Stale results after manual DB edits** → `membot reindex`.
+- **"embeddings were built under revision N" warning on search** → the store was embedded by an older membot; semantic quality is degraded. Run `membot reindex --embeddings` once to re-embed every version and clear it.
 - **Two paths point at the same content** → `membot mv` doesn't merge; tombstone one with `membot rm`.
 
 ## Configuration
@@ -252,4 +254,5 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 - Optional `ANTHROPIC_API_KEY` enables LLM fallback for messy/binary input. Without it, conversion degrades to deterministic native output.
 - `embedding.workers` (config key) caps the per-command embed-worker subprocess pool spawned at the top of `add` / `refresh` / `write`. Default `null` resolves to `cpus()-1`; set `1` to disable the pool.
 - `search.semantic_weight` (config key, default `0.6`, range `[0, 1]`) tilts hybrid-search RRF toward the semantic side. `0.5` = equal, `0.0` = keyword-only behaviour, `1.0` = semantic-only. Search-time queries automatically get the BGE-v1.5 instruction prefix prepended; stored embeddings are unaffected.
+- `search.rerank` (config key, default `false`) reranks every search with a local cross-encoder (`search.rerank_model`); the per-query `--rerank` flag (MCP: `rerank` parameter) overrides it. `search.max_per_file` (default `3`, `0` = unlimited) caps how many chunks from one file appear in results.
 - Config file: `~/.membot/config.json` (see `membot --help` for the global flags).

@@ -4,19 +4,19 @@ import type { Migration } from "../migrations.ts";
  * Replace the old mcpx-era fetcher metadata triple
  * (`fetcher_server` / `fetcher_tool` / `fetcher_args`) with a flat
  * `(downloader, downloader_args)` shape. The mcpx-driven agent fetcher
- * is gone; per-service downloaders match a URL → run a known fetch
- * (Playwright export endpoints for Google, rendered HTML for GitHub /
- * Linear, headless print-to-PDF for everything else) → return bytes
- * for the existing native converter pipeline.
+ * is gone; per-service downloaders match a URL → run a known HTTP fetch
+ * (GitHub and Linear over their APIs, Apple Notes locally) → return
+ * bytes for the existing native converter pipeline. There is no
+ * generic-web catch-all — URLs no plugin claims are rejected.
  *
  * Existing rows whose `fetcher` was `'http'` or `'mcpx'` are migrated
- * to `'downloader'` with `downloader=NULL`. The mcpx-driven ones
- * become refresh-broken (the `fetcher_*` arguments that drove them no
- * longer exist) but their stored `content` is still readable; the
- * plain-HTTP ones will be re-routed through the generic-web downloader
- * the next time refresh runs. The `fetcher` enum loses both `'http'`
- * and `'mcpx'` — every remote row is `'downloader'` now, since even
- * the plain-HTTP fallback is wrapped by the generic-web downloader.
+ * to `'downloader'` with `downloader=NULL`; their stored `content`
+ * stays readable. On the next refresh a NULL-downloader remote row
+ * falls back to URL-based dispatch against the plugin registry (see
+ * `pickPluginForRefresh` in `refresh/runner.ts`) — re-routed cleanly if a
+ * plugin now claims the URL, surfaced as a HelpfulError otherwise. The
+ * `fetcher` enum loses both `'http'` and `'mcpx'` — every remote row is
+ * `'downloader'` now.
  *
  * The `current_files` view is `SELECT f.* FROM files f`, so it pins the
  * old column shape; we drop and recreate it (and the dependent

@@ -1,6 +1,6 @@
 import { availableParallelism } from "node:os";
 import { z } from "zod";
-import { DEFAULTS, defaultMembotHome, EMBEDDING_DIMENSION, EMBEDDING_MODEL } from "../constants.ts";
+import { DEFAULTS, defaultMembotHome, EMBEDDING_DIMENSION, EMBEDDING_MODEL, RERANK_MODEL } from "../constants.ts";
 // Side-effect import: populate the source-plugin registry so
 // `buildDownloadersConfigSchema()` can see every plugin's slice.
 import "../ingest/sources/index.ts";
@@ -22,6 +22,12 @@ export const ChunkerConfigSchema = z.object({
 	mode: z.enum(["deterministic", "llm"]).default(DEFAULTS.CHUNKER_MODE),
 	target_chars: z.number().int().positive().default(DEFAULTS.CHUNKER_TARGET_CHARS),
 	max_chars: z.number().int().positive().default(DEFAULTS.CHUNKER_MAX_CHARS),
+	markdown_aware: z
+		.boolean()
+		.default(true)
+		.describe(
+			"Split markdown at heading boundaries (fence-safe) and embed a heading breadcrumb per chunk. Set false to fall back to plain paragraph/line splitting.",
+		),
 });
 
 export const ConvertersConfigSchema = z.object({
@@ -104,6 +110,24 @@ export const SearchConfigSchema = z.object({
 		.default(0.6)
 		.describe(
 			"RRF weight on the semantic list (keyword gets 1 - this). 0.5 = equal, >0.5 favors semantic, <0.5 favors keyword.",
+		),
+	rerank: z
+		.boolean()
+		.default(false)
+		.describe(
+			"Rescore the fused candidate list with a local cross-encoder before returning results. Higher precision, adds query latency (first call also downloads the model). Per-query override: the `rerank` search parameter.",
+		),
+	rerank_model: z
+		.string()
+		.default(RERANK_MODEL)
+		.describe("Cross-encoder model used when reranking (a transformers.js-compatible sequence-classification model)."),
+	max_per_file: z
+		.number()
+		.int()
+		.min(0)
+		.default(3)
+		.describe(
+			"Max hits from a single logical_path in results (0 = unlimited). Remaining slots backfill by score, so a single-file search still returns `limit` hits.",
 		),
 });
 

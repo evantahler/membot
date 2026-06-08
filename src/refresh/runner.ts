@@ -300,7 +300,7 @@ async function runPipelineForRefresh(
 	const description = await describe(p.logicalPath, p.mime, markdown, ctx.config.llm);
 	onPhase?.("chunking");
 	const chunks = chunkDeterministic(markdown, ctx.config.chunker);
-	const searchTexts = chunks.map((c) => buildSearchText(p.logicalPath, description, c.content));
+	const searchTexts = chunks.map((c) => buildSearchText(p.logicalPath, description, c.content, c.context));
 	const embeddings = await embed(searchTexts, ctx.config.embedding_model, {
 		onProgress: (done, total) => onPhase?.(`embedding ${done}/${total}`),
 	});
@@ -338,8 +338,9 @@ async function runPipelineForRefresh(
 		chunks.map((c, i) => ({
 			chunk_index: c.index,
 			chunk_content: c.content,
-			search_text: searchTexts[i] ?? buildSearchText(p.logicalPath, description, c.content),
+			search_text: searchTexts[i] ?? buildSearchText(p.logicalPath, description, c.content, c.context),
 			embedding: embeddings[i] ?? new Array(embeddings[0]?.length ?? 0).fill(0),
+			context: c.context ?? null,
 		})),
 	);
 

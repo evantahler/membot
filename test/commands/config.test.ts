@@ -15,6 +15,7 @@ import {
 } from "../../src/commands/config.ts";
 import { loadConfig } from "../../src/config/loader.ts";
 import { MembotConfigSchema } from "../../src/config/schemas.ts";
+import { DEFAULTS } from "../../src/constants.ts";
 import { isHelpfulError } from "../../src/errors.ts";
 
 let tmp: string;
@@ -205,7 +206,7 @@ describe("membot config", () => {
 			await captureStdout(() => runSet("chunker.target_chars", "800"));
 			await captureStdout(() => runUnset("chunker.target_chars"));
 			const { config } = await loadConfig();
-			expect(config.chunker.target_chars).toBe(4000);
+			expect(config.chunker.target_chars).toBe(DEFAULTS.CHUNKER_TARGET_CHARS);
 		});
 	});
 

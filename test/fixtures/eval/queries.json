@@ -1,0 +1,162 @@
+[
+	{
+		"query": "why does my bread come out wet and dense inside",
+		"expect": "recipes/sourdough.md",
+		"kind": "deep",
+		"answer": "underproofed bulk"
+	},
+	{
+		"query": "temple lodging on mount koya with monk dinner",
+		"expect": "travel/japan-2026-itinerary.md",
+		"kind": "deep",
+		"answer": "shojin ryori"
+	},
+	{
+		"query": "how much memory does binary quantization save and what recall does it keep",
+		"expect": "research/embedding-model-notes.md",
+		"kind": "deep",
+		"answer": "96.1%"
+	},
+	{
+		"query": "what did we change about connection pooling after the checkout outage",
+		"expect": "engineering/incident-2026-01-checkout.md",
+		"kind": "deep",
+		"answer": "pool_mode=transaction"
+	},
+	{
+		"query": "plans to let technicians keep working without internet",
+		"expect": "product/roadmap-2026.md",
+		"kind": "deep",
+		"answer": "last-write-wins"
+	},
+	{
+		"query": "how long until customer data is fully gone after cancelling",
+		"expect": "legal/dpa-summary.md",
+		"kind": "deep",
+		"answer": "180 days"
+	},
+	{
+		"query": "when do new engineers start taking pages",
+		"expect": "ops/onboarding-runbook.md",
+		"kind": "deep",
+		"answer": "shadow on-call"
+	},
+	{
+		"query": "how long do login sessions last before timing out",
+		"expect": "engineering/auth-service.md",
+		"kind": "deep",
+		"answer": "12 hours of inactivity"
+	},
+	{
+		"query": "detecting stolen refresh tokens being used twice",
+		"expect": "engineering/auth-service.md",
+		"kind": "deep",
+		"answer": "revokes the entire token family"
+	},
+	{
+		"query": "how often do workload certificates rotate",
+		"expect": "engineering/service-auth.md",
+		"kind": "deep",
+		"answer": "4-hour expiry"
+	},
+	{
+		"query": "why did my focaccia come out dense",
+		"expect": "recipes/focaccia.md",
+		"kind": "deep",
+		"answer": "under-risen morning bulk"
+	},
+	{
+		"query": "tips for driving and parking near florence",
+		"expect": "travel/italy-2025-recap.md",
+		"kind": "deep",
+		"answer": "Villa Costanza"
+	},
+	{
+		"query": "where was the best cheap lunch in rome",
+		"expect": "travel/italy-2025-recap.md",
+		"kind": "deep",
+		"answer": "Testaccio market"
+	},
+	{
+		"query": "canary analysis gaps for result quality regressions",
+		"expect": "engineering/incident-2026-03-search.md",
+		"kind": "deep",
+		"answer": "Zero-results-rate"
+	},
+	{
+		"query": "how long did we keep writing to both database layouts",
+		"expect": "engineering/platform-history.md",
+		"kind": "deep",
+		"answer": "14 months"
+	},
+	{
+		"query": "why was the invoicing system rollout reverted",
+		"expect": "engineering/platform-history.md",
+		"kind": "deep",
+		"answer": "rolled back twice"
+	},
+	{
+		"query": "what messaging system replaced the homegrown redis bus",
+		"expect": "engineering/platform-history.md",
+		"kind": "deep",
+		"answer": "Kafka"
+	},
+	{
+		"query": "how fresh are catalog changes in product search",
+		"expect": "engineering/platform-history.md",
+		"kind": "deep",
+		"answer": "5-minute batch"
+	},
+	{
+		"query": "worst recorded replication lag into the lakehouse",
+		"expect": "engineering/platform-history.md",
+		"kind": "deep",
+		"answer": "38 minutes"
+	},
+	{ "query": "how do users sign in to our products", "expect": "engineering/auth-service.md", "kind": "paraphrase" },
+	{
+		"query": "how do internal services authenticate to each other",
+		"expect": "engineering/service-auth.md",
+		"kind": "paraphrase"
+	},
+	{ "query": "undoing a bad production release", "expect": "engineering/deploy-pipeline.md", "kind": "paraphrase" },
+	{
+		"query": "what caused the empty search results outage",
+		"expect": "engineering/incident-2026-03-search.md",
+		"kind": "paraphrase",
+		"answer": "tokenizer configuration"
+	},
+	{
+		"query": "the experiment that nudged buyers toward the more expensive plan",
+		"expect": "product/pricing-experiments.md",
+		"kind": "paraphrase"
+	},
+	{ "query": "cost overruns in our cloud bill", "expect": "finance/q3-budget-review.md", "kind": "paraphrase" },
+	{ "query": "bread baking schedule for busy weeknights", "expect": "recipes/sourdough.md", "kind": "paraphrase" },
+	{ "query": "flat italian bread with olive oil and dimples", "expect": "recipes/focaccia.md", "kind": "paraphrase" },
+	{
+		"query": "trip plan for tokyo and kyoto in spring",
+		"expect": "travel/japan-2026-itinerary.md",
+		"kind": "paraphrase"
+	},
+	{
+		"query": "phishing resistant credentials for employees",
+		"expect": "engineering/auth-service.md",
+		"kind": "paraphrase"
+	},
+	{ "query": "what is our error response format", "expect": "engineering/api-style-guide.md", "kind": "paraphrase" },
+	{ "query": "helm rollback shop-api", "expect": "engineering/deploy-pipeline.md", "kind": "keyword" },
+	{
+		"query": "pool_mode=transaction pgbouncer",
+		"expect": "engineering/incident-2026-01-checkout.md",
+		"kind": "keyword"
+	},
+	{ "query": "Idempotency-Key header", "expect": "engineering/api-style-guide.md", "kind": "keyword" },
+	{ "query": "WireGuard corpnet setup", "expect": "ops/onboarding-runbook.md", "kind": "keyword" },
+	{ "query": "gk_session cookie attributes", "expect": "engineering/auth-service.md", "kind": "keyword" },
+	{ "query": "Eko-in shukubo booking", "expect": "travel/japan-2026-itinerary.md", "kind": "keyword" },
+	{ "query": "meshctl policy explain", "expect": "engineering/service-auth.md", "kind": "keyword" },
+	{ "query": "the DPA summary", "expect": "legal/dpa-summary.md", "kind": "meta" },
+	{ "query": "API style guide", "expect": "engineering/api-style-guide.md", "kind": "meta" },
+	{ "query": "2026 product roadmap", "expect": "product/roadmap-2026.md", "kind": "meta" }
+]

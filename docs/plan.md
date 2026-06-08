@@ -283,9 +283,16 @@ CREATE TABLE chunks (
   version_id    TIMESTAMP NOT NULL,
   chunk_index   INTEGER NOT NULL,
   chunk_content TEXT NOT NULL,                          -- raw body (clean snippets)
-  search_text   TEXT NOT NULL,                          -- '<path>\n<description>\n\n<body>' (embedded + FTS)
+  search_text   TEXT NOT NULL,                          -- '<path>\n<description>\n<breadcrumb>\n\n<body>' (embedded + FTS)
   embedding     FLOAT[384] NOT NULL,
+  context       TEXT,                                   -- heading breadcrumb ('Doc > Section'), NULL for non-markdown / preamble
   PRIMARY KEY (logical_path, version_id, chunk_index)
+);
+
+CREATE TABLE meta (                                     -- store-level key/value facts (not rows)
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,                             -- e.g. embedding_revision = '2'
+  updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE VIEW current_files   AS …;  -- latest non-tombstoned per logical_path
@@ -295,6 +302,40 @@ CREATE VIEW current_chunks  AS …;
 Migrations live in `src/db/migrations/`; every applied migration logs
 an `info` line on first open so users can see what changed across
 upgrades.
+
+`meta.embedding_revision` tracks the embedding scheme (pooling mode +
+chunk sizing + `search_text` shape) the stored vectors were built under.
+A fresh DB is seeded at the current revision; an upgrade that changes the
+scheme bumps the code constant (`EMBEDDING_REVISION`) so search warns once
+and the user runs `membot reindex --embeddings` to re-embed in place.
+
+## Search
+
+Three-stage pipeline: **retrieve → fuse → (optionally) rerank**, then
+diversify.
+
+1. **Retrieve** (`semantic.ts` + `keyword.ts`). The semantic side embeds
+   the query with the same bi-encoder used at ingest and ranks chunks by
+   cosine distance over `current_chunks.embedding`. A bi-encoder encodes
+   the query and each chunk *independently* into fixed 384-dim vectors, so
+   retrieval is a cheap precomputed-vector scan over the whole store — but
+   the model never sees a query and a chunk together, which caps precision.
+   The keyword side is DuckDB FTS BM25 over `search_text`. Each returns a
+   ranked list.
+2. **Fuse** (`hybrid.ts`). Reciprocal-rank fusion merges the two lists
+   (weighted by `search.semantic_weight`); snippets are centered on the
+   matched query terms; results are capped per file (`search.max_per_file`)
+   with backfill so the caller still gets `limit` hits.
+3. **Rerank** (`rerank.ts`, opt-in). A **cross-encoder** runs the query and
+   one candidate chunk through the model *jointly* and emits a single
+   relevance score. Joint attention captures relevance a bi-encoder's
+   independent encoding can't, but it can't be precomputed — one forward
+   pass per `(query, chunk)` pair — so it's run only over the fused
+   shortlist (top ~30), not the store. This retrieve-then-rerank split buys
+   bi-encoder recall over everything plus cross-encoder precision on the
+   finalists; it most helps hard/ambiguous queries where several chunks are
+   topically close. Off by default (latency + a first-call model download);
+   toggled by `search.rerank` or the per-query `--rerank` / MCP `rerank`.
 
 ## Project layout
 
@@ -317,7 +358,7 @@ src/
     login.ts            # prints `membot config set` instructions for every api_key source
     serve.ts reindex.ts config.ts skill.ts ...
   config/               # zod schema + loader (~/.membot/config.json)
-  db/                   # DuckDB connection, migrations, files.ts, chunks.ts, blobs.ts
+  db/                   # DuckDB connection, migrations, files.ts, chunks.ts, blobs.ts, meta.ts (embedding_revision)
   ingest/
     source-resolver.ts  # file / dir / glob / url / inline detection
     local-reader.ts
@@ -330,15 +371,17 @@ src/
       registry.ts       # registerSource, findSourceForInput, collectLoginEntries
       types.ts          # SourcePlugin, PluginCtx, LoginEntry shapes
       github.ts linear.ts apple-notes.ts
-  search/               # semantic.ts, keyword.ts, hybrid.ts (weighted RRF; semantic gets BGE query prefix)
+  search/               # semantic.ts, keyword.ts, hybrid.ts (weighted RRF + per-file diversity + centered snippets), rerank.ts (local cross-encoder)
   refresh/              # runner.ts, scheduler.ts (daemon)
   mcp/                  # server.ts, instructions.ts
   output/               # tty.ts, logger.ts, progress.ts, formatter.ts
   errors.ts             # HelpfulError — the only error type allowed in handlers
 test/
+  fixtures/eval/        # corpus + golden queries for the search-quality eval
 patches/                # @huggingface/transformers WASM patch
 scripts/
   apply-patches.sh
+  eval-search.ts        # search-quality eval harness (Recall@k / MRR / answer@3); `--ci` gates CI
 docs/plan.md            # this file
 ```
 
@@ -350,7 +393,7 @@ membot add <sources...> [-p <path>] [-r <dur>] [--downloader <name>] [-m <note>]
 membot ls [prefix]
 membot tree [prefix] [--max-depth N] [--max-items N]
 membot read <path> [--version <id>] [--bytes]
-membot search <query> [--include-history]
+membot search <query> [--rerank] [--include-history]
 membot info <path> [--version <id>]
 membot versions <path>
 membot diff <path> <a> [b]
@@ -360,7 +403,7 @@ membot rm <paths...>
 membot refresh [path] [--force]
 membot prune --before <ts>
 membot serve [--http <port>] [--watch] [--tick <sec>]
-membot reindex
+membot reindex [--embeddings]
 membot config <get|set|unset|list|path>
 membot skill install [--claude] [--cursor] [--global]
 ```
@@ -376,7 +419,7 @@ or when `CI=true`.
   "data_dir": "~/.membot",
   "embedding_model": "Xenova/bge-small-en-v1.5",
   "embedding_dimension": 384,
-  "chunker": { "mode": "deterministic", "target_chars": 4000, "max_chars": 15000 },
+  "chunker": { "mode": "deterministic", "target_chars": 1400, "max_chars": 1800, "markdown_aware": true },  // sizes budgeted against bge-small's 512-token window; markdown_aware splits at headings + adds breadcrumbs
   "embedding": { "workers": null },                          // embed-subprocess pool size; null → cpus()-1, 1 runs inline
   "converters": { "max_inline_image_captions": 20 },         // per-doc cap on vision captions for embedded images
   "ingest": { "worker_concurrency": null },                  // pMap orchestration parallelism for the ingest pipeline; null → cpus()-1, max MAX_WORKERS=8
@@ -392,7 +435,12 @@ or when `CI=true`.
     "linear": { "api_key": "" },                              // linear.app/settings/api
     "github": { "api_key": "" }                               // env: GITHUB_TOKEN; or github.com/settings/tokens
   },
-  "search": { "semantic_weight": 0.6 },                       // RRF weight on the semantic list (keyword gets 1 - this); 0.5 = equal, 0 = keyword-only, 1 = semantic-only
+  "search": {
+    "semantic_weight": 0.6,                                   // RRF weight on the semantic list (keyword gets 1 - this); 0.5 = equal, 0 = keyword-only, 1 = semantic-only
+    "rerank": false,                                          // rescore fused candidates with a local cross-encoder (per-query: --rerank / MCP rerank param)
+    "rerank_model": "Xenova/ms-marco-MiniLM-L-6-v2",          // cross-encoder used when rerank is on
+    "max_per_file": 3                                         // cap hits per logical_path in results (0 = unlimited; backfills to keep `limit` hits)
+  },
   "daemon": { "tick_interval_sec": 60 },
   "default_refresh_frequency_sec": null
 }
@@ -455,7 +503,16 @@ with file mode `0600` and masked by `membot config list`.
   `HelpfulError` with a concrete actionable hint. Wrap external errors
   with `asHelpful(cause, context, hint, kind)`.
 - Embedding `chunk_content` raw. Always embed `search_text` (the
-  prepended `<path>\n<description>\n\n<body>`).
+  prepended `<path>\n<description>\n<breadcrumb>\n\n<body>`, with the
+  description capped so the whole string fits bge-small's 512-token
+  window).
+- Mean-pooling a BGE model. BGE-v1.5 is trained for CLS pooling
+  (`resolvePooling` in `embedder.ts`); mean pooling silently degrades
+  retrieval. Sizing chunks past the 512-token window is the same class
+  of bug — the tail of the chunk never reaches the vector.
+- Changing the embedding scheme (pooling / chunk sizing / `search_text`
+  shape) without bumping `EMBEDDING_REVISION` and adding a history line.
+  The bump is what tells existing stores to `reindex --embeddings`.
 - A separate `membot_read_blob` tool. Bytes are reachable via
   `membot_read bytes=true`. One read tool, one mental model.
 - Defining a tool description in two places. If you're writing copy
