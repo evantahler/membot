@@ -309,6 +309,34 @@ A fresh DB is seeded at the current revision; an upgrade that changes the
 scheme bumps the code constant (`EMBEDDING_REVISION`) so search warns once
 and the user runs `membot reindex --embeddings` to re-embed in place.
 
+## Search
+
+Three-stage pipeline: **retrieve → fuse → (optionally) rerank**, then
+diversify.
+
+1. **Retrieve** (`semantic.ts` + `keyword.ts`). The semantic side embeds
+   the query with the same bi-encoder used at ingest and ranks chunks by
+   cosine distance over `current_chunks.embedding`. A bi-encoder encodes
+   the query and each chunk *independently* into fixed 384-dim vectors, so
+   retrieval is a cheap precomputed-vector scan over the whole store — but
+   the model never sees a query and a chunk together, which caps precision.
+   The keyword side is DuckDB FTS BM25 over `search_text`. Each returns a
+   ranked list.
+2. **Fuse** (`hybrid.ts`). Reciprocal-rank fusion merges the two lists
+   (weighted by `search.semantic_weight`); snippets are centered on the
+   matched query terms; results are capped per file (`search.max_per_file`)
+   with backfill so the caller still gets `limit` hits.
+3. **Rerank** (`rerank.ts`, opt-in). A **cross-encoder** runs the query and
+   one candidate chunk through the model *jointly* and emits a single
+   relevance score. Joint attention captures relevance a bi-encoder's
+   independent encoding can't, but it can't be precomputed — one forward
+   pass per `(query, chunk)` pair — so it's run only over the fused
+   shortlist (top ~30), not the store. This retrieve-then-rerank split buys
+   bi-encoder recall over everything plus cross-encoder precision on the
+   finalists; it most helps hard/ambiguous queries where several chunks are
+   topically close. Off by default (latency + a first-call model download);
+   toggled by `search.rerank` or the per-query `--rerank` / MCP `rerank`.
+
 ## Project layout
 
 ```
