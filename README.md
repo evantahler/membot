@@ -176,7 +176,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot prune --before <ts>`    | Permanently drop non-current versions older than cutoff (irreversible). Add `--strip-blob-bytes` to also retroactively NULL out bytes for blobs that exceed the current `blobs.max_size_bytes` / `blobs.skip_mime_types` policy. |
 | `membot serve`                  | Run the MCP server (stdio default; `--http <port>` for HTTP)                      |
 | `membot logs`                   | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`) — `--follow`, `--lines <N>`, `--raw` |
-| `membot reindex`                | Rebuild the FTS keyword index over current chunks. `--embeddings` also re-chunks + re-embeds every version from stored content and bumps the store's embedding revision — run it once after upgrading across an embedding-scheme change |
+| `membot reindex`                | Rebuild the FTS keyword index over current chunks. `--embeddings` also re-chunks + re-embeds every version from stored content and bumps the store's embedding revision — run it once after upgrading across an embedding-scheme change. Add `--recovery` to first rebuild the chunks table's primary-key index if `--embeddings` ever crashes with a DuckDB `Failed to delete all rows from index` error |
 | `membot config <subcommand>`    | Get / set values in `~/.membot/config.json` (`get`, `set`, `unset`, `list`, `path`) |
 | `membot router <subcommand>`    | Manage user-defined URL routers (`add`, `list`, `remove`, `test`) — see [Custom URL routers](#custom-url-routers) |
 | `membot sources`                | List every registered source plugin — URL/scheme patterns, auth requirements, and example inputs |
