@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { EMBEDDING_REVISION } from "../constants.ts";
 import type { AppContext } from "../context.ts";
 import { buildContext, closeContext, resolveEmbeddingWorkers } from "../context.ts";
-import { deleteChunksForVersion, insertChunksForVersion, rebuildFts } from "../db/chunks.ts";
+import { deleteChunksForVersion, insertChunksForVersion, rebuildChunksTable, rebuildFts } from "../db/chunks.ts";
 import { META_EMBEDDING_REVISION, setMeta } from "../db/meta.ts";
 import { asHelpful } from "../errors.ts";
 import { chunkDeterministic } from "../ingest/chunker.ts";
@@ -25,6 +25,13 @@ import { logger } from "../output/logger.ts";
  * shape) — old vectors are incomparable with new query vectors, so search
  * warns until this runs. Content, descriptions, and version history are
  * untouched; only the derived chunk rows are regenerated.
+ *
+ * `--recovery`: before anything else, rebuild the `chunks` table to regenerate
+ * its primary-key index. Use this if a plain `reindex --embeddings` crashes
+ * with a DuckDB `Failed to delete all rows from index` error (which surfaces
+ * as a hard `panic: A C++ exception occurred` / SIGTRAP): the store's chunk
+ * index has drifted out of sync with the table, and the per-version DELETE in
+ * the re-embed loop trips it. The rebuild preserves every chunk row exactly.
  */
 export function registerReindexCommand(program: Command): void {
 	program
@@ -34,9 +41,17 @@ export function registerReindexCommand(program: Command): void {
 			"--embeddings",
 			"Also re-chunk + re-embed every version from stored content (run after upgrading across an embedding-revision bump)",
 		)
-		.action(async (opts: { embeddings?: boolean }) => {
+		.option(
+			"--recovery",
+			"Rebuild the chunks table first to repair a corrupted primary-key index (use if reindex --embeddings crashes with a DuckDB index error)",
+		)
+		.action(async (opts: { embeddings?: boolean; recovery?: boolean }) => {
 			const ctx = await buildContext({});
 			try {
+				if (opts.recovery) {
+					const { rows } = await rebuildChunksTable(ctx.db);
+					logger.info(`reindex: chunks table rebuilt (${rows} chunks) — primary-key index regenerated`);
+				}
 				if (opts.embeddings) {
 					await reembedAllVersions(ctx);
 				}
@@ -44,11 +59,20 @@ export function registerReindexCommand(program: Command): void {
 				switch (result.kind) {
 					case "rebuilt":
 						logger.info(`reindex: FTS index rebuilt over ${result.chunk_count} chunks`);
-						console.log(JSON.stringify({ ok: true, chunk_count: result.chunk_count, embeddings: !!opts.embeddings }));
+						console.log(
+							JSON.stringify({
+								ok: true,
+								chunk_count: result.chunk_count,
+								embeddings: !!opts.embeddings,
+								recovery: !!opts.recovery,
+							}),
+						);
 						break;
 					case "no_chunks":
 						logger.info("reindex: no chunks to index — run `membot add <path>` to ingest content first");
-						console.log(JSON.stringify({ ok: true, chunk_count: 0, embeddings: !!opts.embeddings }));
+						console.log(
+							JSON.stringify({ ok: true, chunk_count: 0, embeddings: !!opts.embeddings, recovery: !!opts.recovery }),
+						);
 						break;
 					case "extension_unavailable":
 						logger.warn(

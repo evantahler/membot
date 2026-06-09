@@ -223,7 +223,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 | `membot prune --before <ts>`          | Permanently drop non-current versions older than cutoff (irreversible). Add `--strip-blob-bytes` to retroactively NULL out bytes for blobs that exceed current `blobs.max_size_bytes` / `blobs.skip_mime_types`. |
 | `membot serve`                        | Start MCP server (stdio default, `--http <port>` for HTTP)                     |
 | `membot logs`                         | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`); `--follow`, `--lines <N>`, `--raw` for JSON |
-| `membot reindex`                      | Rebuild the FTS keyword index over current chunks; `--embeddings` re-chunks + re-embeds every version and bumps the embedding revision (run once after upgrading across an embedding-scheme change) |
+| `membot reindex`                      | Rebuild the FTS keyword index over current chunks; `--embeddings` re-chunks + re-embeds every version and bumps the embedding revision (run once after upgrading across an embedding-scheme change); `--recovery` first rebuilds the chunks table's primary-key index (use if `--embeddings` crashes with a DuckDB index error) |
 | `membot config <subcommand>`          | Host-side config management (`get` / `set` / `unset` / `list` / `path`). **Don't run** — this is for the human operator, not for agents |
 | `membot router <subcommand>`          | Manage user-defined URL routers (`add` / `list` / `remove` / `test`). Useful when the user wants `membot add <url>` to delegate to an external CLI for fetch (e.g. mcpx for Google Docs). **Suggest, don't run unilaterally** |
 | `membot login`                        | Print `membot config set` instructions for API-key services (GitHub, Linear). **Don't run** — this is for the human operator |
@@ -246,6 +246,7 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 - **Search returns nothing** → Confirm the file ingested with `membot info <path>`; if needed, run `membot reindex` to rebuild the FTS keyword index.
 - **Stale results after manual DB edits** → `membot reindex`.
 - **"embeddings were built under revision N" warning on search** → the store was embedded by an older membot; semantic quality is degraded. Run `membot reindex --embeddings` once to re-embed every version and clear it.
+- **`reindex --embeddings` crashes with `panic: A C++ exception occurred` or a DuckDB `Failed to delete all rows from index` error** → the chunks table's primary-key index has drifted out of sync with the data. Re-run as `membot reindex --embeddings --recovery`; it rebuilds the chunks table (preserving every row) to regenerate a clean index before re-embedding.
 - **Two paths point at the same content** → `membot mv` doesn't merge; tombstone one with `membot rm`.
 
 ## Configuration

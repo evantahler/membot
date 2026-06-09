@@ -60,7 +60,7 @@ membot_refresh ──► re-read source ──► sha256 compare
                           (status only)        (creates new version_id)
 ```
 
-For directory/glob ingests, the pipeline runs concurrently inside a worker pool. Each pMap worker owns one file end-to-end (read → unchanged check → convert → describe → chunk → embed → persist); persist is gated by an AsyncMutex because all workers share one DuckDB connection and DuckDB rejects nested BEGINs. The embed step is offloaded to a `Bun.Worker` pool — each worker hosts its own transformers ONNX session in a separate OS thread, giving real parallelism on the CPU-bound WASM step. Worker count defaults to `cpus - 1`, capped at `MAX_WORKERS = 8`, and is further clamped by entry count so a 3-file batch doesn't spawn 8 threads. One `rebuildFts` runs after the pool drains. The TTY shows a multi-line spinner: top line = bar + counts + ETA + cumulative chunks; below = one row per active worker showing `path — current step`.
+For directory/glob ingests, the pipeline runs concurrently inside a worker pool. Each pMap worker owns one file end-to-end (read → unchanged check → convert → describe → chunk → embed → persist); persist is gated by an AsyncMutex because all workers share one DuckDB connection and DuckDB rejects nested BEGINs. The embed step is offloaded to a pool of `Bun.spawn` subprocesses — each worker is a separate OS process that re-runs the membot CLI under the `__embed_worker` sentinel, hosts its own transformers ONNX session, and exchanges newline-delimited JSON over stdin/stdout, giving real parallelism on the CPU-bound WASM step. Worker count defaults to `cpus - 1`, capped at `MAX_WORKERS = 8`, and is further clamped by entry count so a 3-file batch doesn't spawn 8 workers. One `rebuildFts` runs after the pool drains. The TTY shows a multi-line spinner: top line = bar + counts + ETA + cumulative chunks; below = one row per active worker showing `path — current step`.
 
 The downloader registry maps URLs to a tactic:
 
@@ -95,7 +95,7 @@ src/
   commands/             # CLI-only commands with no MCP equivalent (serve, reindex, login)
   config/               # zod schema + loader (~/.membot/config.json)
   db/                   # DuckDB connection, migrations, files.ts, chunks.ts
-  ingest/               # source-resolver (file/dir/glob/url/inline), local-reader, fetcher, chunker, embedder, describer, search-text, concurrency (pMap + AsyncMutex), embed-pool / embed-worker (Bun.Worker pool for parallel embed), converter/ (pdf/docx/html/image/text/llm), sources/ (per-service: github, linear, apple-notes)
+  ingest/               # source-resolver (file/dir/glob/url/inline), local-reader, fetcher, chunker, embedder, describer, search-text, concurrency (pMap + AsyncMutex), embedder-pool / embed-worker (Bun.spawn subprocess pool for parallel embed), converter/ (pdf/docx/html/image/text/llm), sources/ (per-service: github, linear, apple-notes)
   search/               # semantic.ts, keyword.ts, hybrid.ts (RRF)
   refresh/              # runner.ts (per-row), scheduler.ts (daemon)
   mcp/                  # server.ts, instructions.ts

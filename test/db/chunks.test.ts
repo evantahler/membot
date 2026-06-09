@@ -8,6 +8,7 @@ import {
 	deleteChunksForVersion,
 	insertChunksForVersion,
 	listChunksForVersion,
+	rebuildChunksTable,
 	rebuildFts,
 } from "../../src/db/chunks.ts";
 import type { DbConnection } from "../../src/db/connection.ts";
@@ -67,6 +68,69 @@ describe("chunks CRUD", () => {
 		await deleteChunksForVersion(db, "p.md", v);
 		const chunks = await listChunksForVersion(db, "p.md", v);
 		expect(chunks).toEqual([]);
+	});
+
+	test("rebuildChunksTable preserves every row exactly and keeps the table usable", async () => {
+		// Two versions of two paths, varying chunk counts, so the swap has to
+		// carry real PK spread + the context column through faithfully.
+		const v1 = millisIso(1_700_000_000_000);
+		const v2 = millisIso(1_700_000_100_000);
+		await insertVersion(db, { logical_path: "a.md", version_id: v1, source_type: "local", content: "x" });
+		await insertVersion(db, { logical_path: "b.md", version_id: v2, source_type: "local", content: "y" });
+		await insertChunksForVersion(db, "a.md", v1, [
+			{
+				chunk_index: 0,
+				chunk_content: "a0",
+				search_text: "a.md\n\n\na0",
+				embedding: fakeEmbedding(1),
+				context: "A > S",
+			},
+			{ chunk_index: 1, chunk_content: "a1", search_text: "a.md\n\n\na1", embedding: fakeEmbedding(2) },
+		]);
+		await insertChunksForVersion(db, "b.md", v2, [
+			{ chunk_index: 0, chunk_content: "b0", search_text: "b.md\n\n\nb0", embedding: fakeEmbedding(3) },
+		]);
+
+		const before = await db.queryGet<{ n: number }>(`SELECT COUNT(*) AS n FROM chunks`);
+		const result = await rebuildChunksTable(db);
+		expect(result.rows).toBe(3);
+		const after = await db.queryGet<{ n: number }>(`SELECT COUNT(*) AS n FROM chunks`);
+		expect(Number(after?.n)).toBe(Number(before?.n));
+
+		// Row contents survive verbatim, including the context breadcrumb.
+		const a = await listChunksForVersion(db, "a.md", v1);
+		expect(a).toHaveLength(2);
+		expect(a[0]?.chunk_content).toBe("a0");
+		expect(a[0]?.context).toBe("A > S");
+		expect(a[0]?.embedding.length).toBe(EMBEDDING_DIMENSION);
+		expect(a[1]?.context).toBeNull();
+
+		// current_chunks view was recreated and still resolves.
+		const view = await db.queryGet<{ n: number }>(`SELECT COUNT(*) AS n FROM current_chunks`);
+		expect(Number(view?.n)).toBe(3);
+
+		// The regenerated table is fully functional: delete + insert + FTS.
+		await deleteChunksForVersion(db, "a.md", v1);
+		expect(await listChunksForVersion(db, "a.md", v1)).toEqual([]);
+		await insertChunksForVersion(db, "b.md", v2, [
+			{ chunk_index: 1, chunk_content: "b1", search_text: "b.md\n\n\nb1", embedding: fakeEmbedding(4) },
+		]);
+		expect(await listChunksForVersion(db, "b.md", v2)).toHaveLength(2);
+		expect((await rebuildFts(db)).kind).toBe("rebuilt");
+	});
+
+	test("rebuildChunksTable is a no-op-safe on an empty store and idempotent", async () => {
+		const first = await rebuildChunksTable(db);
+		expect(first.rows).toBe(0);
+		// Running it again must not throw and must keep the schema intact.
+		const second = await rebuildChunksTable(db);
+		expect(second.rows).toBe(0);
+		const v = millisIso(1_700_000_000_000);
+		await insertVersion(db, { logical_path: "p.md", version_id: v, source_type: "local", content: "x" });
+		await insertChunksForVersion(db, "p.md", v, [
+			{ chunk_index: 0, chunk_content: "a", search_text: "p.md\n\n\na", embedding: fakeEmbedding(1) },
+		]);
+		expect(await listChunksForVersion(db, "p.md", v)).toHaveLength(1);
 	});
 
 	test("rebuildFts returns no_chunks on empty store", async () => {

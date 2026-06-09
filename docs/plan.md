@@ -403,7 +403,7 @@ membot rm <paths...>
 membot refresh [path] [--force]
 membot prune --before <ts>
 membot serve [--http <port>] [--watch] [--tick <sec>]
-membot reindex [--embeddings]
+membot reindex [--embeddings] [--recovery]
 membot config <get|set|unset|list|path>
 membot skill install [--claude] [--cursor] [--global]
 ```
