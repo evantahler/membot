@@ -399,7 +399,7 @@ membot versions <path>
 membot diff <path> <a> [b]
 membot write <path>
 membot mv <from> <to>
-membot rm <paths...>
+membot rm <paths...> [--force]
 membot refresh [path] [--force]
 membot prune --before <ts>
 membot serve [--http <port>] [--watch] [--tick <sec>]

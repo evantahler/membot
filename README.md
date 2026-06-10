@@ -171,7 +171,7 @@ The skill files describe the discover → ingest → search → read → write w
 | `membot diff <path> <a> [b]`    | Unified diff between two versions                                                 |
 | `membot write <path>`           | Write inline agent-authored markdown as a new version                             |
 | `membot mv <from> <to>`         | Rename a logical_path (history preserved under both)                              |
-| `membot rm <paths...>`          | Tombstone one or more logical_paths or globs (e.g. `"docs/**/*.md"`); pass `-r` / `--recursive` to remove a directory prefix; history kept |
+| `membot rm <paths...>`          | Tombstone one or more logical_paths or globs (e.g. `"docs/**/*.md"`); remove a whole subtree with `"dir/**"`; a bare `"*"` / `"**"` clears the **entire** index but requires `-f` / `--force`; quote globs so the shell doesn't expand them; history kept |
 | `membot refresh [path]`         | Re-read source; new version only if bytes changed                                 |
 | `membot prune --before <ts>`    | Permanently drop non-current versions older than cutoff (irreversible). Add `--strip-blob-bytes` to also retroactively NULL out bytes for blobs that exceed the current `blobs.max_size_bytes` / `blobs.skip_mime_types` policy. |
 | `membot serve`                  | Run the MCP server (stdio default; `--http <port>` for HTTP)                      |
