@@ -180,7 +180,7 @@ describe("operations end-to-end lifecycle", () => {
 	});
 
 	test("rm tombstones a path", async () => {
-		const r = await removeOperation.handler({ paths: [dbPath], recursive: false }, ctx);
+		const r = await removeOperation.handler({ paths: [dbPath], force: false }, ctx);
 		expect(r.total).toBe(1);
 		expect(r.ok).toBe(1);
 		expect(r.failed).toBe(0);
@@ -284,7 +284,7 @@ describe("rm variadic + glob", () => {
 	});
 
 	test("rm with a glob removes every matching current file", async () => {
-		const r = await removeOperation.handler({ paths: ["docs/**/*.md"], recursive: false }, ctx2);
+		const r = await removeOperation.handler({ paths: ["docs/**/*.md"], force: false }, ctx2);
 		expect(r.total).toBe(3);
 		expect(r.ok).toBe(3);
 		expect(r.failed).toBe(0);
@@ -303,7 +303,7 @@ describe("rm variadic + glob", () => {
 
 		// "x.md" is a literal match; "*.md" is a glob that ALSO matches it.
 		// The dedup should mean x.md is tombstoned exactly once.
-		const r = await removeOperation.handler({ paths: ["x.md", "*.md"], recursive: false }, ctx2);
+		const r = await removeOperation.handler({ paths: ["x.md", "*.md"], force: false }, ctx2);
 		// Matches: readme.md + x.md + y.md + z.md (4 unique current paths)
 		expect(r.total).toBe(4);
 		expect(r.ok).toBe(4);
@@ -314,7 +314,7 @@ describe("rm variadic + glob", () => {
 
 	test("rm with a glob that matches nothing throws HelpfulError(not_found)", async () => {
 		try {
-			await removeOperation.handler({ paths: ["does/not/exist/**"], recursive: false }, ctx2);
+			await removeOperation.handler({ paths: ["does/not/exist/**"], force: false }, ctx2);
 			throw new Error("expected throw");
 		} catch (err) {
 			expect(err).toBeInstanceOf(HelpfulError);
@@ -327,7 +327,7 @@ describe("rm variadic + glob", () => {
 	test("rm with a literal that doesn't exist throws HelpfulError(not_found)", async () => {
 		await writeOperation.handler({ logical_path: "still-here.md", content: "# H" }, ctx2);
 		try {
-			await removeOperation.handler({ paths: ["nope.md"], recursive: false }, ctx2);
+			await removeOperation.handler({ paths: ["nope.md"], force: false }, ctx2);
 			throw new Error("expected throw");
 		} catch (err) {
 			expect(err).toBeInstanceOf(HelpfulError);
@@ -335,23 +335,23 @@ describe("rm variadic + glob", () => {
 		}
 	});
 
-	test("rm on a directory prefix without --recursive throws HelpfulError naming --recursive", async () => {
+	test("rm on a bare directory prefix throws not_found and hints the `/**` glob", async () => {
 		await writeOperation.handler({ logical_path: "remotes/docs.google.com/d/abc/title.md", content: "# 1" }, ctx2);
 		await writeOperation.handler({ logical_path: "remotes/docs.google.com/d/def/other.md", content: "# 2" }, ctx2);
 		try {
-			await removeOperation.handler({ paths: ["remotes/docs.google.com"], recursive: false }, ctx2);
+			await removeOperation.handler({ paths: ["remotes/docs.google.com"], force: false }, ctx2);
 			throw new Error("expected throw");
 		} catch (err) {
 			expect(err).toBeInstanceOf(HelpfulError);
 			const helpful = err as HelpfulError;
 			expect(helpful.kind).toBe("not_found");
-			expect(helpful.message).toContain("is a directory");
-			expect(helpful.hint).toContain("--recursive");
+			expect(helpful.message).toContain("no current files match");
+			expect(helpful.hint).toContain("remotes/docs.google.com/**");
 		}
 	});
 
-	test("rm with --recursive tombstones every path under a directory prefix", async () => {
-		const r = await removeOperation.handler({ paths: ["remotes/docs.google.com"], recursive: true }, ctx2);
+	test("rm with a `dir/**` glob tombstones every path under a directory prefix", async () => {
+		const r = await removeOperation.handler({ paths: ["remotes/docs.google.com/**"], force: false }, ctx2);
 		expect(r.total).toBe(2);
 		expect(r.ok).toBe(2);
 		expect(r.failed).toBe(0);
@@ -359,18 +359,18 @@ describe("rm variadic + glob", () => {
 		expect(removedPaths).toEqual(["remotes/docs.google.com/d/abc/title.md", "remotes/docs.google.com/d/def/other.md"]);
 	});
 
-	test("rm with --recursive treats trailing-slash directory identically", async () => {
+	test("rm with a `dir/**` glob handles a trailing-slash-free directory subtree", async () => {
 		await writeOperation.handler({ logical_path: "team/notes/onboarding.md", content: "# A" }, ctx2);
 		await writeOperation.handler({ logical_path: "team/notes/incidents.md", content: "# B" }, ctx2);
-		const r = await removeOperation.handler({ paths: ["team/notes/"], recursive: true }, ctx2);
+		const r = await removeOperation.handler({ paths: ["team/notes/**"], force: false }, ctx2);
 		expect(r.ok).toBe(2);
 		const removedPaths = r.removed.map((e) => e.logical_path).sort();
 		expect(removedPaths).toEqual(["team/notes/incidents.md", "team/notes/onboarding.md"]);
 	});
 
-	test("rm --recursive on a literal that is neither a file nor a directory prefix still errors", async () => {
+	test("rm on a literal that is neither a file nor a directory prefix errors with the generic hint", async () => {
 		try {
-			await removeOperation.handler({ paths: ["totally-missing"], recursive: true }, ctx2);
+			await removeOperation.handler({ paths: ["totally-missing"], force: false }, ctx2);
 			throw new Error("expected throw");
 		} catch (err) {
 			expect(err).toBeInstanceOf(HelpfulError);
@@ -378,5 +378,106 @@ describe("rm variadic + glob", () => {
 			expect(helpful.kind).toBe("not_found");
 			expect(helpful.hint).toContain("membot ls");
 		}
+	});
+});
+
+describe("rm match-all + targeted globs", () => {
+	let tmp4: string;
+	let ctx4: AppContext;
+
+	beforeAll(async () => {
+		tmp4 = mkdtempSync(join(tmpdir(), "membot-rmall-"));
+		setEmbeddingCacheDir(join(tmp4, "models"));
+		const config = MembotConfigSchema.parse({ data_dir: tmp4 });
+		const db = await openDb(join(tmp4, "index.duckdb"));
+		ctx4 = {
+			config,
+			dataDir: tmp4,
+			configPath: join(tmp4, "config.json"),
+			db,
+			logger,
+			progress: createProgress(),
+		};
+	}, 120_000);
+
+	afterAll(async () => {
+		await closeContext(ctx4);
+		rmSync(tmp4, { recursive: true, force: true });
+	});
+
+	/** (Re)seed the mixed fixture set used by every case in this block. */
+	async function seed(): Promise<void> {
+		await writeOperation.handler({ logical_path: "path/to/kill/a.md", content: "# A" }, ctx4);
+		await writeOperation.handler({ logical_path: "path/to/kill/b.txt", content: "B" }, ctx4);
+		await writeOperation.handler({ logical_path: "path/to/kill/nested/c.md", content: "# C" }, ctx4);
+		await writeOperation.handler({ logical_path: "path/to/keep/d.md", content: "# D" }, ctx4);
+	}
+
+	/** Sorted list of current (non-tombstoned) logical_paths. */
+	async function currentPaths(): Promise<string[]> {
+		const list = await listOperation.handler({ limit: 100, offset: 0 }, ctx4);
+		return list.entries.map((e) => e.logical_path).sort();
+	}
+
+	test("rm '*' without force refuses and tombstones nothing", async () => {
+		await seed();
+		const before = await currentPaths();
+		try {
+			await removeOperation.handler({ paths: ["*"], force: false }, ctx4);
+			throw new Error("expected throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(HelpfulError);
+			const helpful = err as HelpfulError;
+			expect(helpful.kind).toBe("input_error");
+			expect(helpful.message).toContain("all 4 files");
+			expect(helpful.hint).toContain("--force");
+		}
+		// Nothing was removed.
+		expect(await currentPaths()).toEqual(before);
+	});
+
+	test("rm '*' --force clears the entire index", async () => {
+		const r = await removeOperation.handler({ paths: ["*"], force: true }, ctx4);
+		expect(r.ok).toBe(4);
+		expect(r.failed).toBe(0);
+		expect(await currentPaths()).toEqual([]);
+	});
+
+	test("rm '**' --force also clears everything", async () => {
+		await seed();
+		const r = await removeOperation.handler({ paths: ["**"], force: true }, ctx4);
+		expect(r.ok).toBe(4);
+		expect(await currentPaths()).toEqual([]);
+	});
+
+	test("rm 'path/to/kill/*' removes only one level and keeps siblings + nested", async () => {
+		await seed();
+		// `*` does not cross `/`: matches a.md and b.txt but not nested/c.md.
+		const r = await removeOperation.handler({ paths: ["path/to/kill/*"], force: false }, ctx4);
+		expect(r.ok).toBe(2);
+		expect(r.removed.map((e) => e.logical_path).sort()).toEqual(["path/to/kill/a.md", "path/to/kill/b.txt"]);
+		// nested/c.md and the other directory survive.
+		expect(await currentPaths()).toEqual(["path/to/keep/d.md", "path/to/kill/nested/c.md"]);
+	});
+
+	test("rm 'path/to/kill/**' removes the whole subtree without force", async () => {
+		await seed(); // re-add the full fixture set (new versions supersede prior tombstones)
+		const r = await removeOperation.handler({ paths: ["path/to/kill/**"], force: false }, ctx4);
+		expect(r.removed.map((e) => e.logical_path).sort()).toEqual([
+			"path/to/kill/a.md",
+			"path/to/kill/b.txt",
+			"path/to/kill/nested/c.md",
+		]);
+		expect(await currentPaths()).toEqual(["path/to/keep/d.md"]);
+	});
+
+	test("rm 'path/to/kill/*.md' removes only .md and leaves other extensions", async () => {
+		await seed();
+		const r = await removeOperation.handler({ paths: ["path/to/kill/*.md"], force: false }, ctx4);
+		// Only a.md matches: *.md is one level, so nested/c.md is excluded; b.txt is a different extension.
+		expect(r.ok).toBe(1);
+		expect(r.removed.map((e) => e.logical_path)).toEqual(["path/to/kill/a.md"]);
+		// The .txt sibling, the nested .md, and the other directory all remain.
+		expect(await currentPaths()).toEqual(["path/to/keep/d.md", "path/to/kill/b.txt", "path/to/kill/nested/c.md"]);
 	});
 });
