@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildTree, treeOperation, truncateTree } from "../../src/operations/tree.ts";
+import { buildTree, childrenUnderPrefix, treeOperation, truncateTree } from "../../src/operations/tree.ts";
 
 describe("buildTree", () => {
 	test("groups paths sharing a prefix into a single subtree", () => {
@@ -29,6 +29,34 @@ describe("buildTree", () => {
 	test("ignores empty path inputs", () => {
 		const tree = buildTree(["", "/", "a.md"], 4);
 		expect(tree.map((n) => n.name)).toEqual(["a.md"]);
+	});
+});
+
+describe("childrenUnderPrefix", () => {
+	test("lifts the entries beneath a prefix to the top level (issue #91)", () => {
+		const tree = buildTree(["poems/a.md", "poems/b.md", "poems/sub/c.md", "notes/x.md"], 6);
+		const lifted = childrenUnderPrefix(tree, ["poems"]);
+		// The `poems` segment is gone from the rendered nodes — only its contents remain.
+		expect(lifted.map((n) => n.name)).toEqual(["a.md", "b.md", "sub"]);
+		// Absolute full_path is preserved so agents still get real logical paths.
+		expect(lifted.find((n) => n.name === "a.md")?.full_path).toBe("poems/a.md");
+		expect(lifted.find((n) => n.name === "sub")?.full_path).toBe("poems/sub");
+	});
+
+	test("descends multi-segment prefixes", () => {
+		const tree = buildTree(["a/b/c.md", "a/b/d.md", "a/e.md"], 6);
+		const lifted = childrenUnderPrefix(tree, ["a", "b"]);
+		expect(lifted.map((n) => n.name)).toEqual(["c.md", "d.md"]);
+	});
+
+	test("returns empty when the prefix matches no node", () => {
+		const tree = buildTree(["poems/a.md"], 6);
+		expect(childrenUnderPrefix(tree, ["missing"])).toEqual([]);
+	});
+
+	test("returns empty when the prefix is a leaf file", () => {
+		const tree = buildTree(["poems/a.md"], 6);
+		expect(childrenUnderPrefix(tree, ["poems", "a.md"])).toEqual([]);
 	});
 });
 
