@@ -48,10 +48,17 @@ export const treeOperation = defineOperation({
 		return lines.join("\n");
 	},
 	handler: async (input, ctx) => {
-		const prefix = input.prefix ? normalizeLogicalPath(input.prefix) : undefined;
+		const prefix = input.prefix ? normalizeLogicalPath(input.prefix).replace(/\/+$/, "") || undefined : undefined;
 		const allPaths = await listAllCurrentPaths(ctx.db);
-		const filtered = prefix ? allPaths.filter((p) => p.startsWith(prefix)) : allPaths;
-		const tree = buildTree(filtered, input.max_depth);
+		// Match on a segment boundary so a `poems` prefix doesn't also pull in
+		// siblings like `poems-archive/...`. A path equal to the prefix is a file
+		// living exactly at that logical_path.
+		const filtered = prefix ? allPaths.filter((p) => p === prefix || p.startsWith(`${prefix}/`)) : allPaths;
+		const built = buildTree(filtered, input.max_depth);
+		// In prefix mode the prefix itself is the rendered root, so lift the nodes
+		// beneath it to the top level. Otherwise the prefix segment renders twice —
+		// once as the synthesized root and again as its sole child (issue #91).
+		const tree = prefix ? childrenUnderPrefix(built, prefix.split("/").filter(Boolean)) : built;
 		const truncated = truncateTree(tree, input.max_items);
 		return {
 			root: prefix ?? "/",
@@ -60,6 +67,23 @@ export const treeOperation = defineOperation({
 		};
 	},
 });
+
+/**
+ * Descend a freshly built tree to the node matching `segs` and return its
+ * children, preserving each child's absolute `full_path`. Used by membot_tree's
+ * prefix mode, where the prefix is the rendered root and its contents must sit
+ * at the top level. Returns an empty list when the prefix matches no node or
+ * matches a leaf file with no children.
+ */
+export function childrenUnderPrefix(nodes: TreeNode[], segs: string[]): TreeNode[] {
+	let level = nodes;
+	for (const seg of segs) {
+		const node = level.find((n) => n.name === seg);
+		if (!node?.children?.length) return [];
+		level = node.children;
+	}
+	return level;
+}
 
 /**
  * Build a tree of TreeNode objects from a flat list of `/`-delimited paths.
