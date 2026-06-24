@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { join } from "node:path";
 import { bold, cyan, dim, green, yellow } from "ansis";
 import { program } from "commander";
 import pkg from "../package.json" with { type: "json" };
@@ -12,9 +13,10 @@ import { registerRouterCommand } from "./commands/router.ts";
 import { registerServeCommand } from "./commands/serve.ts";
 import { registerSkillCommand } from "./commands/skill.ts";
 import { registerUpgradeCommand } from "./commands/upgrade.ts";
-import { EMBED_WORKER_SENTINEL } from "./constants.ts";
+import { defaultMembotHome, EMBED_WORKER_SENTINEL, FILES } from "./constants.ts";
 import type { BuildContextOptions } from "./context.ts";
 import { runEmbedWorker } from "./ingest/embed-worker.ts";
+import { setEmbeddingCacheDir } from "./ingest/embedder.ts";
 import { mountAsCommanderCommand } from "./mount/commander.ts";
 import { OPERATIONS } from "./operations/index.ts";
 import { logger } from "./output/logger.ts";
@@ -25,6 +27,10 @@ import { maybeCheckForUpdate } from "./update/background.ts";
 // directly during tests). We bypass commander entirely and run the worker
 // stdin/stdout protocol loop instead.
 if (process.argv.includes(EMBED_WORKER_SENTINEL)) {
+	// Workers never call buildContext(), so set the model cache dir here to match
+	// the parent. The parent propagates its resolved dir via MEMBOT_MODEL_CACHE_DIR
+	// (honored by setEmbeddingCacheDir); fall back to the default home otherwise.
+	setEmbeddingCacheDir(join(defaultMembotHome(), FILES.MODELS_DIR));
 	await runEmbedWorker();
 	process.exit(0);
 }

@@ -1,7 +1,9 @@
 import { AutoModelForSequenceClassification, AutoTokenizer } from "@huggingface/transformers";
 import { RERANK_BATCH_SIZE, RERANK_MODEL } from "../constants.ts";
 import { asHelpful } from "../errors.ts";
+import { isModelCached } from "../ingest/embedder.ts";
 import { logger } from "../output/logger.ts";
+import { createModelDownloadReporter } from "../output/model-download.ts";
 
 /**
  * The slice of the transformers sequence-classification surface we actually
@@ -32,21 +34,36 @@ async function getReranker(model: string): Promise<LoadedReranker> {
 	let p = rerankerPromises.get(model);
 	if (!p) {
 		logger.debug(`reranker: loading model ${model}`);
+		// One reporter spans the tokenizer + model file downloads so a single
+		// bar covers the whole reranker fetch. Attached only on a genuine
+		// first-run fetch (not on disk) — transformers fires a `download` status
+		// even for cache reads, so the disk check is the reliable signal. Rerank
+		// always runs in the parent process so the bar renders cleanly.
+		const reporter = isModelCached(model) ? null : createModelDownloadReporter("reranker", model);
+		const progress_callback = reporter?.onProgress;
 		p = (async () => {
-			const tokenizer = (await AutoTokenizer.from_pretrained(model)) as unknown as RerankTokenizer;
-			let seqModel: RerankModel;
 			try {
-				seqModel = (await AutoModelForSequenceClassification.from_pretrained(model, {
-					device: "wasm",
-				})) as unknown as RerankModel;
-			} catch (err) {
-				if (!String((err as Error)?.message ?? "").includes("Unsupported device")) throw err;
-				logger.debug("reranker: wasm backend unavailable, falling back to cpu (onnxruntime-node)");
-				seqModel = (await AutoModelForSequenceClassification.from_pretrained(model, {
-					device: "cpu",
-				})) as unknown as RerankModel;
+				const tokenizer = (await AutoTokenizer.from_pretrained(model, {
+					progress_callback,
+				})) as unknown as RerankTokenizer;
+				let seqModel: RerankModel;
+				try {
+					seqModel = (await AutoModelForSequenceClassification.from_pretrained(model, {
+						device: "wasm",
+						progress_callback,
+					})) as unknown as RerankModel;
+				} catch (err) {
+					if (!String((err as Error)?.message ?? "").includes("Unsupported device")) throw err;
+					logger.debug("reranker: wasm backend unavailable, falling back to cpu (onnxruntime-node)");
+					seqModel = (await AutoModelForSequenceClassification.from_pretrained(model, {
+						device: "cpu",
+						progress_callback,
+					})) as unknown as RerankModel;
+				}
+				return { tokenizer, model: seqModel };
+			} finally {
+				reporter?.finish();
 			}
-			return { tokenizer, model: seqModel };
 		})();
 		rerankerPromises.set(model, p);
 	}

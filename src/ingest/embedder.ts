@@ -5,12 +5,20 @@ import {
 	BGE_QUERY_PREFIX,
 	BGE_QUERY_PREFIX_MODELS,
 	CLS_POOLING_MODELS,
+	EMBED_WORKER_SENTINEL,
 	EMBEDDING_BATCH_SIZE,
 	EMBEDDING_DIMENSION,
 	EMBEDDING_MODEL,
 } from "../constants.ts";
 import { HelpfulError } from "../errors.ts";
 import { logger } from "../output/logger.ts";
+import { createModelDownloadReporter } from "../output/model-download.ts";
+
+// Embed-worker subprocesses get their cache pre-warmed by a parent prefetch
+// (see `ensureEmbeddingModelDownloaded`), so they never actually download — and
+// their stdout is the JSON protocol channel, so they must not render a spinner.
+// Detect that mode once and skip the progress reporter when we're a worker.
+const IS_EMBED_WORKER = process.argv.includes(EMBED_WORKER_SENTINEL);
 
 // We patch @huggingface/transformers to use onnxruntime-web (WASM). Pin the
 // loader to the on-disk copy so we stay offline-capable.
@@ -42,7 +50,17 @@ export function setEmbeddingCacheDir(dir: string): void {
 	env.cacheDir = resolved.endsWith("/") ? resolved : `${resolved}/`;
 }
 
-function isModelCached(model: string): boolean {
+/**
+ * Whether a model's weights are already present in the transformers cache dir.
+ *
+ * Used to decide whether a load will hit the network — transformers' own
+ * `progress_callback` can't tell us (it fires a `download` status even for a
+ * pure cache read), so we gate the download progress bar on this disk check.
+ * A bare existence check on `<cacheDir>/<model>`: good enough to suppress the
+ * bar on the steady-state warm path; a corrupt/partial cache that triggers a
+ * re-fetch is the rare case where we'd stay silent during a real download.
+ */
+export function isModelCached(model: string): boolean {
 	if (!env.cacheDir) return false;
 	return existsSync(join(env.cacheDir, model));
 }
@@ -64,23 +82,59 @@ function isModelCached(model: string): boolean {
 async function getPipeline(model: string): Promise<FeatureExtractionPipeline> {
 	let p = pipelinePromises.get(model);
 	if (!p) {
-		if (isModelCached(model)) {
-			logger.debug(`embedder: loading cached model ${model}`);
-		} else {
-			logger.info(`embedder: loading model ${model} (first run, downloading weights)`);
-		}
+		const cached = isModelCached(model);
+		logger.debug(`embedder: loading model ${model}${cached ? " (cached)" : " (first run)"}`);
+		// Show the download bar only on a genuine first-run fetch (model not on
+		// disk) and only in the parent — workers stay silent (their stdout is the
+		// protocol channel; the parent pre-warms the cache). On a warm cache we
+		// attach no reporter: transformers fires a `download` status even for
+		// cache reads, so the disk check is the only reliable "is this a fetch".
+		const reporter = IS_EMBED_WORKER || cached ? null : createModelDownloadReporter("embedding", model);
+		const progress_callback = reporter?.onProgress;
 		p = (async () => {
 			try {
-				return (await pipeline("feature-extraction", model, { device: "wasm" })) as FeatureExtractionPipeline;
-			} catch (err) {
-				if (!String((err as Error)?.message ?? "").includes("Unsupported device")) throw err;
-				logger.debug("embedder: wasm backend unavailable, falling back to cpu (onnxruntime-node)");
-				return (await pipeline("feature-extraction", model, { device: "cpu" })) as FeatureExtractionPipeline;
+				try {
+					return (await pipeline("feature-extraction", model, {
+						device: "wasm",
+						progress_callback,
+					})) as FeatureExtractionPipeline;
+				} catch (err) {
+					if (!String((err as Error)?.message ?? "").includes("Unsupported device")) throw err;
+					logger.debug("embedder: wasm backend unavailable, falling back to cpu (onnxruntime-node)");
+					return (await pipeline("feature-extraction", model, {
+						device: "cpu",
+						progress_callback,
+					})) as FeatureExtractionPipeline;
+				}
+			} finally {
+				reporter?.finish();
 			}
 		})();
 		pipelinePromises.set(model, p);
 	}
 	return p;
+}
+
+/**
+ * Ensure the embedding model's weights are present on disk, showing a download
+ * progress bar in the parent process when they aren't. Called from
+ * `withEmbedderPool()` before any embedding starts so the bar renders cleanly
+ * ahead of the ingest live-area, and (for the worker-pool path) so the workers
+ * load from a warm cache instead of each silently downloading inside a subprocess.
+ *
+ * Warm cache → no-op (the model loads lazily later, in-process or in workers).
+ * Cold cache → loads the pipeline here, which downloads the weights and drives
+ * the bar. `keepLoaded` retains the loaded pipeline for reuse on the in-process
+ * (`workers <= 1`) path; the multi-worker path evicts it so the parent doesn't
+ * hold ~130MB of weights it won't use (the workers read them from disk).
+ */
+export async function ensureEmbeddingModelDownloaded(
+	model: string = EMBEDDING_MODEL,
+	opts: { keepLoaded: boolean } = { keepLoaded: true },
+): Promise<void> {
+	if (isModelCached(model)) return;
+	await getPipeline(model);
+	if (!opts.keepLoaded) pipelinePromises.delete(model);
 }
 
 /**

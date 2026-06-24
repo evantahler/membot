@@ -1,9 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const CLI = join(import.meta.dir, "..", "..", "src", "cli.ts");
+
+// MEMBOT_HOME is isolated per test, but the model cache lives under it
+// (`<home>/models`); redirect it to a shared persistent cache so spawned CLIs
+// reuse the downloaded weights instead of re-fetching on every run.
+const MODEL_CACHE = process.env.MEMBOT_MODEL_CACHE_DIR ?? join(homedir(), ".membot", "models");
 
 let tmp: string;
 let dataDir: string;
@@ -18,7 +23,7 @@ async function run(
 	args: string[],
 	extraEnv: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string; exit: number }> {
-	const env: Record<string, string> = { ...process.env, MEMBOT_HOME: dataDir };
+	const env: Record<string, string> = { ...process.env, MEMBOT_HOME: dataDir, MEMBOT_MODEL_CACHE_DIR: MODEL_CACHE };
 	env.FORCE_COLOR = "1";
 	delete env.NO_COLOR;
 	for (const [k, v] of Object.entries(extraEnv)) env[k] = v;
@@ -37,7 +42,12 @@ describe("CLI ANSI emission (real spawn, FORCE_COLOR=1)", () => {
 		docPath = join(tmp, "doc.md");
 		writeFileSync(docPath, "# Colors test\n\nA short markdown file used to populate the store.\n");
 
-		const env: Record<string, string> = { ...process.env, MEMBOT_HOME: dataDir, NO_COLOR: "1" };
+		const env: Record<string, string> = {
+			...process.env,
+			MEMBOT_HOME: dataDir,
+			MEMBOT_MODEL_CACHE_DIR: MODEL_CACHE,
+			NO_COLOR: "1",
+		};
 		const seed = Bun.spawn(["bun", CLI, "add", docPath, "--json"], { env, stdout: "pipe", stderr: "pipe" });
 		await seed.exited;
 	}, 180_000);

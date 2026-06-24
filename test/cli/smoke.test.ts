@@ -1,9 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const CLI = join(import.meta.dir, "..", "..", "src", "cli.ts");
+
+// MEMBOT_HOME is isolated per test, but the model cache lives under it
+// (`<home>/models`) — so without redirecting it, every spawned CLI would
+// re-download the embedding weights from scratch. Point all spawns at a shared
+// persistent cache (the CI-provided one, else the real `~/.membot/models`) so
+// the first download is reused across spawns.
+const MODEL_CACHE = process.env.MEMBOT_MODEL_CACHE_DIR ?? join(homedir(), ".membot", "models");
 
 let tmp: string;
 let dataDir: string;
@@ -12,7 +19,7 @@ let docPath: string;
 /** Run `membot` with the given args against an isolated data dir. Returns stdout + exit. */
 async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; exit: number }> {
 	const proc = Bun.spawn(["bun", CLI, ...args, "--json"], {
-		env: { ...process.env, MEMBOT_HOME: dataDir, NO_COLOR: "1" },
+		env: { ...process.env, MEMBOT_HOME: dataDir, MEMBOT_MODEL_CACHE_DIR: MODEL_CACHE, NO_COLOR: "1" },
 		stdout: "pipe",
 		stderr: "pipe",
 	});
