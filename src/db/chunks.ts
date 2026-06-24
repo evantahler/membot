@@ -1,5 +1,6 @@
 import { EMBEDDING_DIMENSION } from "../constants.ts";
-import { HelpfulError } from "../errors.ts";
+import { asHelpful, HelpfulError } from "../errors.ts";
+import { logger } from "../output/logger.ts";
 import type { DbConnection } from "./connection.ts";
 
 export interface ChunkInput {
@@ -52,6 +53,76 @@ export async function insertChunksForVersion(
 			c.context ?? null,
 		);
 	}
+}
+
+/**
+ * Rebuild the `chunks` table from its own contents into a fresh table and
+ * swap it in, regenerating the PRIMARY KEY ART index from scratch.
+ *
+ * This is the recovery path for a store whose chunks index has drifted out of
+ * sync with the table data. The symptom is DuckDB raising
+ * `FATAL Error: ... Failed to delete all rows from index. Only deleted N out
+ * of M rows` on the next `DELETE` against an affected version — which happens
+ * during `reindex --embeddings` (per-version delete + re-insert) and, because
+ * it fires inside an explicit transaction, escapes through Bun's native
+ * boundary as an uncatchable C++ exception (process SIGTRAP). A `SELECT` from
+ * the table still works, so copying the rows into a fresh table rebuilds a
+ * clean index without losing data.
+ *
+ * Row contents are preserved exactly (only the derived index is regenerated)
+ * and the whole swap runs in one transaction, so a failure leaves the original
+ * table intact. Throws `HelpfulError` if the source rows contain duplicate
+ * primary keys (a deeper corruption the rebuild can't silently paper over).
+ */
+export async function rebuildChunksTable(db: DbConnection): Promise<{ rows: number }> {
+	const before = await db.queryGet<{ n: number }>(`SELECT COUNT(*) AS n FROM chunks`);
+	const rows = before ? Number(before.n) : 0;
+	logger.info(`reindex: rebuilding chunks table (${rows} chunks) to regenerate the primary-key index`);
+	await db.exec("BEGIN TRANSACTION");
+	try {
+		// current_chunks depends on chunks, so it has to be dropped before the
+		// table can be swapped, then recreated identically afterwards.
+		await db.exec(`DROP VIEW IF EXISTS current_chunks`);
+		await db.exec(
+			`CREATE TABLE chunks_rebuild (
+				logical_path   TEXT NOT NULL,
+				version_id     TIMESTAMP NOT NULL,
+				chunk_index    INTEGER NOT NULL,
+				chunk_content  TEXT NOT NULL,
+				search_text    TEXT NOT NULL,
+				embedding      FLOAT[${EMBEDDING_DIMENSION}] NOT NULL,
+				context        TEXT,
+				PRIMARY KEY (logical_path, version_id, chunk_index)
+			)`,
+		);
+		// The INSERT builds a fresh ART index; duplicate PKs in the source would
+		// raise a constraint violation here rather than corrupt the new table.
+		await db.exec(
+			`INSERT INTO chunks_rebuild
+			 SELECT logical_path, version_id, chunk_index, chunk_content, search_text, embedding, context
+			 FROM chunks`,
+		);
+		await db.exec(`DROP TABLE chunks`);
+		await db.exec(`ALTER TABLE chunks_rebuild RENAME TO chunks`);
+		await db.exec(`CREATE INDEX chunks_path_idx ON chunks (logical_path)`);
+		await db.exec(
+			`CREATE VIEW current_chunks AS
+			 SELECT c.* FROM chunks c
+			 JOIN current_files cf USING (logical_path, version_id)`,
+		);
+		await db.exec("COMMIT");
+	} catch (err) {
+		await db.exec("ROLLBACK").catch(() => {
+			// Best effort — surface the original error.
+		});
+		throw asHelpful(
+			err,
+			"while rebuilding the chunks table for recovery",
+			"If this reports a duplicate primary key, the chunks table holds duplicate (logical_path, version_id, chunk_index) rows — inspect with `membot` SQL before retrying. Otherwise the original table was left intact; re-run `membot reindex --embeddings --recovery`.",
+			"internal_error",
+		);
+	}
+	return { rows };
 }
 
 /** Drop every chunk for a single version. Called by `deleteVersionAndChunks` during prune. */

@@ -55,7 +55,8 @@ MCP tool) to inspect it at runtime.
 | **github-repo**<br>GitHub repository bulk import — open issues and PRs (selectable, optionally including closed) via the GitHub REST API. | `api_key` — `membot config set downloaders.github.api_key <PAT>` | `github-repo:facebook/react`<br>`github-repo:owner/repo:issues`<br>`github-repo:owner/repo:prs:all`<br>`github-repo:owner/repo:all` | Default selector pulls open issues + open PRs. Override with `:issues`, `:prs`, `:issues:all`, `:prs:all`, `:all`. Uses the same API key as the per-URL github plugin (`membot config set downloaders.github.api_key <PAT>` or `GITHUB_TOKEN`). Pass --sync to tombstone items no longer returned by the enumerate; with an open-only selector, closing an item will tombstone it — use `:all` selectors to keep closed items. |
 | **linear**<br>Linear issues & projects — uses the Linear GraphQL API with a personal access key. | `api_key` — `membot config set downloaders.linear.api_key <KEY>` | `https://linear.app/<workspace>/issue/<KEY>`<br>`https://linear.app/<workspace>/project/<slug>` | Requires a personal API key from https://linear.app/settings/api. Set it via `membot config set downloaders.linear.api_key <KEY>`. |
 | **linear-team**<br>Linear team bulk import — every project under a team plus every issue in those projects, via the Linear GraphQL API. | `api_key` — `membot config set downloaders.linear.api_key <KEY>` | `linear-team:ENG`<br>`linear-team:DESIGN` | Same API key as the per-URL linear plugin (`membot config set downloaders.linear.api_key <KEY>`). Team key is the uppercase prefix of issue IDs (e.g. ENG from ENG-42). Pass --sync to tombstone projects/issues that have been deleted from Linear. |
-| **apple-notes** _(darwin only)_<br>Apple Notes (macOS) — scope-driven import via NoteStore.sqlite. Markdown comes straight from the protobuf body. | none | `apple-notes:`<br>`apple-notes:Personal/Recipes`<br>`apple-notes:*/Archive`<br>`apple-notes:Personal/Recipes/**` | Requires Full Disk Access for your terminal in System Settings → Privacy & Security. Password-protected notes and Recently Deleted are skipped. Pass `--sync` to tombstone rows whose notes have been deleted. |
+| **apple-notes** _(darwin only)_<br>Apple Notes (macOS) — scope-driven import via NoteStore.sqlite. Markdown comes straight from the protobuf body. | none | `apple-notes:`<br>`apple-notes:Personal/Recipes`<br>`apple-notes:*/Archive`<br>`apple-notes:Personal/Recipes/**` | Requires Full Disk Access in System Settings → Privacy & Security for the app that launched membot (your terminal, editor, or agent app like Conductor) — then fully quit and relaunch it. Password-protected notes and Recently Deleted are skipped. Pass `--sync` to tombstone rows whose notes have been deleted. |
+| **custom-command**<br>User-defined URL routers. Each entry matches a URL pattern and runs an external shell command (mcpx, gws, gcloud, etc.) to fetch the content. Manage with `membot router add/list/remove`. | none | `(any URL matching a router registered via `membot router add`)` | Custom routers run arbitrary commands from your config file — that's the point. Argv arrays mean no shell interpolation, but the user opts into running whatever they configure on every ingest and refresh. |
 
 <!-- /AUTO-GENERATED:sources -->
 
@@ -95,7 +96,7 @@ are non-interactive — they never prompt or open a browser.
 
 Each note's body is rendered to markdown by `macos-ts` (no LLM round-trip). Notes land at `apple-notes/<account>/<folder>/<title>.md` (slug-cased; collisions get a deterministic `-<noteId>` suffix). Password-protected notes are skipped with a per-entry warning. **`Recently Deleted` is excluded from wildcard scopes** — name it explicitly (e.g. `apple-notes:iCloud/Recently Deleted`) to include the trash. Attachments and shared-note participants are out of scope for v1.
 
-Requires **Full Disk Access** for your terminal/editor in System Settings → Privacy & Security → Full Disk Access. The error message names the exact pane to open.
+Requires **Full Disk Access** in System Settings → Privacy & Security → Full Disk Access for the app that launched membot — your terminal, editor, or agent app (Terminal, iTerm, Warp, Cursor, VSCode, Conductor, …) — then fully quit and relaunch it. macOS attributes the grant to that host app, not to `membot` itself; the error message detects and names the exact app and pane to open.
 
 Pass `--sync` to reconcile deletions: after ingest, any current row inside the scope whose underlying note no longer exists in Notes.app is tombstoned. Without `--sync`, deletes are not detected.
 
@@ -171,7 +172,8 @@ membot refresh                         # refresh all rows whose schedule has ela
 membot mv old/path new/path            # rename (history preserved under both)
 membot rm <paths...>                   # tombstone one or more paths/globs (history still queryable)
 membot rm "docs/**/*.md" notes/old.md  # globs match logical_paths in the DB; literals + globs can mix
-membot rm -r remotes/docs.google.com   # --recursive removes every path under a directory prefix
+membot rm "remotes/docs.google.com/**" # remove a whole subtree with a dir/** glob (no -r flag)
+membot rm "*" --force                  # clear the ENTIRE index ('*' / '**' = everything; -f required)
 membot prune --before <iso-ts>         # drop non-current versions older than cutoff (irreversible)
 ```
 
@@ -218,12 +220,12 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 | `membot versions <path>`              | List every version newest-first with version_id and change notes               |
 | `membot diff <path> --a <ts>`         | Unified diff between two versions                                              |
 | `membot mv <old> <new>`               | Rename a logical_path (history preserved)                                      |
-| `membot rm <paths...>`                | Tombstone one or more logical_paths or globs (e.g. `"docs/**/*.md"`); pass `-r` / `--recursive` to remove a directory prefix; history kept |
+| `membot rm <paths...>`                | Tombstone one or more logical_paths or globs (e.g. `"docs/**/*.md"`); remove a whole subtree with `"dir/**"`; a bare `"*"` / `"**"` clears the **entire** index but requires `-f` / `--force`; quote globs so the shell doesn't expand them; history kept |
 | `membot refresh [path]`               | Re-read source; create new version only if bytes changed                       |
 | `membot prune --before <ts>`          | Permanently drop non-current versions older than cutoff (irreversible). Add `--strip-blob-bytes` to retroactively NULL out bytes for blobs that exceed current `blobs.max_size_bytes` / `blobs.skip_mime_types`. |
 | `membot serve`                        | Start MCP server (stdio default, `--http <port>` for HTTP)                     |
 | `membot logs`                         | Print or tail the serve-mode audit log (`~/.membot/logs/serve.log`); `--follow`, `--lines <N>`, `--raw` for JSON |
-| `membot reindex`                      | Rebuild the FTS keyword index over current chunks; `--embeddings` re-chunks + re-embeds every version and bumps the embedding revision (run once after upgrading across an embedding-scheme change) |
+| `membot reindex`                      | Rebuild the FTS keyword index over current chunks; `--embeddings` re-chunks + re-embeds every version and bumps the embedding revision (run once after upgrading across an embedding-scheme change); `--recovery` first rebuilds the chunks table's primary-key index (use if `--embeddings` crashes with a DuckDB index error) |
 | `membot config <subcommand>`          | Host-side config management (`get` / `set` / `unset` / `list` / `path`). **Don't run** — this is for the human operator, not for agents |
 | `membot router <subcommand>`          | Manage user-defined URL routers (`add` / `list` / `remove` / `test`). Useful when the user wants `membot add <url>` to delegate to an external CLI for fetch (e.g. mcpx for Google Docs). **Suggest, don't run unilaterally** — modifying routers changes future ingest behaviour |
 | `membot login`                        | Print `membot config set` instructions for API-key services (GitHub, Linear). **Don't run** — this is for the human operator |
@@ -241,11 +243,12 @@ Every MCP call (and every refresh-daemon tick) is appended to `~/.membot/logs/se
 - **Google Docs/Sheets/Slides URL was rejected** → membot has no built-in Google plugin. Either export from Drive as `.docx`/`.xlsx`/`.pdf` and `membot add ./that-file`, or register a custom router that delegates to a tool that already has Google auth (e.g. `mcpx`) — see the "Custom URL routers" section above.
 - **"refresh failed: auth"** for a GitHub URL → set the PAT via `membot config set downloaders.github.api_key <PAT>` (or export `GITHUB_TOKEN`).
 - **"refresh failed: auth"** for a Linear URL → set the personal API key via `membot config set downloaders.linear.api_key <KEY>` (create one at `linear.app/settings/api`).
-- **"Cannot read the Apple Notes database — Full Disk Access required"** → System Settings → Privacy & Security → Full Disk Access → toggle on for your terminal/editor (Terminal, iTerm, Warp, Cursor, VSCode, Conductor). Restart the app and re-run. Open the pane directly: `open 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'`.
+- **"Cannot read the Apple Notes database — Full Disk Access required"** → the hint detects and names the exact app to grant (the host app that launched membot — your terminal, editor, or agent app like Conductor). System Settings → Privacy & Security → Full Disk Access → toggle it on, then **fully quit (⌘Q) and relaunch that app** before re-running (TCC grants only apply on a fresh launch). Open the pane directly: `open 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'`.
 - **"Apple Note ... no longer exists"** on refresh → the note was deleted in Notes.app. Reconcile with `membot add apple-notes: --sync` or drop the row with `membot rm <path>`.
 - **Search returns nothing** → Confirm the file ingested with `membot info <path>`; if needed, run `membot reindex` to rebuild the FTS keyword index.
 - **Stale results after manual DB edits** → `membot reindex`.
 - **"embeddings were built under revision N" warning on search** → the store was embedded by an older membot; semantic quality is degraded. Run `membot reindex --embeddings` once to re-embed every version and clear it.
+- **`reindex --embeddings` crashes with `panic: A C++ exception occurred` or a DuckDB `Failed to delete all rows from index` error** → the chunks table's primary-key index has drifted out of sync with the data. Re-run as `membot reindex --embeddings --recovery`; it rebuilds the chunks table (preserving every row) to regenerate a clean index before re-embedding.
 - **Two paths point at the same content** → `membot mv` doesn't merge; tombstone one with `membot rm`.
 
 ## Configuration

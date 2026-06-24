@@ -141,16 +141,16 @@ const NOTES: FakeNote[] = [
 // swap the reader the plugin sees.
 let currentHandle: FakeReaderHandle = buildFakeReader(NOTES);
 
-// Replace the sqlite/macos-ts I/O layer (reader.ts) and the darwin-only
-// platform check so the test exercises the plugin's enumerate + fetch
-// orchestration against an in-memory fake. We're not mocking the subject
-// of the test (`apple-notes.ts` / `ingest.ts`) — only the I/O boundary.
+// Replace only the sqlite/macos-ts I/O layer (reader.ts) so the test
+// exercises the plugin's enumerate + fetch orchestration against an
+// in-memory fake. We're not mocking the subject of the test
+// (`apple-notes.ts` / `ingest.ts`) — only the I/O boundary. The real
+// `platform.ts` is left intact: this suite is darwin-only, where
+// `assertAppleNotesPlatform()` is a no-op and `mapAppleNotesError()` is only
+// reached on a reader error the fake never raises. (Mocking platform.ts here
+// previously leaked its stub into other test files via mock.module.)
 mock.module("../../../src/ingest/apple-notes/reader.ts", () => ({
 	openNoteReader: () => currentHandle.reader,
-}));
-mock.module("../../../src/ingest/apple-notes/platform.ts", () => ({
-	assertAppleNotesPlatform: () => {},
-	mapAppleNotesError: (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
 }));
 
 // apple-notes is registered only on darwin (see registry.ts:31), so on

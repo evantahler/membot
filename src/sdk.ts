@@ -14,7 +14,7 @@ export type { ErrorKind, HelpfulErrorArgs } from "./errors.ts";
 export { asHelpful, HelpfulError, isHelpfulError, mapKindToExit } from "./errors.ts";
 export type { Chunk } from "./ingest/chunker.ts";
 export { chunkDeterministic } from "./ingest/chunker.ts";
-export { embed, embedSingle } from "./ingest/embedder.ts";
+export { embed, embedSingle, setEmbeddingCacheDir } from "./ingest/embedder.ts";
 export type { FetchedRemote, FetchOptions } from "./ingest/fetcher.ts";
 export { fetchRemote } from "./ingest/fetcher.ts";
 export type { IngestCallbacks, IngestEntryResult, IngestInput, IngestResult } from "./ingest/ingest.ts";

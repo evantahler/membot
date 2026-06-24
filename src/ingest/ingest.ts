@@ -911,7 +911,13 @@ function summarize(entries: IngestEntryResult[]): IngestResult {
 	return { ingested: entries, total: entries.length, ok, unchanged, failed };
 }
 
-function errorMessage(err: unknown): string {
+/**
+ * Flatten an error into a single per-entry string. For a `HelpfulError` the
+ * actionable `hint` is appended (`message — hint`) so the next step survives
+ * even when only the per-entry `error` string is shown (e.g. a partial-failure
+ * row in `membot add`, where the structured hint would otherwise be dropped).
+ */
+export function errorMessage(err: unknown): string {
 	if (err instanceof HelpfulError) return `${err.message} — ${err.hint}`;
 	if (err instanceof Error) return err.message;
 	return String(err);

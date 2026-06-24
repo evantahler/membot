@@ -243,11 +243,18 @@ markdown is already markdown). A `NoteNotFoundError` becomes a
 the live enumeration. Scope-aware so a narrow add doesn't tombstone
 notes outside its filter.
 
-Permissions: requires Full Disk Access for the host process.
-`macos-ts`'s `DatabaseAccessDeniedError` is mapped to a `HelpfulError`
-whose hint names the exact System Settings pane to open. The single
-interactive recovery is the user toggling the permission in
-System Settings — not a flow we control.
+Permissions: requires Full Disk Access for the host process. macOS
+attributes the grant to the responsible GUI app at the top of the
+process tree (the terminal/editor/agent app — e.g. Conductor), not to
+`membot`/`bun`/`bash`. `macos-ts`'s `DatabaseAccessDeniedError` is
+mapped to a `HelpfulError` whose hint walks the process tree (via `ps`,
+`responsibleApp()` in `apple-notes/platform.ts`) to detect and name that
+exact app and its bundle path, with a "fully quit and relaunch it"
+instruction (TCC grants only take effect on a fresh launch) plus the
+System Settings pane to open. When no `.app` ancestor exists (CLI / ssh
+/ CI) the hint falls back to generic wording. The single interactive
+recovery is the user toggling the permission in System Settings — not a
+flow we control.
 
 Out of scope for v1 (called out in `--help`, skill docs, README):
 attachments, password-protected notes (skipped per-entry), shared-note
@@ -412,11 +419,11 @@ membot versions <path>
 membot diff <path> <a> [b]
 membot write <path>
 membot mv <from> <to>
-membot rm <paths...>
+membot rm <paths...> [--force]
 membot refresh [path] [--force]
 membot prune --before <ts>
 membot serve [--http <port>] [--watch] [--tick <sec>]
-membot reindex [--embeddings]
+membot reindex [--embeddings] [--recovery]
 membot config <get|set|unset|list|path>
 membot skill install [--claude] [--cursor] [--global]
 ```
