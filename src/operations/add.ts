@@ -3,6 +3,7 @@ import { resolveEmbeddingWorkers } from "../context.ts";
 import { withEmbedderPool } from "../ingest/embedder-pool.ts";
 import {
 	countResolvedEntries,
+	errorMessage,
 	type IngestCallbacks,
 	type IngestEntryResult,
 	type IngestResult,
@@ -210,7 +211,7 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 						logical_path: outcome.source,
 						version_id: null,
 						status: "failed",
-						error: outcome.error.message,
+						error: errorMessage(outcome.error),
 						mime_type: null,
 						size_bytes: 0,
 						chunk_count: null,
@@ -241,13 +242,12 @@ Pass \`logical_path\` to override. For a multi-source / directory / glob walk it
 						tombstoned.push(...syncRes.tombstoned);
 					}
 				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
 					const failed: IngestEntryResult = {
 						source_path: outcome.source,
 						logical_path: outcome.source,
 						version_id: null,
 						status: "failed",
-						error: message,
+						error: errorMessage(err),
 						mime_type: null,
 						size_bytes: 0,
 						chunk_count: null,
