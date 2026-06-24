@@ -69,6 +69,19 @@ on-disk tree of stored content.
   of contending for one shared extractor on the main JS thread. A
   multi-line stderr live area shows one status row per active worker
   plus the total bar, ETA, and cumulative chunk count.
+- **Model weights cache + first-run download bar.** Transformers' model
+  cache is pinned to `~/.membot/models` (`<dataDir>/models`) in both the
+  parent (`buildContext`) and the embed-worker subprocesses (the pool
+  propagates the resolved dir via `MEMBOT_MODEL_CACHE_DIR`), so both agree
+  and `isModelCached()` is accurate. On a cold cache the first embed or
+  rerank downloads ~30–80 MB; `createModelDownloadReporter`
+  (`src/output/model-download.ts`) wires transformers' `progress_callback`
+  to a single-line stderr progress bar (`Downloading <role> model … [███░] 45% 12/27 MB`).
+  The bar only appears on a real network fetch — a warm cache stays silent.
+  For the worker-pool path, `withEmbedderPool` prefetches the model in the
+  parent (gated on `!isModelCached`) so the bar renders where the UI lives
+  instead of silently inside a worker. Non-interactive/JSON callers get one
+  suppressible `info` line, no ANSI.
 - **Bun-compiled standalone binaries** for darwin/linux/windows ×
   arm64/x64. Runtime must not require Bun installed.
 - **Stdio + HTTP MCP server** exposing every operation as a tool, plus

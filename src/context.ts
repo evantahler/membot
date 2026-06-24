@@ -4,6 +4,7 @@ import { loadConfig } from "./config/loader.ts";
 import type { MembotConfig } from "./config/schemas.ts";
 import { DEFAULTS, FILES } from "./constants.ts";
 import { type DbConnection, openDb } from "./db/connection.ts";
+import { setEmbeddingCacheDir } from "./ingest/embedder.ts";
 import { logger } from "./output/logger.ts";
 import type { Progress } from "./output/progress.ts";
 import { createProgress } from "./output/progress.ts";
@@ -64,6 +65,13 @@ export async function buildContext(options: BuildContextOptions = {}): Promise<A
 	setMode(detectMode({ json: options.json, verbose: options.verbose, noColor: options.noColor }));
 
 	const { config, dataDir, configPath } = await loadConfig({ configFlag: options.configFlag });
+
+	// Pin transformers' model-weight cache to `<dataDir>/models` so it lives
+	// alongside the index (per the design doc) and so `isModelCached()` checks
+	// the right place. `setEmbeddingCacheDir` honors a `MEMBOT_MODEL_CACHE_DIR`
+	// override (used by CI and propagated to embed-worker subprocesses).
+	setEmbeddingCacheDir(join(dataDir, FILES.MODELS_DIR));
+
 	const dbPath = join(dataDir, FILES.INDEX_DUCKDB);
 	const db = await openDb(dbPath, {
 		maxAttempts: config.db_lock_retry.max_attempts,

@@ -1,8 +1,9 @@
+import { env } from "@huggingface/transformers";
 import type { Subprocess } from "bun";
 import { EMBED_WORKER_SENTINEL, EMBEDDING_BATCH_SIZE, EMBEDDING_MODEL } from "../constants.ts";
 import { asHelpful, HelpfulError } from "../errors.ts";
 import { logger } from "../output/logger.ts";
-import { type EmbedOptions, setEmbedderPool } from "./embedder.ts";
+import { type EmbedOptions, ensureEmbeddingModelDownloaded, setEmbedderPool } from "./embedder.ts";
 
 interface PendingRequest {
 	id: number;
@@ -295,8 +296,14 @@ export class EmbedderPool {
 	 * cheap (no init handshake, no preload).
 	 */
 	private spawnWorker(index: number): Worker {
+		// Pin the worker's model cache to the parent's resolved dir so both
+		// processes read/write the same weights — without this a worker could
+		// fall back to transformers' default cache and re-download. `setEmbeddingCacheDir`
+		// (called in the worker bootstrap) honors this env var.
+		const workerEnv = { ...process.env, ...(env.cacheDir ? { MEMBOT_MODEL_CACHE_DIR: env.cacheDir } : {}) };
 		const proc = Bun.spawn(this.resolveSpawnCommand(), {
 			stdio: ["pipe", "pipe", "inherit"],
+			env: workerEnv,
 		}) as Subprocess<"pipe", "pipe", "inherit">;
 
 		const worker: Worker = {
@@ -403,6 +410,10 @@ export class EmbedderPool {
  * overhead.
  */
 export async function withEmbedderPool<T>(workerCount: number, model: string, fn: () => Promise<T>): Promise<T> {
+	// Surface a first-run download bar in the parent (where the UI lives) before
+	// any embedding starts. On the worker-pool path this also warms the on-disk
+	// cache so the workers don't each silently download inside a subprocess.
+	await ensureEmbeddingModelDownloaded(model, { keepLoaded: workerCount <= 1 });
 	if (workerCount <= 1) return fn();
 	const pool = new EmbedderPool(workerCount, model);
 	pool.spawn();
