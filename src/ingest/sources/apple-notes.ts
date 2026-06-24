@@ -40,7 +40,7 @@ const appleNotesPlugin = defineSourcePlugin<Record<string, unknown>, AppleNotesA
 		"apple-notes:Personal/Recipes/**",
 	],
 	notes:
-		"Requires Full Disk Access for your terminal in System Settings → Privacy & Security. Password-protected notes and Recently Deleted are skipped. Pass `--sync` to tombstone rows whose notes have been deleted.",
+		"Requires Full Disk Access in System Settings → Privacy & Security for the app that launched membot (your terminal, editor, or agent app like Conductor) — then fully quit and relaunch it. Password-protected notes and Recently Deleted are skipped. Pass `--sync` to tombstone rows whose notes have been deleted.",
 	match: { kind: "scheme", prefix: APPLE_NOTES_PREFIX },
 	platform: ["darwin"],
 	async enumerate(source, _ctx) {

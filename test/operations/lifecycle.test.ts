@@ -81,6 +81,22 @@ describe("operations end-to-end lifecycle", () => {
 		expect(result.failed).toBe(0);
 	}, 180_000);
 
+	test("a per-entry failure surfaces the HelpfulError hint, not just its message", async () => {
+		// An unclaimed http(s) URL is rejected during resolve with a
+		// HelpfulError. The per-entry `error` string must carry the actionable
+		// hint (message — hint), since structured hints are otherwise dropped
+		// on partial-failure rows — that's the only place the next step lands.
+		const result = await addOperation.handler(
+			{ sources: ["https://example.com/not-a-known-source"], follow_symlinks: true },
+			ctx,
+		);
+		expect(result.failed).toBe(1);
+		const failed = result.ingested.find((e) => e.status === "failed");
+		expect(failed?.error).toContain("no source plugin matches");
+		// The hint tail — proves the hint was appended, not just the message.
+		expect(failed?.error).toContain("download the file locally");
+	}, 60_000);
+
 	test("list returns the ingested paths under the absolute source path", async () => {
 		const out = await listOperation.handler({ limit: 100, offset: 0 }, ctx);
 		const paths = out.entries.map((e) => e.logical_path).sort();
