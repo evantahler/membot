@@ -20,7 +20,7 @@ import { setEmbeddingCacheDir } from "./ingest/embedder.ts";
 import { mountAsCommanderCommand } from "./mount/commander.ts";
 import { OPERATIONS } from "./operations/index.ts";
 import { logger } from "./output/logger.ts";
-import { maybeCheckForUpdate } from "./update/background.ts";
+import { getUpdater } from "./update/updater.ts";
 
 // Hidden worker mode: the EmbedderPool re-execs this binary with the sentinel
 // as argv[2] (or argv[1] when `bun run src/cli.ts <sentinel>` is invoked
@@ -85,7 +85,7 @@ registerSkillCommand(program);
 registerCheckUpdateCommand(program);
 registerUpgradeCommand(program);
 
-const updateNotice = maybeCheckForUpdate();
+const updateNotice = getUpdater().maybeBackgroundNotice();
 
 program.parse();
 

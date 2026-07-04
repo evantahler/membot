@@ -1,14 +1,13 @@
 import { cyan, dim, green, yellow } from "ansis";
 import type { Command } from "commander";
 import { createSpinner } from "nanospinner";
-import pkg from "../../package.json" with { type: "json" };
-import { saveUpdateCache } from "../update/cache.ts";
-import { checkForUpdate, type UpdateCache } from "../update/checker.ts";
+import { getUpdater } from "../update/updater.ts";
 
 /**
- * Register `membot check-update`. Performs a non-destructive npm-registry check,
- * caches the result, and prints the current/latest version (plus changelog when an
- * update is available). Emits raw `UpdateInfo` JSON when `--json` is set.
+ * Register `membot check-update`. Performs a non-destructive npm-registry check
+ * (via `upgradr`), and prints the current/latest version (plus changelog when an
+ * update is available). Emits the raw `upgradr` check result as JSON when `--json`
+ * is set. The check itself is cached by `upgradr` under `~/.membot/update.json`.
  */
 export function registerCheckUpdateCommand(program: Command) {
 	program
@@ -23,15 +22,7 @@ export function registerCheckUpdateCommand(program: Command) {
 				!json && isTTY ? createSpinner("Checking for updates...", { stream: process.stderr }).start() : null;
 
 			try {
-				const info = await checkForUpdate(pkg.version);
-
-				const cache: UpdateCache = {
-					lastCheckAt: new Date().toISOString(),
-					latestVersion: info.latestVersion,
-					hasUpdate: info.hasUpdate,
-					changelog: info.changelog,
-				};
-				await saveUpdateCache(cache);
+				const info = await getUpdater().checkForUpdate();
 
 				spinner?.stop();
 
